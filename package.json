@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "trimble-connect-workspace-api": "^1.0.0"
+    "trimble-connect-workspace-api": "^0.3.34"
   },
   "devDependencies": {
     "vite": "^5.0.0"
