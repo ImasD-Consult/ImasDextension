@@ -1,8 +1,0 @@
-{
-  "icon": "http://localhost:3000/logo.svg",
-  "title": "smartprintPRO",
-  "url": "http://localhost:3000/index.html",
-  "description": "ImasD / smartprintPRO integration for Trimble Connect",
-  "configCommand": "do_config",
-  "enabled": true
-}

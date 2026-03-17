@@ -1,0 +1,28 @@
+{
+	"$schema": "https://turborepo.com/schema.json",
+	"tasks": {
+		"dev": {
+			"cache": false,
+			"persistent": true
+		},
+		"build": {
+			"dependsOn": ["^build"],
+			"outputs": ["dist/**"]
+		},
+		"format": {
+			"dependsOn": ["^format"],
+			"cache": false
+		},
+		"lint": {
+			"dependsOn": ["^lint"],
+			"cache": false
+		},
+		"check-types": {
+			"dependsOn": ["^check-types"],
+			"cache": false
+		},
+		"clean": {
+			"cache": false
+		}
+	}
+}

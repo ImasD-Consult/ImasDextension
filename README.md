@@ -1,63 +1,218 @@
-# ImasD Extension
+# ImasD Extensions
 
-Trimble Connect for Browser extension for ImasD / smartprintPRO integration.
+Trimble Connect browser extensions monorepo — powered by Turborepo, pnpm, Vite, TypeScript, and Tailwind CSS v4.
 
-## Testing in Trimble Connect
+## Project Structure
+
+```
+├── packages/
+│   ├── shared/              @imasd/shared — Trimble API client, connection, utilities
+│   └── tailwind-config/     @imasd/tailwind-config — shared brand theme (CSS)
+│
+├── extensions/
+│   └── smartprint-pro/      @imasd/ext-smartprint-pro — smartprintPRO extension
+│
+├── types/                   Ambient type declarations (trimble-connect-workspace-api)
+├── turbo.json               Turborepo task config
+└── tsconfig.base.json       Shared TypeScript config
+```
+
+## Prerequisites
+
+- **Node.js** >= 20
+- **pnpm** >= 10 — `corepack enable` activates it via the `packageManager` field
+- **ngrok** — for HTTPS tunnelling during local testing ([install](https://ngrok.com/download))
+- **Docker** — for building container images (optional, for deployment)
+
+## Getting Started
+
+```bash
+# Enable pnpm via corepack (one-time)
+corepack enable
+
+# Install all dependencies
+pnpm install
+```
+
+### Development — single extension
+
+```bash
+# Start the smartprint-pro dev server on http://localhost:3000
+pnpm turbo dev --filter=@imasd/ext-smartprint-pro
+```
+
+### Development — all extensions
+
+```bash
+pnpm dev
+```
+
+## Testing with Trimble Connect
+
+Trimble Connect runs on HTTPS. Loading an extension from `http://localhost` causes
+mixed-content blocks in most browsers. Use **ngrok** to expose your local dev server
+over HTTPS.
 
 ### 1. Start the dev server
 
 ```bash
-npm install
-npm run dev
+pnpm turbo dev --filter=@imasd/ext-smartprint-pro
 ```
 
-Runs at http://localhost:3000.
+Runs at `http://localhost:3000`.
 
-### 2. Add the extension to your project
+### 2. Start ngrok
 
-**Critical:** Extensions are added in **two different places** in Trimble Connect. Where you add it determines where it appears:
+In a second terminal:
 
-| Where you add it | Where it appears |
-|------------------|------------------|
-| **Project Settings** (when viewing project Data/folders) | Left nav in **Project** view (Data, Activity, BCF Topics, etc.) |
-| **3D Viewer Settings** (when viewing a model) | Left nav in **3D model** view only |
+```bash
+ngrok http 3000
+```
 
-**To get the extension in Project (folder) mode:**
+ngrok prints a forwarding URL like:
+
+```
+Forwarding  https://ab12-34-56.ngrok-free.app -> http://localhost:3000
+```
+
+Copy that `https://...ngrok-free.app` URL.
+
+### 3. Register the extension in Trimble Connect
+
+> **Important:** Where you add the extension determines where it appears.
+>
+> | Added from | Appears in |
+> |---|---|
+> | **Project Settings** (Data/folders view) | Project sidebar (Data, Activity, BCF Topics…) |
+> | **3D Viewer Settings** (inside a model) | 3D model sidebar only |
 
 1. Sign in to [Trimble Connect](https://connect.trimble.com).
 2. Open a project where you are a **project administrator**.
-3. **Stay on the Project page** — you should see the left sidebar with Data, Activity, BCF Topics, Shared Model, ToDo, Team, Settings. **Do not open or click into any 3D model.**
-4. Click **Settings** (gear icon at bottom of left sidebar).
-5. Click **Extensions** in the settings panel.
+3. Stay on the **Project page** (Data/folders view) — do **not** open a 3D model.
+4. Click **Settings** (gear icon at the bottom of the left sidebar).
+5. Click **Extensions**.
 6. Under "Custom Extensions", click **Add**.
-7. Enter: `http://localhost:3000/manifest.json`
-8. Click **Save**.
-9. Turn the extension **ON** with the toggle.
+7. Enter the ngrok manifest URL:
+   ```
+   https://ab12-34-56.ngrok-free.app/manifest.json
+   ```
+8. Click **Save**, then toggle the extension **ON**.
 
-### 3. Use the extension
+### 4. Use the extension
 
-The extension appears in the left navigation (next to Data, Activity, BCF Topics). Click it to open the smartprintPRO panel.
+The extension appears in the left navigation next to Data, Activity, BCF Topics.
+Click it to open the smartprintPRO panel. Changes you make in code are reflected
+instantly via Vite HMR.
 
-**Troubleshooting:**
-- **Extension only shows in 3D mode:** Remove it from 3D Viewer Settings, then add it again from **Project Settings** (when you're on the project Data/folders view, not inside a model).
-- **"Failed to fetch" in Processes:** The extension must be loaded from the dev server (`npm run dev` at localhost:3000) so the proxy can forward API requests. Add the extension from `http://localhost:3000/manifest.json` — do not use a built/deployed URL for local testing.
-- **Cloud icon instead of logo:** Mixed-content or CORS issues. Try [ngrok](https://ngrok.com) to serve over HTTPS.
+### Troubleshooting
 
-### Localhost vs HTTPS
+| Problem | Fix |
+|---|---|
+| Extension only shows in 3D mode | Remove it from 3D Viewer Settings, re-add from **Project Settings** (Data/folders view). |
+| "Failed to fetch" in Processes | The dev server must be running (`pnpm turbo dev`). API calls go through Vite's proxy. |
+| Cloud icon instead of logo | Mixed-content or CORS issue — make sure you're using the ngrok HTTPS URL. |
+| ngrok free plan shows interstitial page | Add `ngrok http 3000 --host-header=localhost` or use a paid plan. |
 
-Trimble Connect is served over HTTPS. Loading from `http://localhost` can cause mixed-content issues in some browsers. If the extension does not load:
-
-- Use [ngrok](https://ngrok.com) to expose your dev server over HTTPS:
-  ```bash
-  ngrok http 3000
-  ```
-- Update `manifest.json` so `url` uses the ngrok URL (e.g. `https://abc123.ngrok.io/index.html`).
-- Use the ngrok manifest URL when adding the extension (e.g. `https://abc123.ngrok.io/manifest.json`).
-
-## Production
+## Production Build
 
 ```bash
-npm run build
+# Build all extensions
+pnpm build
+
+# Or build just smartprint-pro
+pnpm turbo build --filter=@imasd/ext-smartprint-pro
 ```
 
-Deploy the `dist/` folder to your web server. Update `manifest.json` so `url` points to your production URL (e.g. `https://your-domain.com/extension/index.html`).
+The built output is in `extensions/smartprint-pro/dist/`.
+
+The production `manifest.json` is generated automatically by the Vite build with the
+URL `https://extensions.imasdconsult.com/trimble/smartprintPRO`. To override:
+
+```bash
+EXTENSION_URL=https://your-custom-domain.com/path pnpm turbo build --filter=@imasd/ext-smartprint-pro
+```
+
+## Docker
+
+Each extension has its own `Dockerfile`. Images are built from the repo root (the
+monorepo context is needed to resolve workspace dependencies).
+
+### Build an image locally
+
+```bash
+docker build -f extensions/smartprint-pro/Dockerfile -t smartprint-pro .
+```
+
+Override the production URL at build time:
+
+```bash
+docker build -f extensions/smartprint-pro/Dockerfile \
+  --build-arg EXTENSION_URL=https://extensions.imasdconsult.com/trimble/smartprintPRO \
+  -t smartprint-pro .
+```
+
+### Run locally
+
+```bash
+docker run -p 8080:80 smartprint-pro
+```
+
+The extension is served at `http://localhost:8080/trimble/smartprintPRO/`.
+
+### Health check
+
+```
+GET /health → 200 ok
+```
+
+## CI / CD
+
+GitHub Actions workflow at `.github/workflows/build.yml`:
+
+- **On pull request** → builds all extension images (no push).
+- **On push to `main`** → builds and pushes to GitHub Container Registry (GHCR).
+
+Images are tagged `latest` (main branch) and by git SHA.
+
+To add a new extension to CI, append an entry to the `matrix.extension` array in the
+workflow file.
+
+## Deploy
+
+Upload the contents of `extensions/smartprint-pro/dist/` to your web server at
+the path `/trimble/smartprintPRO/` so the final URLs match:
+
+```
+https://extensions.imasdconsult.com/trimble/smartprintPRO/index.html
+https://extensions.imasdconsult.com/trimble/smartprintPRO/manifest.json
+https://extensions.imasdconsult.com/trimble/smartprintPRO/logo.svg
+```
+
+Or deploy the Docker image and expose port 80. The nginx inside the container already
+serves at the correct `/trimble/smartprintPRO/` path.
+
+Then register `https://extensions.imasdconsult.com/trimble/smartprintPRO/manifest.json`
+in Trimble Connect Project Settings → Extensions.
+
+## Adding a New Extension
+
+1. Copy `extensions/smartprint-pro/` to `extensions/my-extension/`.
+2. Update `package.json` name (e.g. `@imasd/ext-my-extension`).
+3. Set the correct `base` path in `vite.config.ts` (e.g. `/trimble/myExtension/`).
+4. Update `MANIFEST_BASE` and `EXTENSION_URL` in `vite.config.ts`.
+5. Update `nginx.conf` location path to match the base.
+6. Update the `Dockerfile` `COPY` paths and `--filter` to the new package name.
+7. Add the extension to `.github/workflows/build.yml` matrix.
+8. Run `pnpm install` to link workspaces.
+9. Run `pnpm turbo dev --filter=@imasd/ext-my-extension`.
+
+## Scripts Reference
+
+| Command | Scope | Description |
+|---|---|---|
+| `pnpm dev` | all | Start all extension dev servers |
+| `pnpm build` | all | Production build for all extensions |
+| `pnpm lint` | all | TypeScript type-check across all packages |
+| `pnpm clean` | all | Remove `dist/` and `.turbo` caches |
+| `pnpm turbo dev --filter=<name>` | one | Dev server for a specific extension |
+| `pnpm turbo build --filter=<name>` | one | Build a specific extension |

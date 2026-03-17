@@ -1,0 +1,14 @@
+const SVG = [
+	'<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">',
+	'  <circle cx="50" cy="50" r="48" fill="#2563EB"/>',
+	'  <g fill="#fff">',
+	'    <rect x="28" y="16" width="30" height="5" rx="2.5"/>',
+	'    <rect x="28" y="25" width="45" height="5" rx="2.5"/>',
+	'    <rect x="28" y="34" width="25" height="5" rx="2.5"/>',
+	"  </g>",
+	'  <text x="51" y="54" font-family="sans-serif" font-size="18" fill="#fff" text-anchor="middle">smartprint</text>',
+	'  <text x="51" y="82" font-family="sans-serif" font-size="36" font-weight="700" fill="#fff" text-anchor="middle">PRO</text>',
+	"</svg>",
+].join("");
+
+export const SMARTPRINT_LOGO = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(SVG)))}`;

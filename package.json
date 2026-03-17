@@ -1,17 +1,21 @@
 {
-  "name": "imasd-extension",
-  "version": "0.1.0",
-  "description": "Trimble Connect extension for ImasD / SmartPrintPRO",
-  "private": true,
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "trimble-connect-workspace-api": "^0.3.34"
-  },
-  "devDependencies": {
-    "vite": "^5.0.0"
-  }
+	"name": "imasd-extensions",
+	"private": true,
+	"packageManager": "pnpm@10.32.1",
+	"scripts": {
+		"dev": "turbo dev",
+		"build": "turbo build",
+		"format": "biome format --write .",
+		"lint": "biome lint --write .",
+		"check": "biome check --fix --unsafe",
+		"check-types": "turbo run check-types",
+		"clean": "turbo clean"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"turbo": "^2.8.17"
+	},
+	"engines": {
+		"node": ">=20"
+	}
 }
