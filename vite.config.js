@@ -27,6 +27,21 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/tc-api-asia/, '/tc/api/2.0'),
       },
+      '/tc-api-na-21': {
+        target: TRIMBLE_HOSTS.na,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/tc-api-na-21/, '/tc/api/2.1'),
+      },
+      '/tc-api-eu-21': {
+        target: TRIMBLE_HOSTS.eu,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/tc-api-eu-21/, '/tc/api/2.1'),
+      },
+      '/tc-api-asia-21': {
+        target: TRIMBLE_HOSTS.asia,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/tc-api-asia-21/, '/tc/api/2.1'),
+      },
     },
   },
   preview: {
@@ -45,6 +60,21 @@ export default defineConfig({
         target: TRIMBLE_HOSTS.asia,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/tc-api-asia/, '/tc/api/2.0'),
+      },
+      '/tc-api-na-21': {
+        target: TRIMBLE_HOSTS.na,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/tc-api-na-21/, '/tc/api/2.1'),
+      },
+      '/tc-api-eu-21': {
+        target: TRIMBLE_HOSTS.eu,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/tc-api-eu-21/, '/tc/api/2.1'),
+      },
+      '/tc-api-asia-21': {
+        target: TRIMBLE_HOSTS.asia,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/tc-api-asia-21/, '/tc/api/2.1'),
       },
     },
   },
