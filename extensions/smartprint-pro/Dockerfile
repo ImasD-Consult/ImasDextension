@@ -30,7 +30,10 @@ FROM node:22-alpine
 RUN npm install -g serve@latest
 
 COPY --from=builder /app/extensions/smartprint-pro/dist/ /app/
+COPY extensions/smartprint-pro/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 3000
 
+ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["serve", "-s", "/app", "-l", "3000"]

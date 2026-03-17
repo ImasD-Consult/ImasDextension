@@ -22,6 +22,7 @@ jobs:
           - name: smartprint-pro
             dockerfile: extensions/smartprint-pro/Dockerfile
             image: smartprintPRO
+            extension_url: https://extensions.imasd.dev/trimble/smartprintPRO
 
     steps:
       - name: Checkout
@@ -55,5 +56,7 @@ jobs:
           push: ${{ github.event_name == 'push' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            EXTENSION_URL=${{ matrix.extension.extension_url }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
