@@ -215,11 +215,18 @@ export async function fetchProcessAssemblies(
 	);
 	if (!assemblyItems) return [];
 
-	// Filter to IFC files
-	const ifcFiles = assemblyItems.filter(
-		(item) =>
-			item.type?.toUpperCase() !== "FOLDER" && isIfcFile(item.name ?? ""),
-	);
+	// Filter to .ifc files: exclude folders, include by .ifc extension
+	// Trimble API may use type "FILE", "MODEL", or omit type for files
+	let ifcFiles = assemblyItems.filter((item) => {
+		const isFolder = item.type?.toUpperCase() === "FOLDER";
+		const hasIfcExt = isIfcFile(item.name ?? "");
+		return !isFolder && hasIfcExt;
+	});
+
+	// Fallback: if strict filter yields nothing, include any item with .ifc in name
+	if (ifcFiles.length === 0 && assemblyItems.length > 0) {
+		ifcFiles = assemblyItems.filter((item) => isIfcFile(item.name ?? ""));
+	}
 
 	return ifcFiles.map((f) => ({
 		id: f.id || "",

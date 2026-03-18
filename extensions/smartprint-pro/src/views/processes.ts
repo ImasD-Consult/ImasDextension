@@ -48,7 +48,7 @@ export async function renderProcesses(
 ): Promise<void> {
 	container.innerHTML = `
     <h2 class="text-lg font-semibold">Processes</h2>
-    <p class="mt-1 text-sm text-gray-500">Subfolders in smartprintfolderpro</p>
+    <p class="mt-1 text-sm text-gray-500">Processes in smartprintPRO</p>
     <p class="mt-4 text-sm text-gray-400 italic animate-pulse">Loading…</p>
   `;
 
@@ -71,11 +71,11 @@ export async function renderProcesses(
 
 		container.innerHTML = `
       <h2 class="text-lg font-semibold">Processes</h2>
-      <p class="mt-1 text-sm text-gray-500">Subfolders in smartprintfolderpro</p>
+      <p class="mt-1 text-sm text-gray-500">Processes in smartprintPRO</p>
       <div class="mt-4 grid grid-cols-3 gap-4 min-h-0">
         <div class="flex flex-col border border-gray-200 rounded-lg overflow-hidden">
           <div class="px-3 py-2 bg-gray-50 border-b border-gray-200 font-medium text-sm text-gray-700">
-            smartprintfolderpro
+            Processes
           </div>
           <div class="flex-1 overflow-auto p-2 min-h-[120px]" data-process-list>
             ${items.length ? subfolderRows : '<p class="text-sm text-gray-400 italic py-2">No subfolders found</p>'}
@@ -220,7 +220,7 @@ export async function renderProcesses(
 			err instanceof Error ? err.message : "Error loading folders";
 		container.innerHTML = `
       <h2 class="text-lg font-semibold">Processes</h2>
-      <p class="mt-1 text-sm text-gray-500">Subfolders in smartprintfolderpro</p>
+      <p class="mt-1 text-sm text-gray-500">Processes in smartprintPRO</p>
       <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
         <p class="text-sm text-red-700">${escapeHtml(message)}</p>
       </div>
