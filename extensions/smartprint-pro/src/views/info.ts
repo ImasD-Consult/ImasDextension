@@ -6,8 +6,8 @@ export function renderInfo(container: HTMLElement): void {
     <div class="mt-6 space-y-6">
       <section>
         <h3 class="text-sm font-semibold text-gray-700">Contacts</h3>
-        <p class="mt-1 text-sm italic text-gray-400">
-          Contact details — email, phone, support
+        <p class="mt-1 text-sm text-gray-600">
+          <a href="mailto:info@imasdconsult.com" class="text-blue-600 hover:underline">info@imasdconsult.com</a>
         </p>
       </section>
 
@@ -18,7 +18,9 @@ export function renderInfo(container: HTMLElement): void {
 
       <section>
         <h3 class="text-sm font-semibold text-gray-700">Web Links</h3>
-        <p class="mt-1 text-sm italic text-gray-400">Links to related pages</p>
+        <p class="mt-1 text-sm text-gray-600">
+          <a href="https://imasdconsult.com" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">https://imasdconsult.com</a>
+        </p>
       </section>
     </div>
   `;
