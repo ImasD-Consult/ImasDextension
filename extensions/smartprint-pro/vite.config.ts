@@ -89,7 +89,7 @@ export default defineConfig(({ mode }) => ({
 		port: 3000,
 		cors: true,
 		proxy,
-		allowedHosts: [".ngrok-free.app", "web.connect.trimble.com"],
+		allowedHosts: [".ngrok-free.dev", ".ngrok-free.app", "web.connect.trimble.com"],
 	},
 	preview: { proxy },
 	build: { outDir: "dist" },

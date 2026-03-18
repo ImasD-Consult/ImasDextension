@@ -42,6 +42,11 @@ declare module "trimble-connect-workspace-api" {
 		};
 		viewer?: {
 			getModels(): Promise<ViewerModel[]>;
+			toggleModel?(
+				modelId: string | string[],
+				loaded?: boolean,
+				fitToView?: boolean,
+			): Promise<void>;
 		};
 	}
 
