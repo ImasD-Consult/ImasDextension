@@ -183,7 +183,7 @@ Upload the contents of `extensions/smartprint-pro/dist/` to your web server at
 the path `/trimble/smartprintPRO/` so the final URLs match:
 
 ```
-https://extensions.imasdconsult.com/trimble/smartprintPRO/index.html
+https://extensions.imasdconsult.com/trimble/smartprintPRO
 https://extensions.imasdconsult.com/trimble/smartprintPRO/manifest.json
 https://extensions.imasdconsult.com/trimble/smartprintPRO/logo.svg
 ```

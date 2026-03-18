@@ -9,7 +9,7 @@ if [ -n "$EXTENSION_URL" ]; then
   "configCommand": "do_config",
   "enabled": true,
   "icon": "${EXTENSION_URL}/logo.svg",
-  "url": "${EXTENSION_URL}/index.html"
+  "url": "${EXTENSION_URL}"
 }
 EOF
 fi

@@ -50,7 +50,7 @@ function trimbleManifestPlugin(): Plugin {
 						{
 							...MANIFEST_BASE,
 							icon: `${origin}/logo.svg`,
-							url: `${origin}/index.html`,
+							url: `${origin}`,
 						},
 						null,
 						2,
@@ -71,7 +71,7 @@ function trimbleManifestPlugin(): Plugin {
 					{
 						...MANIFEST_BASE,
 						icon: `${origin}/logo.svg`,
-						url: `${origin}/index.html`,
+						url: `${origin}`,
 					},
 					null,
 					2,
