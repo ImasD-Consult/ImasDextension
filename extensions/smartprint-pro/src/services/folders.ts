@@ -61,7 +61,18 @@ export async function fetchProjectFolders(
 	);
 }
 
-const SMARTPRINT_FOLDER_PRO_NAME = "smartprintfolderpro";
+const SMARTPRINT_FOLDER_NAMES = [
+	"smartprintpro",
+	"smartprintfolderpro",
+	"smartprint folder pro",
+];
+
+function matchesSmartprintFolder(name: string): boolean {
+	const lower = name?.toLowerCase().replace(/\s+/g, "") ?? "";
+	return SMARTPRINT_FOLDER_NAMES.some(
+		(n) => lower === n.toLowerCase().replace(/\s+/g, ""),
+	);
+}
 
 export async function fetchSmartprintFolderProSubfolders(
 	api: WorkspaceApi,
@@ -85,34 +96,56 @@ export async function fetchSmartprintFolderProSubfolders(
 	});
 
 	const rootFolders = await client.getRootFolders(project.id);
-	const smartprintFolder = rootFolders.find(
-		(f) => f.name?.toLowerCase() === SMARTPRINT_FOLDER_PRO_NAME.toLowerCase(),
-	);
+	const smartprintFolder = rootFolders.find((f) => matchesSmartprintFolder(f.name ?? ""));
 
-	if (!smartprintFolder) {
-		return { items: [], source: "api" };
+	if (smartprintFolder) {
+		const items = await client.listFolderItems(
+			smartprintFolder.id || smartprintFolder.versionId || "",
+			project.id,
+		);
+
+		if (items?.length) {
+			const subfolders = items.filter(
+				(item) => item.type?.toUpperCase() === "FOLDER",
+			);
+			if (subfolders.length > 0) {
+				return {
+					items: subfolders.map((f) => ({
+						id: f.id || f.versionId || "",
+						name: f.name,
+					})),
+					source: "api",
+				};
+			}
+		}
 	}
 
-	const items = await client.listFolderItems(
-		smartprintFolder.id || smartprintFolder.versionId || "",
-		project.id,
-	);
-
-	if (!items) {
-		return { items: [], source: "api" };
+	// Fallback: show root folders (original behavior when smartprintfolderpro missing or empty)
+	if (rootFolders.length > 0) {
+		return {
+			items: rootFolders.map((f) => ({
+				id: f.id || f.versionId || "",
+				name: f.name,
+			})),
+			source: "api",
+		};
 	}
 
-	const subfolders = items.filter(
-		(item) => item.type?.toUpperCase() === "FOLDER",
-	);
+	// Last resort: viewer models (e.g. when API returns empty in some contexts)
+	if (api.viewer?.getModels) {
+		const models = await api.viewer.getModels();
+		if (models?.length) {
+			return {
+				items: models.map((m) => ({
+					id: m.id || m.versionId || "",
+					name: m.name || "Model",
+				})),
+				source: "viewer",
+			};
+		}
+	}
 
-	return {
-		items: subfolders.map((f) => ({
-			id: f.id || f.versionId || "",
-			name: f.name,
-		})),
-		source: "api",
-	};
+	return { items: [], source: "api" };
 }
 
 export interface AssemblyItem {
@@ -150,14 +183,15 @@ export async function fetchProcessAssemblies(
 		useDevProxy: import.meta.env.DEV,
 	});
 
-	// process folder -> ifc subfolder
+	// process folder -> ifc or ifcfile subfolder
 	const processItems = await client.listFolderItems(processFolderId, project.id);
 	if (!processItems) return [];
 
+	const IFC_FOLDER_NAMES = ["ifc", "ifcfile"];
 	const ifcFolder = processItems.find(
 		(item) =>
 			item.type?.toUpperCase() === "FOLDER" &&
-			item.name?.toLowerCase() === "ifc",
+			IFC_FOLDER_NAMES.includes(item.name?.toLowerCase() ?? ""),
 	);
 	if (!ifcFolder) return [];
 
