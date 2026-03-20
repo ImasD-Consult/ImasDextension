@@ -125,11 +125,27 @@ pnpm turbo build --filter=@imasd/ext-smartprint-pro
 
 The built output is in `extensions/smartprint-pro/dist/`.
 
-The production `manifest.json` is generated automatically by the Vite build with the
-URL `https://extensions.imasdconsult.com/trimble/smartprintPRO`. To override:
+The production `manifest.json` is emitted by Vite with **relative** `url` / `icon` (no
+domain baked in). For a **Docker** deployment, set `EXTENSION_URL` at **runtime** (or
+as a build-arg on the final image stage); `docker-entrypoint.sh` rewrites
+`manifest.json` before `serve` starts.
 
 ```bash
-EXTENSION_URL=https://your-custom-domain.com/path pnpm turbo build --filter=@imasd/ext-smartprint-pro
+docker run -p 3000:3000 -e EXTENSION_URL=https://your-domain.example/trimble/smartprintPRO <image>
+```
+
+**Runtime config in the iframe (`env.js`):** the extension loads `public/env.js` as a
+plain script (not bundled by Vite), same idea as
+[runtime env with Docker + static hosting](https://stackoverflow.com/questions/70617812/change-environmet-variables-at-runtime-react-vite-with-docker-and-nginx).
+At container start, `docker-entrypoint.sh` regenerates `/app/env.js` from
+`EXTENSION_URL` (JSON-safe).
+
+Optional: bake a default URL into the image at build time (still overridable at run):
+
+```bash
+docker build -f extensions/smartprint-pro/Dockerfile \
+  --build-arg EXTENSION_URL=https://your-domain.example/trimble/smartprintPRO \
+  -t smartprint-pro .
 ```
 
 ## Docker
@@ -143,21 +159,22 @@ monorepo context is needed to resolve workspace dependencies).
 docker build -f extensions/smartprint-pro/Dockerfile -t smartprint-pro .
 ```
 
-Override the production URL at build time:
+Default `EXTENSION_URL` is set on the **runtime** image; override when running:
 
 ```bash
-docker build -f extensions/smartprint-pro/Dockerfile \
-  --build-arg EXTENSION_URL=https://extensions.imasdconsult.com/trimble/smartprintPRO \
-  -t smartprint-pro .
+docker run -p 3000:3000 \
+  -e EXTENSION_URL=https://extensions.imasdconsult.com/trimble/smartprintPRO \
+  smartprint-pro
 ```
 
 ### Run locally
 
 ```bash
-docker run -p 8080:80 smartprint-pro
+docker run -p 3000:3000 smartprint-pro
 ```
 
-The extension is served at `http://localhost:8080/trimble/smartprintPRO/`.
+The extension is served at `http://localhost:3000/trimble/smartprintPRO/` (container
+exposes port 3000; map as needed).
 
 ### Health check
 
@@ -199,7 +216,8 @@ in Trimble Connect Project Settings → Extensions.
 1. Copy `extensions/smartprint-pro/` to `extensions/my-extension/`.
 2. Update `package.json` name (e.g. `@imasd/ext-my-extension`).
 3. Set the correct `base` path in `vite.config.ts` (e.g. `/trimble/myExtension/`).
-4. Update `MANIFEST_BASE` and `EXTENSION_URL` in `vite.config.ts`.
+4. Update `MANIFEST_BASE` in `vite.config.ts` and default `EXTENSION_URL` in the
+   extension `Dockerfile` if needed.
 5. Update `nginx.conf` location path to match the base.
 6. Update the `Dockerfile` `COPY` paths and `--filter` to the new package name.
 7. Add the extension to `.github/workflows/build.yml` matrix.

@@ -41,16 +41,13 @@ function trimbleManifestPlugin(): Plugin {
 
 		configureServer(server) {
 			server.middlewares.use("/manifest.json", (_req, res) => {
-				const port = server.config.server.port ?? 3000;
-				const origin = `http://localhost:${port}`;
-
 				res.setHeader("Content-Type", "application/json");
 				res.end(
 					JSON.stringify(
 						{
 							...MANIFEST_BASE,
-							icon: `${origin}/logo.svg`,
-							url: `${origin}`,
+							icon: "logo.svg",
+							url: ".",
 						},
 						null,
 						2,
@@ -60,9 +57,11 @@ function trimbleManifestPlugin(): Plugin {
 		},
 
 		generateBundle() {
-			const origin =
-				process.env.EXTENSION_URL ??
-				"https://extensions.imasdconsult.com/trimble/smartprintPRO";
+			const origin = process.env.EXTENSION_URL;
+			const icon = origin
+				? `${origin.replace(/\/$/, "")}/logo.svg`
+				: "logo.svg";
+			const url = origin ? origin.replace(/\/$/, "") : ".";
 
 			this.emitFile({
 				type: "asset",
@@ -70,8 +69,8 @@ function trimbleManifestPlugin(): Plugin {
 				source: JSON.stringify(
 					{
 						...MANIFEST_BASE,
-						icon: `${origin}/logo.svg`,
-						url: `${origin}`,
+						icon,
+						url,
 					},
 					null,
 					2,
@@ -89,7 +88,11 @@ export default defineConfig(({ mode }) => ({
 		port: 3000,
 		cors: true,
 		proxy,
-		allowedHosts: [".ngrok-free.dev", ".ngrok-free.app", "web.connect.trimble.com"],
+		allowedHosts: [
+			".ngrok-free.dev",
+			".ngrok-free.app",
+			"web.connect.trimble.com",
+		],
 	},
 	preview: { proxy },
 	build: { outDir: "dist" },

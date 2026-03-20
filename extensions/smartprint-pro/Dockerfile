@@ -20,12 +20,12 @@ COPY types/ ./types/
 COPY packages/ ./packages/
 COPY extensions/smartprint-pro/ ./extensions/smartprint-pro/
 
-ARG EXTENSION_URL=https://extensions.imasdconsult.com/trimble/smartprintPRO
-ENV EXTENSION_URL=${EXTENSION_URL}
-
 RUN pnpm --filter @imasd/ext-smartprint-pro build
 
 FROM node:22-alpine
+
+ARG EXTENSION_URL=https://extensions.imasdconsult.com/trimble/smartprintPRO
+ENV EXTENSION_URL=${EXTENSION_URL}
 
 RUN npm install -g serve@latest
 
