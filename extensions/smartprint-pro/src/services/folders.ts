@@ -96,7 +96,9 @@ export async function fetchSmartprintFolderProSubfolders(
 	});
 
 	const rootFolders = await client.getRootFolders(project.id);
-	const smartprintFolder = rootFolders.find((f) => matchesSmartprintFolder(f.name ?? ""));
+	const smartprintFolder = rootFolders.find((f) =>
+		matchesSmartprintFolder(f.name ?? ""),
+	);
 
 	if (smartprintFolder) {
 		const items = await client.listFolderItems(
@@ -184,7 +186,10 @@ export async function fetchProcessAssemblies(
 	});
 
 	// process folder -> ifc or ifcfile subfolder
-	const processItems = await client.listFolderItems(processFolderId, project.id);
+	const processItems = await client.listFolderItems(
+		processFolderId,
+		project.id,
+	);
 	if (!processItems) return [];
 
 	const IFC_FOLDER_NAMES = ["ifc", "ifcfile"];

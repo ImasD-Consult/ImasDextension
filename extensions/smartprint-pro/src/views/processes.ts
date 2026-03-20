@@ -9,8 +9,7 @@ import {
 const ROW_BASE =
 	"w-full rounded px-3 py-2 text-left text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-brand-500";
 const ROW_SELECTED = "bg-brand-100 text-brand-800 ring-1 ring-brand-500";
-const ROW_UNSELECTED =
-	"text-gray-800 hover:bg-brand-50 hover:text-brand-700";
+const ROW_UNSELECTED = "text-gray-800 hover:bg-brand-50 hover:text-brand-700";
 
 function renderAssembliesGrid(
 	assemblies: AssemblyItem[],
@@ -24,11 +23,10 @@ function renderAssembliesGrid(
 		return '<p class="text-sm text-gray-400 italic py-2">Select a process</p>';
 	}
 	return assemblies
-		.map(
-			(a) => {
-				const isSelected = a.id === selectedId || a.versionId === selectedId;
-				const modelId = a.versionId || a.id;
-				return `
+		.map((a) => {
+			const isSelected = a.id === selectedId || a.versionId === selectedId;
+			const modelId = a.versionId || a.id;
+			return `
           <button
             type="button"
             class="${ROW_BASE} ${isSelected ? ROW_SELECTED : ROW_UNSELECTED}"
@@ -37,8 +35,7 @@ function renderAssembliesGrid(
           >
             ${escapeHtml(a.name)}
           </button>`;
-			},
-		)
+		})
 		.join("");
 }
 
@@ -118,7 +115,8 @@ export async function renderProcesses(
 
 		const processList = container.querySelector("[data-process-list]");
 		const assembliesList = container.querySelector("[data-assemblies-list]");
-		const see3dBtn = container.querySelector<HTMLButtonElement>("[data-see-3d]");
+		const see3dBtn =
+			container.querySelector<HTMLButtonElement>("[data-see-3d]");
 
 		function updateAssembliesGrid(): void {
 			if (!assembliesList) return;
@@ -139,9 +137,7 @@ export async function renderProcesses(
 			const target = e.target as HTMLElement;
 
 			// Process selection
-			const processBtn = target.closest<HTMLButtonElement>(
-				"[data-process-id]",
-			);
+			const processBtn = target.closest<HTMLButtonElement>("[data-process-id]");
 			if (processBtn && processList?.contains(processBtn)) {
 				const id = processBtn.dataset.processId ?? null;
 				if (id === selectedProcessId) return;
@@ -181,9 +177,8 @@ export async function renderProcesses(
 			}
 
 			// Assembly selection
-			const assemblyBtn = target.closest<HTMLButtonElement>(
-				"[data-assembly-id]",
-			);
+			const assemblyBtn =
+				target.closest<HTMLButtonElement>("[data-assembly-id]");
 			if (assemblyBtn && assembliesList?.contains(assemblyBtn)) {
 				selectedAssemblyId = assemblyBtn.dataset.assemblyId ?? null;
 				updateAssembliesGrid();
@@ -201,8 +196,7 @@ export async function renderProcesses(
 						return;
 					}
 					const origin =
-						window.top?.location?.origin ||
-						"https://app21.connect.trimble.com";
+						window.top?.location?.origin || "https://app21.connect.trimble.com";
 					// Open project in 3D viewer; try to deep-link the model
 					const base = `${origin}/tc/app`;
 					const hash = `#/project/${projectId}/viewer/file/${selectedAssemblyId}`;
