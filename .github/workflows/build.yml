@@ -2,9 +2,9 @@ name: Build & Push Extensions
 
 on:
   push:
-    branches: [master]
+    branches: [master, dev]
   pull_request:
-    branches: [master]
+    branches: [master, dev]
   workflow_dispatch:
 
 permissions:
@@ -60,3 +60,39 @@ jobs:
             EXTENSION_URL=${{ matrix.extension.extension_url }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  trigger-deploy-webhook:
+    name: Trigger deploy webhook after successful build
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: |
+      success() &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/master')
+    environment: ${{ github.ref == 'refs/heads/dev' && 'development' || 'production' }}
+
+    steps:
+      - name: Compute services to restart
+        run: |
+          # Coolify / compose service names to restart (keep in sync with matrix extensions).
+          printf '%s' '["extensions-smartprintpro"]' > services.json
+
+      - name: Send deploy webhook
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg env "${{ github.ref_name }}" \
+            --arg sha "${{ github.sha }}" \
+            --arg repo "${{ github.repository }}" \
+            --slurpfile srv services.json \
+            '{status:"success",environment:$env,sha:$sha,repo:$repo,services:$srv[0]}')
+
+          SIGNATURE="sha256=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | awk '{print $2}')"
+
+          curl -fsSL -X POST "$DEPLOY_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Hub-Signature-256: $SIGNATURE" \
+            -d "$PAYLOAD"
+        shell: bash
