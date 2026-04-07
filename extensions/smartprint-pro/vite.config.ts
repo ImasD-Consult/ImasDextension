@@ -40,7 +40,14 @@ function trimbleManifestPlugin(): Plugin {
 		name: "trimble-manifest",
 
 		configureServer(server) {
-			server.middlewares.use("/manifest.json", (_req, res) => {
+			server.middlewares.use("/manifest.json", (req, res) => {
+				res.setHeader("Access-Control-Allow-Origin", "*");
+				if (req.method === "OPTIONS") {
+					res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+					res.statusCode = 204;
+					res.end();
+					return;
+				}
 				res.setHeader("Content-Type", "application/json");
 				res.end(
 					JSON.stringify(
@@ -94,7 +101,7 @@ export default defineConfig(({ mode }) => ({
 			"web.connect.trimble.com",
 		],
 	},
-	preview: { proxy },
+	preview: { cors: true, proxy },
 	build: { outDir: "dist" },
 	plugins: [tailwindcss(), trimbleManifestPlugin()],
 }));
