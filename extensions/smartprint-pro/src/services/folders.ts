@@ -334,6 +334,7 @@ export async function fetchIfcAssembliesFromFile(
 			const response = await fetch(url, {
 				headers: {
 					Authorization: `Bearer ${token}`,
+					Accept: "application/json",
 					"Content-Type": "application/json",
 				},
 			});
@@ -344,11 +345,97 @@ export async function fetchIfcAssembliesFromFile(
 		}
 	}
 
+	async function getFileInfoById(fileOrVersionId: string): Promise<unknown | null> {
+		const params = new URLSearchParams({ projectId: project.id });
+		const url = `${baseOrigin}/tc/api/2.0/files/${encodeURIComponent(fileOrVersionId)}?${params}`;
+		try {
+			const response = await fetch(url, {
+				headers: {
+					Authorization: `Bearer ${token}`,
+					Accept: "application/json",
+				},
+			});
+			if (!response.ok) return null;
+			return response.json();
+		} catch {
+			return null;
+		}
+	}
+
+	function analyzeTree(treeValue: unknown): {
+		nodeCount: number;
+		classSamples: string[];
+	} {
+		const classCounter = new Map<string, number>();
+		let nodeCount = 0;
+
+		function walk(nodeValue: unknown): void {
+			if (!nodeValue || typeof nodeValue !== "object") return;
+			const node = nodeValue as Record<string, unknown>;
+			nodeCount += 1;
+			const classOrType =
+				readNodeString(node, [
+					"class",
+					"type",
+					"entityType",
+					"ifcClass",
+					"category",
+				]) ?? "";
+			if (classOrType) {
+				classCounter.set(classOrType, (classCounter.get(classOrType) ?? 0) + 1);
+			}
+
+			for (const child of readNodeChildren(node)) {
+				walk(child);
+			}
+			for (const value of Object.values(node)) {
+				if (Array.isArray(value)) {
+					for (const item of value) walk(item);
+				} else if (value && typeof value === "object") {
+					walk(value);
+				}
+			}
+		}
+
+		if (Array.isArray(treeValue)) {
+			for (const root of treeValue) walk(root);
+		} else {
+			walk(treeValue);
+		}
+
+		const classSamples = [...classCounter.entries()]
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, 10)
+			.map(([name, count]) => `${name} (${count})`);
+
+		return { nodeCount, classSamples };
+	}
+
 	let tree = await getModelTreeById(ifcFileId);
 	if (!tree && ifcVersionId) {
 		tree = await getModelTreeById(ifcVersionId);
 	}
-	if (!tree) return [];
+	if (!tree) {
+		const fileInfo =
+			(await getFileInfoById(ifcFileId)) ||
+			(ifcVersionId ? await getFileInfoById(ifcVersionId) : null);
+		const fileObj =
+			fileInfo && typeof fileInfo === "object"
+				? (fileInfo as Record<string, unknown>)
+				: null;
+		const processingState =
+			(fileObj &&
+				readNodeString(fileObj, [
+					"processingState",
+					"processingStatus",
+					"status",
+					"conversionStatus",
+				])) ||
+			"unknown";
+		throw new Error(
+			`Model tree unavailable for selected IFC. File processing state: ${processingState}.`,
+		);
+	}
 
 	const result: IfcAssemblyItem[] = [];
 	const seen = new Set<string>();
@@ -358,6 +445,16 @@ export async function fetchIfcAssembliesFromFile(
 		}
 	} else {
 		collectIfcAssembliesFromTree(tree, result, seen);
+	}
+
+	if (result.length === 0) {
+		const diagnostics = analyzeTree(tree);
+		const classHint = diagnostics.classSamples.length
+			? diagnostics.classSamples.join(", ")
+			: "none";
+		throw new Error(
+			`No IfcElementAssembly found. Nodes inspected: ${diagnostics.nodeCount}. Top classes/types: ${classHint}.`,
+		);
 	}
 
 	return result;
