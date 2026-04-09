@@ -34,6 +34,7 @@ type WbsAssignment = {
 	wbsRowIndex: number;
 	wbsValues: string[];
 	propertySetName: "Pset_IMASD_WBS";
+	propertySetValue: string;
 	assignedAt: string;
 };
 
@@ -191,6 +192,21 @@ function getViewerPartsFallback(): IfcPart[] {
 	];
 }
 
+function createSeededPartsForModel(modelId: string, modelName: string): IfcPart[] {
+	const seedParts = getViewerPartsFallback();
+	const hash = modelId.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+	const count = 3 + (hash % 3); // 3..5 items per model so lists visibly differ
+	const modelLabel = modelName.replace(/\.ifc$/i, "");
+
+	return seedParts.slice(0, count).map((part, index) => ({
+		...part,
+		id: `${modelId}-${index + 1}`,
+		name: `${modelLabel} - ${part.type} ${index + 1}`,
+		modelId,
+		modelName,
+	}));
+}
+
 function renderTable(tableData: WbsTableData, selectedRowIndex: number | null): string {
 	if (!tableData.headers.length) {
 		return '<p class="text-sm text-gray-500 italic">No data found in the selected file.</p>';
@@ -268,19 +284,46 @@ function renderAssignmentsList(assignments: WbsAssignment[]): string {
 		return '<p class="text-sm text-gray-500 italic">No assignments yet.</p>';
 	}
 
-	return assignments
+	const rows = assignments
 		.slice()
 		.reverse()
-		.map(
-			(item) => `
-      <div class="rounded border border-gray-200 px-3 py-2">
-        <p class="text-sm font-medium text-gray-800">${escapeHtml(item.partName)}</p>
-        <p class="text-xs text-gray-500">${escapeHtml(item.partType)} | ${escapeHtml(item.partMaterial)}</p>
-        <p class="mt-1 text-xs text-gray-700">Pset: ${item.propertySetName} | WBS row ${item.wbsRowIndex + 4}</p>
-      </div>
-    `,
-		)
+		.map((item) => {
+			const fallbackValue = `${item.wbsValues?.[1] ?? ""} - ${item.wbsValues?.[3] ?? ""}`;
+			const assignedValue = item.propertySetValue || fallbackValue;
+			return `
+      <tr class="hover:bg-gray-50">
+        <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(item.partName)}</td>
+        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(item.partType)}</td>
+        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(item.partMaterial)}</td>
+        <td class="px-2 py-2 text-xs text-gray-700 border-b border-gray-100">${escapeHtml(item.propertySetName)}</td>
+        <td class="px-2 py-2 text-xs text-gray-800 border-b border-gray-100">${escapeHtml(assignedValue)}</td>
+        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${item.wbsRowIndex + 4}</td>
+      </tr>
+    `;
+		})
 		.join("");
+
+	return `
+    <div class="rounded border border-gray-200 overflow-hidden">
+      <div class="max-h-[24vh] overflow-auto">
+        <table class="min-w-full border-collapse">
+          <thead class="sticky top-0 bg-gray-50 z-10">
+            <tr>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Part</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Type</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Material</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Pset</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Assigned Value</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">WBS Row</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 export async function renderWbs(
@@ -502,18 +545,9 @@ export async function renderWbs(
 
 			// Current SDK does not expose per-object IFC querying in typings yet.
 			// Seed parts for UI flow and scope by selected IFC model.
-			const seeded = getViewerPartsFallback();
-			allParts = allIfcModels.flatMap((model) => {
-				const modelId = model.id;
-				const modelName = model.name;
-				return seeded.map((part, seedIndex) => ({
-					...part,
-					id: `${modelId}-${seedIndex + 1}`,
-					name: `${modelName} - ${part.name}`,
-					modelId,
-					modelName,
-				}));
-			});
+			allParts = allIfcModels.flatMap((model) =>
+				createSeededPartsForModel(model.id, model.name),
+			);
 		} else {
 			modelFilterEl.innerHTML =
 				'<option value="">No IFC files found in project folders</option>';
@@ -552,6 +586,10 @@ export async function renderWbs(
 			: [];
 		refreshPartFilters();
 		refreshPartsList();
+		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
+		status.textContent = selectedModelId
+			? `Loaded ${parts.length} part(s) for ${selectedModel?.name ?? "selected IFC model"}.`
+			: "Select an IFC model to load parts.";
 	});
 
 	typeFilterEl.addEventListener("change", refreshPartsList);
@@ -592,6 +630,9 @@ export async function renderWbs(
 
 		selectedParts.forEach((part) => {
 			assignments = assignments.filter((item) => item.partId !== part.id);
+			const columnB = (selectedRow[1] ?? "").trim();
+			const columnD = (selectedRow[3] ?? "").trim();
+			const propertySetValue = `${columnB} - ${columnD}`;
 			assignments.push({
 				partId: part.id,
 				partName: part.name,
@@ -600,6 +641,7 @@ export async function renderWbs(
 				wbsRowIndex: assignedRowIndex,
 				wbsValues: selectedRow,
 				propertySetName: "Pset_IMASD_WBS",
+				propertySetValue,
 				assignedAt: now,
 			});
 		});
