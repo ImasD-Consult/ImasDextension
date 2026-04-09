@@ -1,10 +1,11 @@
 import { connectToTrimble, escapeHtml } from "@imasd/shared";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
 import { SMARTPRINT_LOGO } from "./assets/logo";
-import { renderProcesses } from "./views/processes";
 import { renderInfo } from "./views/info";
+import { renderProcesses } from "./views/processes";
+import { renderWbs } from "./views/wbs";
 
-type Command = "smartprint_main" | "processes" | "info";
+type Command = "smartprint_main" | "processes" | "wbs" | "info";
 
 async function handleCommand(
 	command: string,
@@ -20,6 +21,10 @@ async function handleCommand(
 		case "info":
 			renderInfo(container);
 			await api.ui.setActiveMenuItem("info");
+			break;
+		case "wbs":
+			renderWbs(container);
+			await api.ui.setActiveMenuItem("wbs");
 			break;
 	}
 }
@@ -42,6 +47,7 @@ export async function initApp(): Promise<void> {
 			command: "smartprint_main",
 			subMenus: [
 				{ title: "Processes", command: "processes" },
+				{ title: "WBS", command: "wbs" },
 				{ title: "Info", command: "info" },
 			],
 		});
