@@ -21,6 +21,8 @@ type IfcPart = {
 	name: string;
 	type: string;
 	material: string;
+	modelId?: string;
+	modelName?: string;
 };
 
 type WbsAssignment = {
@@ -145,47 +147,42 @@ function getViewerPartsFallback(): IfcPart[] {
 			name: "Wall Exterior A1",
 			type: "IFCWALL",
 			material: "Concrete",
+			modelId: "fallback-model-1",
+			modelName: "Sample IFC 1",
 		},
 		{
 			id: "part-002",
 			name: "Column C-01",
 			type: "IFCCOLUMN",
 			material: "Concrete",
+			modelId: "fallback-model-1",
+			modelName: "Sample IFC 1",
 		},
 		{
 			id: "part-003",
 			name: "Beam B-14",
 			type: "IFCBEAM",
 			material: "Steel",
+			modelId: "fallback-model-2",
+			modelName: "Sample IFC 2",
 		},
 		{
 			id: "part-004",
 			name: "Slab S-02",
 			type: "IFCSLAB",
 			material: "Concrete",
+			modelId: "fallback-model-2",
+			modelName: "Sample IFC 2",
 		},
 		{
 			id: "part-005",
 			name: "Door D-05",
 			type: "IFCDOOR",
 			material: "Wood",
+			modelId: "fallback-model-2",
+			modelName: "Sample IFC 2",
 		},
 	];
-}
-
-async function loadIfcParts(api: WorkspaceApi): Promise<IfcPart[]> {
-	// Current SDK typing in this repo only guarantees model-level access.
-	// Keep a stable fallback so assignment workflow can be built now.
-	const models = await api.viewer?.getModels?.();
-	if (models && models.length > 0) {
-		return models.map((model, index) => ({
-			id: model.versionId || model.id || `model-${index + 1}`,
-			name: model.name || `Model ${index + 1}`,
-			type: "MODEL",
-			material: "N/A",
-		}));
-	}
-	return getViewerPartsFallback();
 }
 
 function renderTable(tableData: WbsTableData, selectedRowIndex: number | null): string {
@@ -312,6 +309,13 @@ export async function renderWbs(
         <div class="col-span-12 lg:col-span-4 rounded-lg border border-gray-200 p-3 space-y-3">
           <h3 class="text-sm font-semibold text-gray-700">IFC Parts (MVP)</h3>
 
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600">IFC Model</label>
+            <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-model-filter>
+              <option value="">Select IFC model</option>
+            </select>
+          </div>
+
           <div class="grid grid-cols-2 gap-2">
             <select class="rounded border border-gray-300 px-2 py-1 text-sm" data-type-filter>
               <option value="ALL">All Types</option>
@@ -358,6 +362,7 @@ export async function renderWbs(
 	const materialFilter = container.querySelector<HTMLSelectElement>(
 		"[data-material-filter]",
 	);
+	const modelFilter = container.querySelector<HTMLSelectElement>("[data-model-filter]");
 	const partsList = container.querySelector<HTMLElement>("[data-parts-list]");
 	const assignButton = container.querySelector<HTMLButtonElement>("[data-assign]");
 	const assignmentsList = container.querySelector<HTMLElement>(
@@ -371,6 +376,7 @@ export async function renderWbs(
 		!tableContainer ||
 		!typeFilter ||
 		!materialFilter ||
+		!modelFilter ||
 		!partsList ||
 		!assignButton ||
 		!assignmentsList
@@ -381,12 +387,14 @@ export async function renderWbs(
 	const tableContainerEl = tableContainer;
 	const typeFilterEl = typeFilter;
 	const materialFilterEl = materialFilter;
+	const modelFilterEl = modelFilter;
 	const partsListEl = partsList;
 	const assignButtonEl = assignButton;
 	const assignmentsListEl = assignmentsList;
 
 	let tableData: WbsTableData = { headers: [], rows: [] };
 	let selectedWbsRowIndex: number | null = null;
+	let allParts: IfcPart[] = [];
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
 	let assignments = loadAssignmentsFromLocalStorage();
@@ -401,6 +409,13 @@ export async function renderWbs(
 	}
 
 	function refreshPartsList(): void {
+		if (!modelFilterEl.value) {
+			partsListEl.innerHTML =
+				'<p class="text-sm text-gray-500 italic">Select an IFC model to load parts.</p>';
+			refreshAssignButton();
+			return;
+		}
+
 		partsListEl.innerHTML = renderPartsList(
 			parts,
 			selectedPartIds,
@@ -410,13 +425,7 @@ export async function renderWbs(
 		refreshAssignButton();
 	}
 
-	function refreshWbsTable(): void {
-		tableContainerEl.innerHTML = renderTable(tableData, selectedWbsRowIndex);
-		refreshAssignButton();
-	}
-
-	try {
-		parts = await loadIfcParts(api);
+	function refreshPartFilters(): void {
 		const types = [...new Set(parts.map((part) => part.type))].sort();
 		const materials = [...new Set(parts.map((part) => part.material))].sort();
 		typeFilterEl.innerHTML =
@@ -429,9 +438,65 @@ export async function renderWbs(
 			materials
 				.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
 				.join("");
+	}
+
+	function refreshWbsTable(): void {
+		tableContainerEl.innerHTML = renderTable(tableData, selectedWbsRowIndex);
+		refreshAssignButton();
+	}
+
+	try {
+		const models = (await api.viewer?.getModels?.()) ?? [];
+		const ifcModels = models.filter((model) =>
+			(model.name || "").trim().toLowerCase().endsWith(".ifc"),
+		);
+		if (ifcModels.length > 0) {
+			modelFilterEl.innerHTML =
+				'<option value="">Select IFC model</option>' +
+				ifcModels
+					.map((model, index) => {
+						const modelId = model.versionId || model.id || `model-${index + 1}`;
+						const modelName = model.name || `Model ${index + 1}`;
+						return `<option value="${escapeHtml(modelId)}">${escapeHtml(modelName)}</option>`;
+					})
+					.join("");
+
+			// Current SDK does not expose per-object IFC querying in typings.
+			// Seed parts from fallback but scope by selected model.
+			const seeded = getViewerPartsFallback();
+			allParts = ifcModels.flatMap((model, index) => {
+				const modelId = model.versionId || model.id || `model-${index + 1}`;
+				const modelName = model.name || `Model ${index + 1}`;
+				return seeded.map((part, seedIndex) => ({
+					...part,
+					id: `${modelId}-${seedIndex + 1}`,
+					name: `${modelName} - ${part.name}`,
+					modelId,
+					modelName,
+				}));
+			});
+		} else if (models.length > 0) {
+			modelFilterEl.innerHTML =
+				'<option value="">No IFC files found in current viewer</option>';
+			allParts = [];
+		} else {
+			const fallbackModels = ["fallback-model-1", "fallback-model-2"];
+			modelFilterEl.innerHTML =
+				'<option value="">Select IFC model</option>' +
+				fallbackModels
+					.map((id, index) => `<option value="${id}">Sample IFC ${index + 1}</option>`)
+					.join("");
+			allParts = getViewerPartsFallback();
+		}
 		refreshPartsList();
 	} catch {
-		parts = getViewerPartsFallback();
+		const fallbackModels = ["fallback-model-1", "fallback-model-2"];
+		modelFilterEl.innerHTML =
+			'<option value="">Select IFC model</option>' +
+			fallbackModels
+				.map((id, index) => `<option value="${id}">Sample IFC ${index + 1}</option>`)
+				.join("");
+		allParts = getViewerPartsFallback();
 		refreshPartsList();
 	}
 
@@ -448,6 +513,16 @@ export async function renderWbs(
 			localStorage.removeItem(WBS_STORAGE_KEY);
 		}
 	}
+
+	modelFilterEl.addEventListener("change", () => {
+		selectedPartIds.clear();
+		const selectedModelId = modelFilterEl.value;
+		parts = selectedModelId
+			? allParts.filter((part) => part.modelId === selectedModelId)
+			: [];
+		refreshPartFilters();
+		refreshPartsList();
+	});
 
 	typeFilterEl.addEventListener("change", refreshPartsList);
 	materialFilterEl.addEventListener("change", refreshPartsList);
