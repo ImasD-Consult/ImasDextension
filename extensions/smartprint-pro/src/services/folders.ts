@@ -177,19 +177,38 @@ function isIfcFile(name: string): boolean {
 	return IFC_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
+type SmartprintProWindow = Window & {
+	__SMARTPRINT_PRO__?: {
+		EXTENSION_URL?: string;
+		TRIMBLE_CONNECT_ORIGIN?: string;
+	};
+};
+
+/** Injected at container startup by docker-entrypoint.sh (`env.js`) so Compose can set region without rebuild. */
+function getRuntimeTrimbleConnectOrigin(): string | undefined {
+	if (typeof window === "undefined") return undefined;
+	const o = (window as SmartprintProWindow).__SMARTPRINT_PRO__?.TRIMBLE_CONNECT_ORIGIN?.trim();
+	return o ? o.replace(/\/$/, "") : undefined;
+}
+
 /**
  * Base URLs for `/tc/api/...` (model tree, files, etc.).
  *
  * When the extension runs on a custom host (e.g. extensions.imasd.dev), relative `/tc/api` does
  * not hit Trimble. Order of preference:
- * 1. `VITE_TRIMBLE_CONNECT_ORIGIN` (build-time; must match the Connect shard where the project lives)
- * 2. `window.location.ancestorOrigins` / `document.referrer` when the parent is `*.connect.trimble.com`
- * 3. Known regional hosts (NA / EU / Asia) — last resort; wrong shard ⇒ missing file or empty tree
+ * 1. Runtime `TRIMBLE_CONNECT_ORIGIN` / `VITE_TRIMBLE_CONNECT_ORIGIN` from `env.js` (Docker Compose)
+ * 2. `import.meta.env.VITE_TRIMBLE_CONNECT_ORIGIN` (Vite build-time)
+ * 3. `window.location.ancestorOrigins` / `document.referrer` when the parent is `*.connect.trimble.com`
+ * 4. Known regional hosts (NA / EU / Asia) — last resort; wrong shard ⇒ missing file or empty tree
  *
  * In Folders-only mode there is no 3D viewer context; explicit origin + correct region matters more.
  */
 function getConnectTrimbleBaseUrls(): string[] {
 	const bases = new Set<string>();
+	const runtime = getRuntimeTrimbleConnectOrigin();
+	if (runtime) {
+		bases.add(runtime);
+	}
 	const env = (
 		import.meta as ImportMeta & {
 			env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string };

@@ -6,9 +6,13 @@ node <<'NODE'
 const fs = require("fs");
 const trim = (s) => String(s ?? "").replace(/\/+$/, "");
 const ext = trim(process.env.EXTENSION_URL);
+const connectOrigin = trim(
+	process.env.VITE_TRIMBLE_CONNECT_ORIGIN || process.env.TRIMBLE_CONNECT_ORIGIN || "",
+);
 const body = [
 	"window.__SMARTPRINT_PRO__ = window.__SMARTPRINT_PRO__ || {};",
 	`window.__SMARTPRINT_PRO__.EXTENSION_URL = ${JSON.stringify(ext)};`,
+	`window.__SMARTPRINT_PRO__.TRIMBLE_CONNECT_ORIGIN = ${JSON.stringify(connectOrigin)};`,
 	"",
 ].join("\n");
 fs.writeFileSync("/app/env.js", body, "utf8");
