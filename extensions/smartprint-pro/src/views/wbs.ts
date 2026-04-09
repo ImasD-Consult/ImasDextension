@@ -579,9 +579,11 @@ export async function renderWbs(
 			(cachedParts?.length ?? 0) === 0;
 		if (shouldRefetch) {
 			const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
-			setStatus(`Loading assemblies for ${selectedModel?.name ?? "selected IFC"}...`);
+			setStatus(
+				`Loading assemblies for ${selectedModel?.name ?? "selected IFC"}… If the file is still processing, this may take up to a few minutes.`,
+			);
 			partsListEl.innerHTML =
-				'<p class="text-sm text-gray-400 italic animate-pulse">Loading assemblies from IFC...</p>';
+				'<p class="text-sm text-gray-400 italic animate-pulse">Loading assemblies from IFC (waiting for model tree if processing)…</p>';
 			retryAssembliesButtonEl.disabled = true;
 			try {
 				const assemblyPartsRaw = await fetchIfcAssembliesFromFile(

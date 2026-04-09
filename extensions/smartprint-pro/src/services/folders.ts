@@ -495,33 +495,79 @@ export async function fetchIfcAssembliesFromFile(
 	const idCandidates = [ifcVersionId, ifcFileId].filter(
 		(value): value is string => typeof value === "string" && value.length > 0,
 	);
+
+	function getFileProcessingState(fileObj: Record<string, unknown> | null): string {
+		return (
+			readNodeString(fileObj ?? {}, [
+				"processingState",
+				"processingStatus",
+				"status",
+				"conversionStatus",
+			]) ?? "unknown"
+		);
+	}
+
+	function shouldPollForModelTree(stateRaw: string): boolean {
+		const s = stateRaw.toUpperCase().replace(/\s+/g, "");
+		if (s === "UNKNOWN") return true;
+		if (s.includes("PROCESS")) return true;
+		if (s === "QUEUED" || s === "PENDING" || s.includes("CONVERT")) return true;
+		return false;
+	}
+
+	function sleep(ms: number): Promise<void> {
+		return new Promise((resolve) => window.setTimeout(resolve, ms));
+	}
+
+	async function fetchFileInfoOnce(): Promise<Record<string, unknown> | null> {
+		for (const idCandidate of idCandidates) {
+			const info = await getFileInfoById(idCandidate);
+			if (info && typeof info === "object") {
+				return info as Record<string, unknown>;
+			}
+		}
+		return null;
+	}
 	let tree: unknown | null = null;
 	for (const idCandidate of idCandidates) {
 		tree = await getModelTreeById(idCandidate);
 		if (tree) break;
 	}
+
 	if (!tree) {
-		let fileInfo: unknown | null = null;
-		for (const idCandidate of idCandidates) {
-			fileInfo = await getFileInfoById(idCandidate);
-			if (fileInfo) break;
+		let fileObj = await fetchFileInfoOnce();
+		let processingState = getFileProcessingState(fileObj);
+
+		if (shouldPollForModelTree(processingState)) {
+			const maxWaitMs = 180_000;
+			const intervalMs = 4000;
+			const deadline = Date.now() + maxWaitMs;
+			while (Date.now() < deadline) {
+				await sleep(intervalMs);
+				for (const idCandidate of idCandidates) {
+					tree = await getModelTreeById(idCandidate);
+					if (tree) break;
+				}
+				if (tree) break;
+				fileObj = await fetchFileInfoOnce();
+				processingState = getFileProcessingState(fileObj);
+				if (!shouldPollForModelTree(processingState)) {
+					break;
+				}
+			}
 		}
-		const fileObj =
-			fileInfo && typeof fileInfo === "object"
-				? (fileInfo as Record<string, unknown>)
-				: null;
-		const processingState =
-			(fileObj &&
-				readNodeString(fileObj, [
-					"processingState",
-					"processingStatus",
-					"status",
-					"conversionStatus",
-				])) ||
-			"unknown";
-		throw new Error(
-			`Model tree unavailable for selected IFC. File processing state: ${processingState}.`,
-		);
+
+		if (!tree) {
+			const finalState = getFileProcessingState(fileObj);
+			if (shouldPollForModelTree(finalState)) {
+				throw new Error(
+					`Model tree still unavailable after waiting (~3 min). File processing state: ${finalState}. Open the file in Trimble Connect Data view and confirm processing finished, then Retry.`,
+				);
+			}
+			throw new Error(
+				`Model tree unavailable for selected IFC. File processing state: ${finalState}.`,
+			);
+		}
 	}
 
 	const result: IfcAssemblyItem[] = [];
