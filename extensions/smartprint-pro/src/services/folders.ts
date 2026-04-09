@@ -266,7 +266,12 @@ function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], see
 
 	const classOrType =
 		readNodeString(node, ["class", "type", "entityType", "ifcClass", "category"]) ?? "";
-	if (classOrType.toLowerCase().includes("ifcelementassembly")) {
+	const normalized = classOrType.toLowerCase().replace(/[\s_-]+/g, "");
+	const isAssemblyNode =
+		normalized.includes("ifcelementassembly") ||
+		normalized === "assembly" ||
+		normalized.endsWith("assembly");
+	if (isAssemblyNode) {
 		const id =
 			readNodeString(node, ["guid", "id", "runtimeId", "entityId"]) ??
 			`assembly-${acc.length + 1}`;
@@ -476,7 +481,7 @@ export async function fetchIfcAssembliesFromFile(
 			? diagnostics.classSamples.join(", ")
 			: "none";
 		throw new Error(
-			`No IfcElementAssembly found. Nodes inspected: ${diagnostics.nodeCount}. Top classes/types: ${classHint}.`,
+			`No assembly nodes found. Nodes inspected: ${diagnostics.nodeCount}. Top classes/types: ${classHint}.`,
 		);
 	}
 

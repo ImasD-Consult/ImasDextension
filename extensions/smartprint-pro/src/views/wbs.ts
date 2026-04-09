@@ -554,6 +554,7 @@ export async function renderWbs(
 	}
 
 	try {
+		status.textContent = "Loading IFC models from project folders...";
 		const ifcModels = await fetchProjectIfcModels(api);
 		allIfcModels = ifcModels.map((model, index) => ({
 			id: model.id || model.versionId || `ifc-${index + 1}`,
@@ -563,11 +564,13 @@ export async function renderWbs(
 
 		if (allIfcModels.length > 0) {
 			refreshModelOptions();
+			status.textContent = `Found ${allIfcModels.length} IFC file(s). Select one to load assemblies.`;
 
 		} else {
 			modelFilterEl.innerHTML =
 				'<option value="">No IFC files found in project folders</option>';
 			partsByModelId.clear();
+			status.textContent = "No IFC files found in project folders.";
 		}
 
 		refreshPartsList();
@@ -576,6 +579,7 @@ export async function renderWbs(
 			'<option value="">Failed to load IFC files from project</option>';
 		partsByModelId.clear();
 		refreshPartsList();
+		status.textContent = "Failed to load IFC files from project.";
 	}
 
 	refreshAssignments();
@@ -608,6 +612,7 @@ export async function renderWbs(
 		let loadMessage: string | null = null;
 		if (!partsByModelId.has(selectedModelId)) {
 			const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
+			status.textContent = `Loading assemblies for ${selectedModel?.name ?? "selected IFC"}...`;
 			partsListEl.innerHTML =
 				'<p class="text-sm text-gray-400 italic animate-pulse">Loading assemblies from IFC...</p>';
 			try {
@@ -645,7 +650,7 @@ export async function renderWbs(
 		}
 
 		if (parts.length === 0) {
-			status.textContent = `No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Check processing status, tree availability, or class naming in model tree.`;
+			status.textContent = `No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Check processing status, tree availability, or assembly naming in model tree.`;
 			return;
 		}
 
