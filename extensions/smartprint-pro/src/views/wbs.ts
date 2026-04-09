@@ -590,6 +590,7 @@ export async function renderWbs(
 					api,
 					selectedModelId,
 					selectedModel?.versionId,
+					selectedModel?.name,
 				);
 				const assemblyParts = assemblyPartsRaw.map((item) => ({
 					id: item.id,

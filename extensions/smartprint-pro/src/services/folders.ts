@@ -415,26 +415,85 @@ function isUsableTreeResponse(data: unknown): boolean {
 	return false;
 }
 
-function deepFindString(obj: unknown, keys: string[]): string | undefined {
-	if (!obj || typeof obj !== "object") return undefined;
-	const o = obj as Record<string, unknown>;
-	for (const k of keys) {
-		const v = o[k];
-		if (typeof v === "string" && v.trim().length > 0) return v;
+function readStringProp(
+	obj: Record<string, unknown>,
+	key: string,
+): string | undefined {
+	const v = obj[key];
+	return typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined;
+}
+
+/** Only well-known file / version / model fields — avoids nested "status" false positives (e.g. PROCESSING). */
+function getFileProcessingStateShallow(
+	fileObj: Record<string, unknown> | null,
+): string {
+	if (!fileObj) return "unknown";
+	const direct =
+		readStringProp(fileObj, "processingState") ??
+		readStringProp(fileObj, "processingStatus") ??
+		readStringProp(fileObj, "conversionStatus") ??
+		readStringProp(fileObj, "modelProcessingState");
+	if (direct) return direct;
+
+	const lv = fileObj.latestVersion;
+	if (lv && typeof lv === "object") {
+		const lvo = lv as Record<string, unknown>;
+		const fromLv =
+			readStringProp(lvo, "processingState") ??
+			readStringProp(lvo, "processingStatus") ??
+			readStringProp(lvo, "conversionStatus");
+		if (fromLv) return fromLv;
 	}
-	for (const v of Object.values(o)) {
-		if (v && typeof v === "object") {
-			const found = deepFindString(v, keys);
-			if (found) return found;
+
+	const model = fileObj.model;
+	if (model && typeof model === "object") {
+		const mo = model as Record<string, unknown>;
+		const fromM =
+			readStringProp(mo, "processingState") ??
+			readStringProp(mo, "processingStatus") ??
+			readStringProp(mo, "conversionStatus");
+		if (fromM) return fromM;
+	}
+
+	return "unknown";
+}
+
+function extractModelIdsFromFileRecord(
+	fileObj: Record<string, unknown> | null,
+): string[] {
+	if (!fileObj) return [];
+	const out: string[] = [];
+	const pick = (o: Record<string, unknown>) => {
+		for (const k of ["modelId", "bimModelId", "linkedModelId"]) {
+			const v = o[k];
+			if (typeof v === "string" && v.trim().length > 0) out.push(v.trim());
+		}
+	};
+	pick(fileObj);
+	const lv = fileObj.latestVersion;
+	if (lv && typeof lv === "object") pick(lv as Record<string, unknown>);
+	const model = fileObj.model;
+	if (model && typeof model === "object") pick(model as Record<string, unknown>);
+	return [...new Set(out)];
+}
+
+function uniqStrings(ids: (string | undefined)[]): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const id of ids) {
+		if (typeof id === "string" && id.length > 0 && !seen.has(id)) {
+			seen.add(id);
+			out.push(id);
 		}
 	}
-	return undefined;
+	return out;
 }
 
 export async function fetchIfcAssembliesFromFile(
 	api: WorkspaceApi,
 	ifcFileId: string,
 	ifcVersionId?: string,
+	ifcDisplayName?: string,
 ): Promise<IfcAssemblyItem[]> {
 	const project = await api.project.getProject();
 	if (!project?.id) {
@@ -587,21 +646,56 @@ export async function fetchIfcAssembliesFromFile(
 		return { nodeCount, classSamples };
 	}
 
-	const idCandidates = [ifcVersionId, ifcFileId].filter(
-		(value): value is string => typeof value === "string" && value.length > 0,
-	);
+	async function collectViewerTreeIds(): Promise<string[]> {
+		if (!api.viewer?.getModels) return [];
+		try {
+			const models = await api.viewer.getModels();
+			if (!models?.length) return [];
+			const out: string[] = [];
+			const fileNameNorm = (ifcDisplayName ?? "").toLowerCase().trim();
 
-	function getFileProcessingState(fileObj: Record<string, unknown> | null): string {
-		if (!fileObj) return "unknown";
-		const specific = deepFindString(fileObj, [
-			"processingState",
-			"processingStatus",
-			"conversionStatus",
-			"modelProcessingState",
-		]);
-		if (specific) return specific;
-		const generic = deepFindString(fileObj, ["status"]);
-		return generic ?? "unknown";
+			for (const m of models) {
+				const nameNorm = (m.name ?? "").toLowerCase().trim();
+				const matchById =
+					m.id === ifcFileId ||
+					m.versionId === ifcVersionId ||
+					m.versionId === ifcFileId ||
+					m.id === ifcVersionId;
+				const matchByName =
+					fileNameNorm.length > 0 &&
+					nameNorm.length > 0 &&
+					(nameNorm === fileNameNorm ||
+						nameNorm.endsWith(fileNameNorm) ||
+						fileNameNorm.endsWith(nameNorm));
+				if (matchById || matchByName) {
+					if (m.id) out.push(m.id);
+					if (m.versionId) out.push(m.versionId);
+				}
+			}
+
+			if (out.length === 0 && models.length === 1) {
+				if (models[0].id) out.push(models[0].id);
+				if (models[0].versionId) out.push(models[0].versionId);
+			}
+
+			return [...new Set(out)];
+		} catch {
+			return [];
+		}
+	}
+
+	let idCandidates = uniqStrings([
+		...(await collectViewerTreeIds()),
+		ifcVersionId,
+		ifcFileId,
+	]);
+
+	async function tryTreeForIds(ids: string[]): Promise<unknown | null> {
+		for (const id of ids) {
+			const t = await getModelTreeById(id);
+			if (t) return t;
+		}
+		return null;
 	}
 
 	function shouldPollForModelTree(stateRaw: string): boolean {
@@ -637,29 +731,35 @@ export async function fetchIfcAssembliesFromFile(
 		}
 		return null;
 	}
-	let tree: unknown | null = null;
-	for (const idCandidate of idCandidates) {
-		tree = await getModelTreeById(idCandidate);
-		if (tree) break;
+
+	let tree: unknown | null = await tryTreeForIds(idCandidates);
+
+	if (!tree) {
+		const fileObj = await fetchFileInfoOnce();
+		const extras = extractModelIdsFromFileRecord(fileObj);
+		const newIds = extras.filter((x) => !idCandidates.includes(x));
+		if (newIds.length > 0) {
+			idCandidates = [...idCandidates, ...newIds];
+			tree = await tryTreeForIds(newIds);
+		}
 	}
 
 	if (!tree) {
 		let fileObj = await fetchFileInfoOnce();
-		let processingState = getFileProcessingState(fileObj);
+		let processingState = getFileProcessingStateShallow(fileObj);
 
 		if (shouldPollForModelTree(processingState)) {
-			const maxWaitMs = 180_000;
-			const intervalMs = 4000;
+			const maxWaitMs = 90_000;
+			const intervalMs = 5000;
 			const deadline = Date.now() + maxWaitMs;
 			while (Date.now() < deadline) {
 				await sleep(intervalMs);
-				for (const idCandidate of idCandidates) {
-					tree = await getModelTreeById(idCandidate);
-					if (tree) break;
-				}
+				const viewerIds = await collectViewerTreeIds();
+				const merged = uniqStrings([...viewerIds, ...idCandidates]);
+				tree = await tryTreeForIds(merged);
 				if (tree) break;
 				fileObj = await fetchFileInfoOnce();
-				processingState = getFileProcessingState(fileObj);
+				processingState = getFileProcessingStateShallow(fileObj);
 				if (!shouldPollForModelTree(processingState)) {
 					break;
 				}
@@ -667,16 +767,16 @@ export async function fetchIfcAssembliesFromFile(
 		}
 
 		if (!tree) {
-			const finalState = getFileProcessingState(fileObj);
+			const finalState = getFileProcessingStateShallow(fileObj);
 			const originHint =
 				"If the model opens in 3D but this fails, set VITE_TRIMBLE_CONNECT_ORIGIN to your Trimble Connect origin (e.g. https://app21.connect.trimble.com) and rebuild the extension.";
 			if (shouldPollForModelTree(finalState)) {
 				throw new Error(
-					`Model tree still unavailable after waiting (~3 min). File processing state: ${finalState}. Open the file in Trimble Connect Data view and confirm processing finished, then Retry. ${originHint}`,
+					`Model tree still unavailable after waiting (~90s). Data API processing state (file/version only): ${finalState}. Open the IFC in the Trimble 3D viewer so the extension can use the viewer model id, then Retry. ${originHint}`,
 				);
 			}
 			throw new Error(
-				`Model tree unavailable for selected IFC (no usable tree from API). File processing state: ${finalState}. ${originHint}`,
+				`Model tree unavailable for selected IFC (no usable tree from API). Data API processing state: ${finalState}. Open the IFC in the 3D viewer and Retry, or set VITE_TRIMBLE_CONNECT_ORIGIN. ${originHint}`,
 			);
 		}
 	}
