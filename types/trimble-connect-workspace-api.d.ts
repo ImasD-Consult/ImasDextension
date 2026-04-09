@@ -46,7 +46,16 @@ declare module "trimble-connect-workspace-api" {
 		};
 		viewer?: {
 			getModels(): Promise<ViewerModel[]>;
-			/** Assembly / spatial hierarchy without cross-origin fetch (postMessage to Connect). */
+			/** All visible model objects when selector omitted (see ObjectSelector). */
+			getObjects?(
+				selector?: Record<string, unknown>,
+				objectState?: Record<string, unknown>,
+			): Promise<Array<{ modelId: string; objects: unknown }>>;
+			getObjectProperties?(
+				modelId: string,
+				objectRuntimeIds: number[],
+			): Promise<Array<{ class?: string; id?: number }>>;
+			/** Children of parent entity IDs — use roots like `[0]` not `[]`. */
 			getHierarchyChildren?(
 				modelId: string,
 				entityIds: number[],

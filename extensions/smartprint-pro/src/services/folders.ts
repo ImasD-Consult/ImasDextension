@@ -736,9 +736,6 @@ export async function fetchIfcAssembliesFromFile(
 		return { nodeCount, classSamples };
 	}
 
-	/** Matches Trimble Workspace API `HierarchyType.ElementAssembly` (see trimble-connect-workspace-api). */
-	const HIERARCHY_TYPE_ELEMENT_ASSEMBLY = 4;
-
 	type ViewerModelLike = {
 		id: string;
 		versionId?: string;
@@ -769,6 +766,248 @@ export async function fetchIfcAssembliesFromFile(
 		return matched;
 	}
 
+	const ROOT_ENTITY_TRY = [0, 1];
+	const MAX_VIEWER_OBJECTS_FALLBACK = 4000;
+
+	function viewerModelIdCandidates(primary: ViewerModelLike): string[] {
+		return uniqStrings([primary.id, primary.versionId]);
+	}
+
+	function mapHierarchyEntitiesToParts(
+		entities: Array<{ id: number; name: string }>,
+		partType: string,
+	): IfcAssemblyItem[] {
+		const seen = new Set<string>();
+		const out: IfcAssemblyItem[] = [];
+		for (const e of entities) {
+			const key = String(e.id);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push({
+				id: key,
+				name: e.name?.trim() || `Object ${key}`,
+				type: partType,
+				material: "Unknown",
+			});
+		}
+		return out;
+	}
+
+	/**
+	 * `getHierarchyChildren` expects parent entity IDs — `[]` returns nothing. Try roots 0/1,
+	 * ElementAssembly (4) first, then other hierarchies; use both `id` and `versionId` as modelId.
+	 */
+	async function tryFetchViaHierarchyChildren(
+		primary: ViewerModelLike,
+	): Promise<IfcAssemblyItem[] | null> {
+		const viewer = api.viewer;
+		if (!viewer?.getHierarchyChildren) return null;
+		const fetchChildren = viewer.getHierarchyChildren;
+
+		const modelIds = viewerModelIdCandidates(primary);
+
+		async function runForTypes(
+			hTypes: number[],
+			partType: string,
+		): Promise<IfcAssemblyItem[] | null> {
+			for (const mid of modelIds) {
+				if (!mid) continue;
+				for (const hType of hTypes) {
+					for (const rootId of ROOT_ENTITY_TRY) {
+						try {
+							const entities = await fetchChildren(
+								mid,
+								[rootId],
+								hType,
+								true,
+							);
+							if (entities?.length) {
+								return mapHierarchyEntitiesToParts(entities, partType);
+							}
+						} catch {
+							/* try next combination */
+						}
+					}
+				}
+			}
+			return null;
+		}
+
+		const assemblyHierarchy = await runForTypes([4], "IFCELEMENTASSEMBLY");
+		if (assemblyHierarchy?.length) return assemblyHierarchy;
+
+		const otherHierarchy = await runForTypes(
+			[1, 3, 5, 6, 2],
+			"VIEWER_HIERARCHY",
+		);
+		if (otherHierarchy?.length) return otherHierarchy;
+
+		return null;
+	}
+
+	type ParsedViewerObject = {
+		runtimeId: number;
+		name?: string;
+		classHint?: string;
+	};
+
+	function collectObjectsFromModelObjectsEntry(
+		mo: Record<string, unknown>,
+	): ParsedViewerObject[] {
+		const raw = mo.objects;
+		const out: ParsedViewerObject[] = [];
+
+		if (Array.isArray(raw)) {
+			for (const item of raw) {
+				if (typeof item === "number") {
+					out.push({ runtimeId: item });
+					continue;
+				}
+				if (item && typeof item === "object") {
+					const it = item as Record<string, unknown>;
+					const rid =
+						typeof it.objectRuntimeId === "number"
+							? it.objectRuntimeId
+							: typeof it.id === "number"
+								? it.id
+								: typeof it.runtimeId === "number"
+									? it.runtimeId
+									: null;
+					if (rid == null) continue;
+					const name =
+						typeof it.name === "string"
+							? it.name
+							: typeof it.displayName === "string"
+								? it.displayName
+								: undefined;
+					const classHint =
+						typeof it.class === "string"
+							? it.class
+							: typeof it.type === "string"
+								? it.type
+								: undefined;
+					out.push({ runtimeId: rid, name, classHint });
+				}
+			}
+			return out;
+		}
+
+		if (raw && typeof raw === "object") {
+			const nested = raw as Record<string, unknown>;
+			const rids = nested.objectRuntimeIds;
+			if (Array.isArray(rids)) {
+				for (const rid of rids) {
+					if (typeof rid === "number") {
+						out.push({ runtimeId: rid });
+					}
+				}
+			}
+		}
+		return out;
+	}
+
+	async function enrichTypesFromObjectProperties(
+		modelId: string,
+		parts: IfcAssemblyItem[],
+	): Promise<IfcAssemblyItem[]> {
+		const viewer = api.viewer;
+		if (!viewer?.getObjectProperties || parts.length === 0) return parts;
+
+		const runtimeIds = parts
+			.map((p) => Number(p.id))
+			.filter((n) => !Number.isNaN(n));
+		const BATCH = 120;
+		const classByRuntime = new Map<number, string>();
+
+		for (let i = 0; i < runtimeIds.length; i += BATCH) {
+			const chunk = runtimeIds.slice(i, i + BATCH);
+			try {
+				const props = await viewer.getObjectProperties(modelId, chunk);
+				if (!Array.isArray(props)) continue;
+				for (let j = 0; j < chunk.length; j++) {
+					const pr = props[j] as { class?: string } | undefined;
+					if (pr?.class) classByRuntime.set(chunk[j], pr.class);
+				}
+			} catch {
+				/* next batch */
+			}
+		}
+
+		return parts.map((p) => {
+			const rid = Number(p.id);
+			const cls = classByRuntime.get(rid);
+			if (cls) {
+				return { ...p, type: cls.toUpperCase() };
+			}
+			return p;
+		});
+	}
+
+	/** Uses ViewerAPI.getObjects — all model objects when selector is omitted — then filters assemblies. */
+	async function tryFetchViaGetObjects(
+		primary: ViewerModelLike,
+	): Promise<IfcAssemblyItem[] | null> {
+		const viewer = api.viewer;
+		if (!viewer?.getObjects) return null;
+
+		const mids = viewerModelIdCandidates(primary);
+		let rows: unknown;
+		try {
+			rows = await viewer.getObjects();
+		} catch {
+			return null;
+		}
+		if (!Array.isArray(rows)) return null;
+
+		const collected: ParsedViewerObject[] = [];
+		for (const mo of rows) {
+			if (!mo || typeof mo !== "object") continue;
+			const m = mo as Record<string, unknown>;
+			const mid = typeof m.modelId === "string" ? m.modelId : "";
+			if (!mid || !mids.includes(mid)) continue;
+			collected.push(...collectObjectsFromModelObjectsEntry(m));
+		}
+
+		if (collected.length === 0) return null;
+
+		const isAssemblyLike = (r: ParsedViewerObject) => {
+			const c = (r.classHint ?? "").toUpperCase();
+			const n = (r.name ?? "").toUpperCase();
+			return (
+				c.includes("ASSEMBLY") ||
+				c.includes("IFCELEMENTASSEMBLY") ||
+				n.includes("ASSEMBLY")
+			);
+		};
+
+		let chosen = collected.filter(isAssemblyLike);
+		if (chosen.length === 0) {
+			chosen = collected.slice(0, MAX_VIEWER_OBJECTS_FALLBACK);
+		}
+
+		let parts: IfcAssemblyItem[] = chosen.map((r) => ({
+			id: String(r.runtimeId),
+			name: r.name?.trim() || `Object ${r.runtimeId}`,
+			type: (r.classHint ?? "UNKNOWN").toUpperCase(),
+			material: "Unknown",
+		}));
+
+		const modelIdForProps = mids[0] ?? primary.id;
+		if (parts.some((p) => p.type === "UNKNOWN" || p.type === "")) {
+			parts = await enrichTypesFromObjectProperties(modelIdForProps, parts);
+		}
+
+		const asmOnly = parts.filter((p) => {
+			const t = p.type.toUpperCase();
+			return t.includes("ASSEMBLY") || t.includes("IFCELEMENTASSEMBLY");
+		});
+		if (asmOnly.length > 0) {
+			parts = asmOnly;
+		}
+
+		return parts.length > 0 ? parts : null;
+	}
+
 	/**
 	 * Load assembly list via Viewer API (postMessage to Connect host). Avoids browser CORS on
 	 * `fetch(https://app*.connect.trimble.com/tc/api/...)` from a third-party extension origin.
@@ -777,7 +1016,7 @@ export async function fetchIfcAssembliesFromFile(
 		IfcAssemblyItem[] | null
 	> {
 		const viewer = api.viewer;
-		if (!viewer?.getModels || !viewer.getHierarchyChildren) return null;
+		if (!viewer?.getModels) return null;
 		let models: ViewerModelLike[];
 		try {
 			models = (await viewer.getModels()) as ViewerModelLike[];
@@ -790,31 +1029,13 @@ export async function fetchIfcAssembliesFromFile(
 		const primary = matched[0];
 		if (!primary?.id) return null;
 
-		try {
-			const entities = await viewer.getHierarchyChildren(
-				primary.id,
-				[],
-				HIERARCHY_TYPE_ELEMENT_ASSEMBLY,
-				true,
-			);
-			if (!entities?.length) return null;
-			const seen = new Set<string>();
-			const out: IfcAssemblyItem[] = [];
-			for (const e of entities) {
-				const key = String(e.id);
-				if (seen.has(key)) continue;
-				seen.add(key);
-				out.push({
-					id: key,
-					name: e.name?.trim() || `Assembly ${key}`,
-					type: "IFCELEMENTASSEMBLY",
-					material: "Unknown",
-				});
-			}
-			return out.length > 0 ? out : null;
-		} catch {
-			return null;
-		}
+		const fromHierarchy = await tryFetchViaHierarchyChildren(primary);
+		if (fromHierarchy?.length) return fromHierarchy;
+
+		const fromObjects = await tryFetchViaGetObjects(primary);
+		if (fromObjects?.length) return fromObjects;
+
+		return null;
 	}
 
 	async function collectViewerTreeIds(): Promise<string[]> {

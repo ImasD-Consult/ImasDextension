@@ -10,7 +10,10 @@ function getAppMode(): "project" | "3d" {
 	return m === "3d" ? "3d" : "project";
 }
 
-/** 3D viewer: bottom “properties” strip (lists-like horizontal band). `height` applies to `properties` placement. */
+/**
+ * Ask Connect to dock the iframe as the bottom “properties” strip (PlacementType.properties + height).
+ * Call before setMenu — some hosts only apply placement on first configure. Host may still force a side panel.
+ */
 async function tryConfigureViewerPanel(api: WorkspaceApi): Promise<void> {
 	const ext = api.extension as WorkspaceApi["extension"] & {
 		configure?: (c: Record<string, unknown>) => Promise<boolean>;
@@ -24,16 +27,25 @@ async function tryConfigureViewerPanel(api: WorkspaceApi): Promise<void> {
 				}
 			).__SMARTPRINT_PRO__?.EXTENSION_URL?.trim()) ||
 		`${window.location.origin}${window.location.pathname}`;
-	try {
-		await ext.configure({
+
+	const attempts: Record<string, unknown>[] = [
+		{ url, title: "smartprintPRO", type: "properties", height: "360px" },
+		{ url, title: "smartprintPRO", type: "properties", height: "42vh" },
+		{
 			url,
 			title: "smartprintPRO",
-			extensionType: ["3dviewer"],
 			type: "properties",
-			height: "42vh",
-		});
-	} catch {
-		/* optional — host may ignore */
+			height: "320px",
+			extensionType: ["3dviewer"],
+		},
+	];
+
+	for (const cfg of attempts) {
+		try {
+			await ext.configure(cfg);
+		} catch {
+			/* try next variant */
+		}
 	}
 }
 
@@ -73,18 +85,21 @@ export async function initApp(): Promise<void> {
 				return;
 			}
 			container.innerHTML = "";
-			await renderWbs(container, api, { useViewerModelOnly: true });
+			await renderWbs(container, api, {
+				useViewerModelOnly: true,
+				horizontalDockLayout: true,
+			});
 		});
 
 		if (mode === "3d") {
 			container.className =
 				"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
+			await tryConfigureViewerPanel(api);
 			await api.ui.setMenu({
 				title: "smartprintPRO",
 				icon: SMARTPRINT_LOGO,
 				command: "wbs",
 			});
-			await tryConfigureViewerPanel(api);
 			container.innerHTML = "";
 			await renderWbs(container, api, {
 				useViewerModelOnly: true,
