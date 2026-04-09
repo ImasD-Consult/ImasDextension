@@ -162,6 +162,14 @@ export interface IfcModelItem {
 	name: string;
 }
 
+export interface IfcAssemblyItem {
+	id: string;
+	name: string;
+	type: string;
+	material: string;
+	link?: string;
+}
+
 const IFC_EXTENSIONS = [".ifc", ".ifczip", ".ifcxml"];
 
 function isIfcFile(name: string): boolean {
@@ -231,6 +239,94 @@ export async function fetchProjectIfcModels(
 	}
 
 	return ifcFiles;
+}
+
+function readNodeString(
+	node: Record<string, unknown>,
+	keys: string[],
+): string | undefined {
+	for (const key of keys) {
+		const value = node[key];
+		if (typeof value === "string" && value.trim().length > 0) return value;
+	}
+	return undefined;
+}
+
+function readNodeChildren(node: Record<string, unknown>): unknown[] {
+	const candidates = [node.children, node.items, node.nodes, node.entities];
+	for (const candidate of candidates) {
+		if (Array.isArray(candidate)) return candidate;
+	}
+	return [];
+}
+
+function collectIfcAssembliesFromTree(
+	tree: unknown,
+	acc: IfcAssemblyItem[],
+	seen: Set<string>,
+): void {
+	if (!tree || typeof tree !== "object") return;
+	const node = tree as Record<string, unknown>;
+
+	const classOrType =
+		readNodeString(node, ["class", "type", "entityType", "ifcClass"]) ?? "";
+	if (classOrType.toLowerCase() === "ifcelementassembly") {
+		const id =
+			readNodeString(node, ["guid", "id", "runtimeId", "entityId"]) ??
+			`assembly-${acc.length + 1}`;
+		if (!seen.has(id)) {
+			seen.add(id);
+			acc.push({
+				id,
+				name: readNodeString(node, ["name", "label"]) ?? `Assembly ${id}`,
+				type: "IFCELEMENTASSEMBLY",
+				material: "Unknown",
+				link: readNodeString(node, ["frn", "link"]),
+			});
+		}
+	}
+
+	for (const child of readNodeChildren(node)) {
+		collectIfcAssembliesFromTree(child, acc, seen);
+	}
+}
+
+export async function fetchIfcAssembliesFromFile(
+	api: WorkspaceApi,
+	ifcFileId: string,
+): Promise<IfcAssemblyItem[]> {
+	const project = await api.project.getProject();
+	if (!project?.id) {
+		throw new Error("No project selected.");
+	}
+
+	const token = await api.extension.requestPermission("accesstoken");
+	if (token === "denied" || token === "pending") {
+		throw new Error(
+			`Access token ${token}. Please grant permission in extension settings.`,
+		);
+	}
+
+	const client = new TrimbleClient({
+		accessToken: token,
+		region: "eu",
+		useDevProxy: import.meta.env.DEV,
+	});
+
+	const tree = await client.getModelTree(ifcFileId, project.id);
+	if (!tree) return [];
+
+	const result: IfcAssemblyItem[] = [];
+	const seen = new Set<string>();
+	if (Array.isArray(tree)) {
+		for (const root of tree) {
+			collectIfcAssembliesFromTree(root, result, seen);
+		}
+	} else {
+		collectIfcAssembliesFromTree(tree, result, seen);
+	}
+
+	return result;
 }
 
 export async function fetchProcessAssemblies(

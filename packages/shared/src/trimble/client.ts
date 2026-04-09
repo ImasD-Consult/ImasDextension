@@ -17,6 +17,18 @@ export interface TrimbleFolderItem {
 	type?: string;
 }
 
+export interface TrimbleModelTreeNode {
+	id?: string | number;
+	guid?: string;
+	name?: string;
+	type?: string;
+	class?: string;
+	frn?: string;
+	link?: string;
+	children?: TrimbleModelTreeNode[];
+	[key: string]: unknown;
+}
+
 export class TrimbleApiError extends Error {
 	override readonly name = "TrimbleApiError";
 
@@ -126,5 +138,22 @@ export class TrimbleClient {
 		const items = await this.listFolderItems(rootId, projectId);
 		if (!items) return [];
 		return items.filter((item) => item.type?.toUpperCase() === "FOLDER");
+	}
+
+	async getModelTree(
+		fileId: string,
+		projectId?: string,
+	): Promise<TrimbleModelTreeNode | TrimbleModelTreeNode[] | null> {
+		const query = projectId
+			? `?projectId=${encodeURIComponent(projectId)}`
+			: "";
+		try {
+			return await this.get<TrimbleModelTreeNode | TrimbleModelTreeNode[]>(
+				"2.0",
+				`/model/${encodeURIComponent(fileId)}/tree${query}`,
+			);
+		} catch {
+			return null;
+		}
 	}
 }

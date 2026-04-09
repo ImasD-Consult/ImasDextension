@@ -10,6 +10,7 @@ export interface WbsPsetWriteItem {
 	modelId: string;
 	partId: string;
 	value: string;
+	link?: string;
 }
 
 function ensureTrailingSlash(uri: string): string {
@@ -52,7 +53,7 @@ export async function writeWbsPropertySetValues(
 	});
 
 	const changesetItems = items.map((item) => ({
-		link: buildEntityLink(project.id, item.modelId, item.partId),
+		link: item.link || buildEntityLink(project.id, item.modelId, item.partId),
 		libId,
 		defId,
 		props: { [propertyName]: item.value },

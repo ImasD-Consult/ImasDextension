@@ -1,7 +1,10 @@
 import { escapeHtml } from "@imasd/shared";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
 import { read, utils } from "xlsx";
-import { fetchProjectIfcModels } from "../services/folders";
+import {
+	fetchIfcAssembliesFromFile,
+	fetchProjectIfcModels,
+} from "../services/folders";
 import { writeWbsPropertySetValues } from "../services/pset";
 
 type WbsTableData = {
@@ -25,6 +28,7 @@ type IfcPart = {
 	material: string;
 	modelId?: string;
 	modelName?: string;
+	link?: string;
 };
 
 type WbsAssignment = {
@@ -147,123 +151,6 @@ function loadAssignmentsFromLocalStorage(): WbsAssignment[] {
 
 function saveAssignmentsToLocalStorage(assignments: WbsAssignment[]): void {
 	localStorage.setItem(WBS_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(assignments));
-}
-
-type ViewerProperty = { name?: string; value?: string | number };
-type ViewerPropertySet = { name?: string; properties?: ViewerProperty[] };
-type ViewerObjectProperties = {
-	id?: number | string;
-	class?: string;
-	product?: { name?: string };
-	properties?: ViewerPropertySet[];
-};
-
-function pickMaterial(properties: ViewerObjectProperties): string {
-	const sets = properties.properties ?? [];
-	for (const set of sets) {
-		for (const property of set.properties ?? []) {
-			const key = (property.name ?? "").toLowerCase();
-			if (key.includes("material")) {
-				return String(property.value ?? "Unknown");
-			}
-		}
-	}
-	return "Unknown";
-}
-
-function extractAssemblyRuntimeIds(raw: unknown): number[] {
-	const found = new Set<number>();
-
-	function walk(node: unknown): void {
-		if (!node || typeof node !== "object") return;
-		const obj = node as Record<string, unknown>;
-		const candidateIds = [
-			obj.id,
-			obj.entityId,
-			obj.runtimeId,
-			obj.objectRuntimeId,
-		];
-		for (const candidate of candidateIds) {
-			if (typeof candidate === "number" && Number.isFinite(candidate)) {
-				found.add(candidate);
-			}
-		}
-
-		const maybeChildren = [
-			obj.children,
-			obj.items,
-			obj.entities,
-			obj.nodes,
-		];
-		for (const children of maybeChildren) {
-			if (Array.isArray(children)) {
-				for (const child of children) walk(child);
-			}
-		}
-	}
-
-	if (Array.isArray(raw)) {
-		for (const item of raw) walk(item);
-	} else {
-		walk(raw);
-	}
-
-	return [...found];
-}
-
-async function fetchAssemblyPartsFromViewer(
-	api: WorkspaceApi,
-	modelId: string,
-	modelName: string,
-): Promise<IfcPart[]> {
-	const viewer = api.viewer as unknown as {
-		getHierarchyChildren?: (
-			model: string,
-			entityIds: number[],
-			hierarchyType?: string,
-			recursive?: boolean,
-		) => Promise<unknown>;
-		getObjectProperties?: (
-			model: string,
-			objectRuntimeIds: number[],
-		) => Promise<ViewerObjectProperties[]>;
-	};
-
-	if (!viewer?.getHierarchyChildren || !viewer?.getObjectProperties) {
-		throw new Error("Viewer API for assembly queries is not available.");
-	}
-
-	const hierarchy = await viewer.getHierarchyChildren(modelId, [0], "assembly", true);
-	const runtimeIds = extractAssemblyRuntimeIds(hierarchy);
-	if (!runtimeIds.length) return [];
-
-	const chunkSize = 200;
-	const propertiesRows: ViewerObjectProperties[] = [];
-	for (let index = 0; index < runtimeIds.length; index += chunkSize) {
-		const slice = runtimeIds.slice(index, index + chunkSize);
-		const rows = await viewer.getObjectProperties(modelId, slice);
-		if (Array.isArray(rows)) propertiesRows.push(...rows);
-	}
-
-	const unique = new Map<string, IfcPart>();
-	for (const row of propertiesRows) {
-		const rowId = row.id;
-		const partId = typeof rowId === "number" ? String(rowId) : String(rowId ?? "");
-		if (!partId) continue;
-		if (unique.has(partId)) continue;
-		const partType = (row.class || "ASSEMBLY").toUpperCase();
-		const partName = row.product?.name || `${modelName} - Assembly ${partId}`;
-		unique.set(partId, {
-			id: partId,
-			name: partName,
-			type: partType,
-			material: pickMaterial(row),
-			modelId,
-			modelName,
-		});
-	}
-
-	return [...unique.values()];
 }
 
 function renderTable(
@@ -721,11 +608,19 @@ export async function renderWbs(
 			partsListEl.innerHTML =
 				'<p class="text-sm text-gray-400 italic animate-pulse">Loading assemblies from IFC...</p>';
 			try {
-				const assemblyParts = await fetchAssemblyPartsFromViewer(
+				const assemblyPartsRaw = await fetchIfcAssembliesFromFile(
 					api,
 					selectedModelId,
-					selectedModel?.name ?? "IFC",
 				);
+				const assemblyParts = assemblyPartsRaw.map((item) => ({
+					id: item.id,
+					name: item.name,
+					type: item.type,
+					material: item.material,
+					modelId: selectedModelId,
+					modelName: selectedModel?.name ?? "IFC",
+					link: item.link,
+				}));
 				partsByModelId.set(selectedModelId, assemblyParts);
 			} catch (error) {
 				partsByModelId.set(selectedModelId, []);
@@ -839,6 +734,7 @@ export async function renderWbs(
 				modelId: part.modelId ?? modelFilterEl.value,
 				partId: part.id,
 				value: propertySetValue,
+				link: part.link,
 			};
 		});
 
