@@ -24,21 +24,28 @@ function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
 		},
 	);
 
-	if (!matrix.length) {
+	// Business rule for WBS template:
+	// - Row 3 (index 2) is the header
+	// - Row 4+ (index 3+) is data
+	// - Only columns A-E (index 0..4) are relevant
+	const HEADER_ROW_INDEX = 2;
+	const DATA_START_INDEX = 3;
+	const MAX_COLUMNS = 5;
+
+	if (matrix.length <= HEADER_ROW_INDEX) {
 		return { headers: [], rows: [] };
 	}
 
-	const maxColumns = matrix.reduce((max, row) => Math.max(max, row.length), 0);
-	const rawHeaders = matrix[0] ?? [];
-	const headers = Array.from({ length: maxColumns }, (_, index) => {
+	const rawHeaders = matrix[HEADER_ROW_INDEX] ?? [];
+	const headers = Array.from({ length: MAX_COLUMNS }, (_, index) => {
 		const value = String(rawHeaders[index] ?? "").trim();
 		return value || `Column ${index + 1}`;
 	});
 
 	const rows = matrix
-		.slice(1)
+		.slice(DATA_START_INDEX)
 		.map((row) =>
-			Array.from({ length: maxColumns }, (_, index) => String(row[index] ?? "")),
+			Array.from({ length: MAX_COLUMNS }, (_, index) => String(row[index] ?? "")),
 		)
 		.filter((row) => row.some((cell) => cell.trim().length > 0));
 
