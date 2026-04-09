@@ -23,7 +23,7 @@ async function handleCommand(
 			await api.ui.setActiveMenuItem("info");
 			break;
 		case "wbs":
-			renderWbs(container);
+			renderWbs(container, api);
 			await api.ui.setActiveMenuItem("wbs");
 			break;
 	}
