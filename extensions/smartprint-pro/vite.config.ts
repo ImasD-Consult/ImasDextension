@@ -57,6 +57,39 @@ function manifestBody(
 	);
 }
 
+/**
+ * 3D viewer: optional `extensionPoints` so Trimble Connect Integrations / portal can dock the
+ * iframe in the bottom “data tab” (Table of Elements area) — `trimble.connect.ui.viewer.data-tab`.
+ * Host may still fall back to a side panel if the point is not enabled for your tenant.
+ */
+function manifestBody3d(
+	description: string,
+	icon: string,
+	appUrl: string,
+) {
+	return JSON.stringify(
+		{
+			title: "smartprintPRO",
+			description,
+			configCommand: "do_config",
+			enabled: true,
+			extensionType: ["3dviewer"],
+			icon,
+			url: appUrl,
+			extensionPoints: [
+				{
+					id: "smartprintpro-wbs-data-tab",
+					point: "trimble.connect.ui.viewer.data-tab",
+					title: "smartprintPRO WBS",
+					url: appUrl,
+				},
+			],
+		},
+		null,
+		2,
+	);
+}
+
 function trimbleManifestPlugin(): Plugin {
 	return {
 		name: "trimble-manifest",
@@ -98,9 +131,8 @@ function trimbleManifestPlugin(): Plugin {
 				send(
 					req,
 					res,
-					manifestBody(
-						["3dviewer"],
-						"smartprintPRO — 3D Viewer → WBS (Excel, IFC assemblies, Psets).",
+					manifestBody3d(
+						"smartprintPRO — 3D Viewer → WBS (Excel, IFC assemblies, Psets). Data-tab extensionPoint when supported.",
 						"logo.svg",
 						appEntryUrl(".", "3d"),
 					),
@@ -128,9 +160,8 @@ function trimbleManifestPlugin(): Plugin {
 			this.emitFile({
 				type: "asset",
 				fileName: "manifest-3d.json",
-				source: manifestBody(
-					["3dviewer"],
-					"smartprintPRO — 3D Viewer → WBS (Excel, IFC assemblies, Psets).",
+				source: manifestBody3d(
+					"smartprintPRO — 3D Viewer → WBS (Excel, IFC assemblies, Psets). Data-tab extensionPoint when supported.",
 					icon,
 					appEntryUrl(base, "3d"),
 				),

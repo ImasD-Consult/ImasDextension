@@ -35,12 +35,20 @@ EOF
 	cat > /app/manifest-3d.json <<EOF
 {
   "title": "smartprintPRO",
-  "description": "smartprintPRO — register under 3D Viewer → Settings → Extensions only.",
+  "description": "smartprintPRO — 3D Viewer WBS; bottom data-tab when Integrations portal supports extensionPoints.",
   "configCommand": "do_config",
   "enabled": true,
   "extensionType": ["3dviewer"],
   "icon": "${BASE}/logo.svg",
-  "url": "${BASE}/?mode=3d"
+  "url": "${BASE}/?mode=3d",
+  "extensionPoints": [
+    {
+      "id": "smartprintpro-wbs-data-tab",
+      "point": "trimble.connect.ui.viewer.data-tab",
+      "title": "smartprintPRO WBS",
+      "url": "${BASE}/?mode=3d"
+    }
+  ]
 }
 EOF
 fi

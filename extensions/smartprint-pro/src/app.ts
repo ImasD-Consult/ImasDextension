@@ -11,8 +11,9 @@ function getAppMode(): "project" | "3d" {
 }
 
 /**
- * Ask Connect to dock the iframe as the bottom “properties” strip (PlacementType.properties + height).
- * Call before setMenu — some hosts only apply placement on first configure. Host may still force a side panel.
+ * Runtime fallback: `extension.configure({ type: "properties", height })` for a bottom strip.
+ * Prefer registering the 3D manifest with `extensionPoints[].point: "trimble.connect.ui.viewer.data-tab"`
+ * (see `manifest-3d.json`) in Trimble Connect Integrations — that targets the same area as the Table of Elements.
  */
 async function tryConfigureViewerPanel(api: WorkspaceApi): Promise<void> {
 	const ext = api.extension as WorkspaceApi["extension"] & {
