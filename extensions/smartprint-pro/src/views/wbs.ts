@@ -64,10 +64,10 @@ function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
 	// Business rule for WBS template:
 	// - Row 3 (index 2) is the header
 	// - Row 4+ (index 3+) is data
-	// - Only columns A-E (index 0..4) are relevant
+	// - Only columns A-D (index 0..3) are relevant
 	const HEADER_ROW_INDEX = 2;
 	const DATA_START_INDEX = 3;
-	const MAX_COLUMNS = 5;
+	const MAX_COLUMNS = 4;
 
 	if (matrix.length <= HEADER_ROW_INDEX) {
 		return { headers: [], rows: [] };
@@ -357,7 +357,7 @@ export async function renderWbs(
       <p class="text-sm text-gray-600" data-wbs-status>No file uploaded yet. Expected file type: Excel template (.xlsx).</p>
 
       <div class="grid grid-cols-12 gap-4">
-        <div class="col-span-12 lg:col-span-3 rounded-lg border border-gray-200 p-3 space-y-2">
+        <div class="col-span-12 lg:col-span-4 rounded-lg border border-gray-200 p-3 space-y-2">
           <h3 class="text-sm font-semibold text-gray-700">IFC Parts (MVP)</h3>
 
           <div>
@@ -398,7 +398,7 @@ export async function renderWbs(
           <p class="text-xs text-gray-500">Assignments are stored in local Pset_IMASD_WBS mapping for now.</p>
         </div>
 
-        <div class="col-span-12 lg:col-span-9" data-wbs-table>
+        <div class="col-span-12 lg:col-span-8" data-wbs-table>
           <p class="text-sm text-gray-400 italic">Upload a WBS file to preview and select a row.</p>
         </div>
       </div>
