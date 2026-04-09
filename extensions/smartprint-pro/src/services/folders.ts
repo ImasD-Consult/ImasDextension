@@ -1,4 +1,4 @@
-import { TrimbleClient } from "@imasd/shared/trimble";
+import { TrimbleClient, TRIMBLE_REGIONS } from "@imasd/shared/trimble";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
 
 export interface FolderItem {
@@ -323,12 +323,16 @@ export async function fetchIfcAssembliesFromFile(
 		fileOrVersionId: string,
 	): Promise<unknown | null> {
 		const encoded = encodeURIComponent(fileOrVersionId);
-		const candidateUrls = [
+		const relativeUrls = [
 			`/tc/api/2.0/model/${encoded}/tree?projectId=${encodeURIComponent(project.id)}&depth=-1`,
 			`/tc/api/2.0/model/${encoded}/tree?depth=-1`,
 			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/models/${encoded}/hierarchies?depth=-1`,
 			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/model/${encoded}/tree?depth=-1`,
 		];
+		const absoluteUrls = Object.values(TRIMBLE_REGIONS).flatMap((region) =>
+			relativeUrls.map((path) => `${region.host}${path}`),
+		);
+		const candidateUrls = [...relativeUrls, ...absoluteUrls];
 		for (const url of candidateUrls) {
 			try {
 				const response = await fetch(url, {
@@ -349,11 +353,15 @@ export async function fetchIfcAssembliesFromFile(
 
 	async function getFileInfoById(fileOrVersionId: string): Promise<unknown | null> {
 		const encoded = encodeURIComponent(fileOrVersionId);
-		const candidateUrls = [
+		const relativeUrls = [
 			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/files/${encoded}`,
 			`/tc/api/2.0/files/${encoded}?projectId=${encodeURIComponent(project.id)}`,
 			`/tc/api/2.0/files/${encoded}`,
 		];
+		const absoluteUrls = Object.values(TRIMBLE_REGIONS).flatMap((region) =>
+			relativeUrls.map((path) => `${region.host}${path}`),
+		);
+		const candidateUrls = [...relativeUrls, ...absoluteUrls];
 		for (const url of candidateUrls) {
 			try {
 				const response = await fetch(url, {

@@ -14,6 +14,11 @@ async function handleCommand(
 ): Promise<void> {
 	switch (command as Command) {
 		case "smartprint_main":
+			container.innerHTML = `
+        <h2 class="text-lg font-semibold">smartprintPRO</h2>
+        <p class="mt-1 text-sm text-gray-500">Choose a submenu: WBS, Processes, or Info.</p>
+      `;
+			break;
 		case "processes":
 			await renderProcesses(container, api);
 			await api.ui.setActiveMenuItem("processes");
@@ -52,7 +57,7 @@ export async function initApp(): Promise<void> {
 			],
 		});
 
-		const route = window.location.hash.replace(/^#/, "") || "processes";
+		const route = window.location.hash.replace(/^#/, "") || "smartprint_main";
 		await handleCommand(route, container, api);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : "Failed to connect";
