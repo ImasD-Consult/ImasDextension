@@ -156,11 +156,81 @@ export interface AssemblyItem {
 	name: string;
 }
 
+export interface IfcModelItem {
+	id: string;
+	versionId?: string;
+	name: string;
+}
+
 const IFC_EXTENSIONS = [".ifc", ".ifczip", ".ifcxml"];
 
 function isIfcFile(name: string): boolean {
 	const lower = name?.toLowerCase() ?? "";
 	return IFC_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
+export async function fetchProjectIfcModels(
+	api: WorkspaceApi,
+): Promise<IfcModelItem[]> {
+	const project = await api.project.getProject();
+	if (!project?.id) {
+		throw new Error("No project selected.");
+	}
+
+	const token = await api.extension.requestPermission("accesstoken");
+	if (token === "denied" || token === "pending") {
+		throw new Error(
+			`Access token ${token}. Please grant permission in extension settings.`,
+		);
+	}
+
+	const client = new TrimbleClient({
+		accessToken: token,
+		region: "eu",
+		useDevProxy: import.meta.env.DEV,
+	});
+
+	const rootId = await client.getProjectRootId(project.id);
+	const queue: string[] = [rootId];
+	const visited = new Set<string>();
+	const ifcFiles: IfcModelItem[] = [];
+	const seenIfcIds = new Set<string>();
+
+	// Safety cap to avoid unbounded scans on very large projects.
+	const MAX_FOLDERS_TO_SCAN = 5000;
+	let scannedFolders = 0;
+
+	while (queue.length > 0 && scannedFolders < MAX_FOLDERS_TO_SCAN) {
+		const folderId = queue.shift();
+		if (!folderId || visited.has(folderId)) continue;
+		visited.add(folderId);
+		scannedFolders += 1;
+
+		const items = await client.listFolderItems(folderId, project.id);
+		if (!items?.length) continue;
+
+		for (const item of items) {
+			const itemId = item.id || item.versionId || "";
+			const isFolder = item.type?.toUpperCase() === "FOLDER";
+
+			if (isFolder && itemId) {
+				queue.push(itemId);
+				continue;
+			}
+
+			if (!isIfcFile(item.name ?? "")) continue;
+			if (!itemId || seenIfcIds.has(itemId)) continue;
+
+			seenIfcIds.add(itemId);
+			ifcFiles.push({
+				id: item.id || item.versionId || "",
+				versionId: item.versionId,
+				name: item.name ?? "Unknown IFC",
+			});
+		}
+	}
+
+	return ifcFiles;
 }
 
 export async function fetchProcessAssemblies(

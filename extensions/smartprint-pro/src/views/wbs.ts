@@ -1,6 +1,7 @@
 import { escapeHtml } from "@imasd/shared";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
 import { read, utils } from "xlsx";
+import { fetchProjectIfcModels } from "../services/folders";
 
 type WbsTableData = {
 	headers: string[];
@@ -34,6 +35,11 @@ type WbsAssignment = {
 	wbsValues: string[];
 	propertySetName: "Pset_IMASD_WBS";
 	assignedAt: string;
+};
+
+type IfcModelOption = {
+	id: string;
+	name: string;
 };
 
 function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
@@ -310,6 +316,13 @@ export async function renderWbs(
           <h3 class="text-sm font-semibold text-gray-700">IFC Parts (MVP)</h3>
 
           <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600">Filter IFC models</label>
+            <input
+              type="text"
+              class="mb-2 w-full rounded border border-gray-300 px-2 py-1 text-sm"
+              data-model-search
+              placeholder="Type to filter by name..."
+            />
             <label class="mb-1 block text-xs font-medium text-gray-600">IFC Model</label>
             <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-model-filter>
               <option value="">Select IFC model</option>
@@ -363,6 +376,7 @@ export async function renderWbs(
 		"[data-material-filter]",
 	);
 	const modelFilter = container.querySelector<HTMLSelectElement>("[data-model-filter]");
+	const modelSearch = container.querySelector<HTMLInputElement>("[data-model-search]");
 	const partsList = container.querySelector<HTMLElement>("[data-parts-list]");
 	const assignButton = container.querySelector<HTMLButtonElement>("[data-assign]");
 	const assignmentsList = container.querySelector<HTMLElement>(
@@ -377,6 +391,7 @@ export async function renderWbs(
 		!typeFilter ||
 		!materialFilter ||
 		!modelFilter ||
+		!modelSearch ||
 		!partsList ||
 		!assignButton ||
 		!assignmentsList
@@ -388,12 +403,14 @@ export async function renderWbs(
 	const typeFilterEl = typeFilter;
 	const materialFilterEl = materialFilter;
 	const modelFilterEl = modelFilter;
+	const modelSearchEl = modelSearch;
 	const partsListEl = partsList;
 	const assignButtonEl = assignButton;
 	const assignmentsListEl = assignmentsList;
 
 	let tableData: WbsTableData = { headers: [], rows: [] };
 	let selectedWbsRowIndex: number | null = null;
+	let allIfcModels: IfcModelOption[] = [];
 	let allParts: IfcPart[] = [];
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
@@ -445,28 +462,50 @@ export async function renderWbs(
 		refreshAssignButton();
 	}
 
-	try {
-		const models = (await api.viewer?.getModels?.()) ?? [];
-		const ifcModels = models.filter((model) =>
-			(model.name || "").trim().toLowerCase().endsWith(".ifc"),
+	function refreshModelOptions(): void {
+		const search = modelSearchEl.value.trim().toLowerCase();
+		const filteredModels = allIfcModels.filter((model) =>
+			model.name.toLowerCase().includes(search),
 		);
-		if (ifcModels.length > 0) {
-			modelFilterEl.innerHTML =
-				'<option value="">Select IFC model</option>' +
-				ifcModels
-					.map((model, index) => {
-						const modelId = model.versionId || model.id || `model-${index + 1}`;
-						const modelName = model.name || `Model ${index + 1}`;
-						return `<option value="${escapeHtml(modelId)}">${escapeHtml(modelName)}</option>`;
-					})
-					.join("");
 
-			// Current SDK does not expose per-object IFC querying in typings.
-			// Seed parts from fallback but scope by selected model.
+		const currentSelection = modelFilterEl.value;
+		modelFilterEl.innerHTML =
+			'<option value="">Select IFC model</option>' +
+			filteredModels
+				.map(
+					(model) =>
+						`<option value="${escapeHtml(model.id)}">${escapeHtml(model.name)}</option>`,
+				)
+				.join("");
+
+		if (filteredModels.some((model) => model.id === currentSelection)) {
+			modelFilterEl.value = currentSelection;
+			return;
+		}
+
+		modelFilterEl.value = "";
+		selectedPartIds.clear();
+		parts = [];
+		refreshPartFilters();
+		refreshPartsList();
+	}
+
+	try {
+		const ifcModels = await fetchProjectIfcModels(api);
+		allIfcModels = ifcModels.map((model, index) => ({
+			id: model.versionId || model.id || `ifc-${index + 1}`,
+			name: model.name || `IFC ${index + 1}`,
+		}));
+
+		if (allIfcModels.length > 0) {
+			refreshModelOptions();
+
+			// Current SDK does not expose per-object IFC querying in typings yet.
+			// Seed parts for UI flow and scope by selected IFC model.
 			const seeded = getViewerPartsFallback();
-			allParts = ifcModels.flatMap((model, index) => {
-				const modelId = model.versionId || model.id || `model-${index + 1}`;
-				const modelName = model.name || `Model ${index + 1}`;
+			allParts = allIfcModels.flatMap((model) => {
+				const modelId = model.id;
+				const modelName = model.name;
 				return seeded.map((part, seedIndex) => ({
 					...part,
 					id: `${modelId}-${seedIndex + 1}`,
@@ -475,28 +514,17 @@ export async function renderWbs(
 					modelName,
 				}));
 			});
-		} else if (models.length > 0) {
-			modelFilterEl.innerHTML =
-				'<option value="">No IFC files found in current viewer</option>';
-			allParts = [];
 		} else {
-			const fallbackModels = ["fallback-model-1", "fallback-model-2"];
 			modelFilterEl.innerHTML =
-				'<option value="">Select IFC model</option>' +
-				fallbackModels
-					.map((id, index) => `<option value="${id}">Sample IFC ${index + 1}</option>`)
-					.join("");
-			allParts = getViewerPartsFallback();
+				'<option value="">No IFC files found in project folders</option>';
+			allParts = [];
 		}
+
 		refreshPartsList();
 	} catch {
-		const fallbackModels = ["fallback-model-1", "fallback-model-2"];
 		modelFilterEl.innerHTML =
-			'<option value="">Select IFC model</option>' +
-			fallbackModels
-				.map((id, index) => `<option value="${id}">Sample IFC ${index + 1}</option>`)
-				.join("");
-		allParts = getViewerPartsFallback();
+			'<option value="">Failed to load IFC files from project</option>';
+		allParts = [];
 		refreshPartsList();
 	}
 
@@ -513,6 +541,8 @@ export async function renderWbs(
 			localStorage.removeItem(WBS_STORAGE_KEY);
 		}
 	}
+
+	modelSearchEl.addEventListener("input", refreshModelOptions);
 
 	modelFilterEl.addEventListener("change", () => {
 		selectedPartIds.clear();
