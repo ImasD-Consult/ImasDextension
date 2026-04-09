@@ -322,41 +322,53 @@ export async function fetchIfcAssembliesFromFile(
 	async function getModelTreeById(
 		fileOrVersionId: string,
 	): Promise<unknown | null> {
-		const params = new URLSearchParams({
-			projectId: project.id,
-			depth: "-1",
-		});
-		const url = `/tc/api/2.0/model/${encodeURIComponent(fileOrVersionId)}/tree?${params}`;
-		try {
-			const response = await fetch(url, {
-				headers: {
-					Authorization: `Bearer ${token}`,
-					Accept: "application/json",
-					"Content-Type": "application/json",
-				},
-			});
-			if (!response.ok) return null;
-			return response.json();
-		} catch {
-			return null;
+		const encoded = encodeURIComponent(fileOrVersionId);
+		const candidateUrls = [
+			`/tc/api/2.0/model/${encoded}/tree?projectId=${encodeURIComponent(project.id)}&depth=-1`,
+			`/tc/api/2.0/model/${encoded}/tree?depth=-1`,
+			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/models/${encoded}/hierarchies?depth=-1`,
+			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/model/${encoded}/tree?depth=-1`,
+		];
+		for (const url of candidateUrls) {
+			try {
+				const response = await fetch(url, {
+					headers: {
+						Authorization: `Bearer ${token}`,
+						Accept: "application/json",
+						"Content-Type": "application/json",
+					},
+				});
+				if (!response.ok) continue;
+				return response.json();
+			} catch {
+				// Try next candidate
+			}
 		}
+		return null;
 	}
 
 	async function getFileInfoById(fileOrVersionId: string): Promise<unknown | null> {
-		const params = new URLSearchParams({ projectId: project.id });
-		const url = `/tc/api/2.0/files/${encodeURIComponent(fileOrVersionId)}?${params}`;
-		try {
-			const response = await fetch(url, {
-				headers: {
-					Authorization: `Bearer ${token}`,
-					Accept: "application/json",
-				},
-			});
-			if (!response.ok) return null;
-			return response.json();
-		} catch {
-			return null;
+		const encoded = encodeURIComponent(fileOrVersionId);
+		const candidateUrls = [
+			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/files/${encoded}`,
+			`/tc/api/2.0/files/${encoded}?projectId=${encodeURIComponent(project.id)}`,
+			`/tc/api/2.0/files/${encoded}`,
+		];
+		for (const url of candidateUrls) {
+			try {
+				const response = await fetch(url, {
+					headers: {
+						Authorization: `Bearer ${token}`,
+						Accept: "application/json",
+					},
+				});
+				if (!response.ok) continue;
+				return response.json();
+			} catch {
+				// Try next candidate
+			}
 		}
+		return null;
 	}
 
 	function analyzeTree(treeValue: unknown): {
@@ -408,14 +420,20 @@ export async function fetchIfcAssembliesFromFile(
 		return { nodeCount, classSamples };
 	}
 
-	let tree = await getModelTreeById(ifcFileId);
-	if (!tree && ifcVersionId) {
-		tree = await getModelTreeById(ifcVersionId);
+	const idCandidates = [ifcVersionId, ifcFileId].filter(
+		(value): value is string => typeof value === "string" && value.length > 0,
+	);
+	let tree: unknown | null = null;
+	for (const idCandidate of idCandidates) {
+		tree = await getModelTreeById(idCandidate);
+		if (tree) break;
 	}
 	if (!tree) {
-		const fileInfo =
-			(await getFileInfoById(ifcFileId)) ||
-			(ifcVersionId ? await getFileInfoById(ifcVersionId) : null);
+		let fileInfo: unknown | null = null;
+		for (const idCandidate of idCandidates) {
+			fileInfo = await getFileInfoById(idCandidate);
+			if (fileInfo) break;
+		}
 		const fileObj =
 			fileInfo && typeof fileInfo === "object"
 				? (fileInfo as Record<string, unknown>)
