@@ -178,9 +178,15 @@ function isIfcFile(name: string): boolean {
 }
 
 /**
- * When the extension runs on a custom host (e.g. extensions.imasd.dev), relative `/tc/api/...`
- * requests do not reach Trimble Connect. Prefer VITE_TRIMBLE_CONNECT_ORIGIN, then the Connect
- * iframe parent from ancestorOrigins, then known regional hosts.
+ * Base URLs for `/tc/api/...` (model tree, files, etc.).
+ *
+ * When the extension runs on a custom host (e.g. extensions.imasd.dev), relative `/tc/api` does
+ * not hit Trimble. Order of preference:
+ * 1. `VITE_TRIMBLE_CONNECT_ORIGIN` (build-time; must match the Connect shard where the project lives)
+ * 2. `window.location.ancestorOrigins` / `document.referrer` when the parent is `*.connect.trimble.com`
+ * 3. Known regional hosts (NA / EU / Asia) — last resort; wrong shard ⇒ missing file or empty tree
+ *
+ * In Folders-only mode there is no 3D viewer context; explicit origin + correct region matters more.
  */
 function getConnectTrimbleBaseUrls(): string[] {
 	const bases = new Set<string>();
@@ -834,14 +840,14 @@ export async function fetchIfcAssembliesFromFile(
 		if (!tree) {
 			const finalState = getFileProcessingStateShallow(fileObj);
 			const originHint =
-				"If the model opens in 3D but this fails, set VITE_TRIMBLE_CONNECT_ORIGIN to your Trimble Connect origin (e.g. https://app21.connect.trimble.com) and rebuild the extension.";
+				"Set VITE_TRIMBLE_CONNECT_ORIGIN to the same origin as your Connect tab (NA: https://app.connect.trimble.com, EU: https://app21.connect.trimble.com, Asia: https://app31.connect.trimble.com), rebuild, and redeploy. Wrong region or cross-origin blocks look like this. In Folders mode, open the IFC in the 3D viewer once so the viewer model id is available, then Retry.";
 			if (shouldPollForModelTree(finalState)) {
 				throw new Error(
 					`Model tree still unavailable after waiting (~90s). Data API processing state (file/version only): ${finalState}. Open the IFC in the Trimble 3D viewer so the extension can use the viewer model id, then Retry. ${originHint}`,
 				);
 			}
 			throw new Error(
-				`Model tree unavailable for selected IFC (no usable tree from API). Data API processing state: ${finalState}. Open the IFC in the 3D viewer and Retry, or set VITE_TRIMBLE_CONNECT_ORIGIN. ${originHint}`,
+				`Model tree unavailable for selected IFC (no usable tree from API). Data API processing state: ${finalState}. ${originHint}`,
 			);
 		}
 	}
