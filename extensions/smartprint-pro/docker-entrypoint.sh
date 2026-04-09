@@ -27,6 +27,7 @@ if [ -n "$BASE" ]; then
   "description": "ImasD / smartprintPRO integration for Trimble Connect",
   "configCommand": "do_config",
   "enabled": true,
+  "extensionType": ["project", "3dviewer"],
   "icon": "${BASE}/logo.svg",
   "url": "${BASE}"
 }

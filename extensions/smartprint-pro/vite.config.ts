@@ -28,11 +28,13 @@ function buildProxyConfig() {
 	return proxy;
 }
 
+/** Register for both Data/Project and 3D Viewer so `api.viewer` + hierarchy APIs are available in viewer context. */
 const MANIFEST_BASE = {
 	title: "smartprintPRO",
 	description: "ImasD / smartprintPRO integration for Trimble Connect",
 	configCommand: "do_config",
 	enabled: true,
+	extensionType: ["project", "3dviewer"] as const,
 };
 
 function trimbleManifestPlugin(): Plugin {

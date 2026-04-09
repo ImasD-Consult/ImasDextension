@@ -17,6 +17,13 @@ export function renderInfo(container: HTMLElement): void {
       </section>
 
       <section>
+        <h3 class="text-sm font-semibold text-gray-700">WBS &amp; IFC assemblies</h3>
+        <p class="mt-1 text-sm text-gray-600">
+          Add this extension under <strong class="text-gray-800">3D Viewer → Settings → Extensions</strong> (manifest includes 3D viewer mode), then open your IFC in the 3D viewer before loading assemblies. Project‑only installs have limited viewer API access.
+        </p>
+      </section>
+
+      <section>
         <h3 class="text-sm font-semibold text-gray-700">Web Links</h3>
         <p class="mt-1 text-sm text-gray-600">
           <a href="https://imasdconsult.com" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">https://imasdconsult.com</a>

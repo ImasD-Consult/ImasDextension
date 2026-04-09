@@ -35,6 +35,8 @@ declare module "trimble-connect-workspace-api" {
 		};
 		extension: {
 			requestPermission(permission: string): Promise<string>;
+			/** Host context: "project" (Data) vs "3dviewer" — see manifest `extensionType`. */
+			getHost?(): Promise<{ name: "project" | "3dviewer" | string }>;
 		};
 		ui: {
 			setMenu(config: MenuConfig): Promise<void>;
