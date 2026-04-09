@@ -898,31 +898,45 @@ export async function renderWbs(
 					name?: string;
 					state?: string;
 				};
+
+				const gv = api.viewer.getModels.bind(api.viewer) as (
+					state?: "loaded" | "unloaded",
+				) => Promise<ViewerRow[]>;
+
+				async function fetchAllModelsRaw(): Promise<ViewerRow[]> {
+					try {
+						const all = (await gv()) as ViewerRow[];
+						return Array.isArray(all) ? all : [];
+					} catch {
+						return [];
+					}
+				}
+
+				/**
+				 * Many Connect builds return [] for `getModels("loaded")` or omit `state` on `getModels()`.
+				 * Fall back to the full list (same idea as the old IFC dropdown — first model usually matches the open file).
+				 */
 				let list: ViewerRow[] = [];
 				try {
-					list = (await api.viewer.getModels("loaded")) as ViewerRow[];
+					const loadedOnly = (await gv("loaded")) as ViewerRow[];
+					if (Array.isArray(loadedOnly) && loadedOnly.length > 0) {
+						list = loadedOnly;
+					}
 				} catch {
-					list = [];
+					/* host may not support the "loaded" argument */
 				}
-				if (!list.length) {
-					try {
-						const all = (await api.viewer.getModels()) as ViewerRow[];
-						list = (all ?? []).filter(
-							(m) => (m.state ?? "").toLowerCase() === "loaded",
-						);
-					} catch {
-						list = [];
-					}
-				}
-				if (!list.length) {
-					try {
-						const all = (await api.viewer.getModels()) as ViewerRow[];
-						if (all?.length === 1) {
-							list = all;
-						}
-					} catch {
-						list = [];
-					}
+
+				if (list.length === 0) {
+					const all = await fetchAllModelsRaw();
+					const withStateLoaded = all.filter(
+						(m) => (m.state ?? "").toLowerCase() === "loaded",
+					);
+					list =
+						withStateLoaded.length > 0
+							? withStateLoaded
+							: all.length > 0
+								? all
+								: [];
 				}
 
 				if (list.length === 0) {
@@ -944,7 +958,11 @@ export async function renderWbs(
 					};
 					allIfcModels = [chosen];
 					setViewerModelUi(chosen);
-					setStatus(`Using open IFC: ${chosen.name}.`);
+					const multiHint =
+						list.length > 1
+							? ` (first of ${list.length} models reported by the viewer)`
+							: "";
+					setStatus(`Using IFC: ${chosen.name}${multiHint}.`);
 					await loadAssembliesForSelectedModel(false);
 				}
 			}
