@@ -324,35 +324,56 @@ export async function fetchIfcAssembliesFromFile(
 		);
 	}
 
+	async function fetchJsonWithTimeout(
+		url: string,
+		timeoutMs = 4500,
+	): Promise<unknown | null> {
+		const controller = new AbortController();
+		const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+		try {
+			const response = await fetch(url, {
+				headers: {
+					Authorization: `Bearer ${token}`,
+					Accept: "application/json",
+					"Content-Type": "application/json",
+				},
+				signal: controller.signal,
+			});
+			if (!response.ok) return null;
+			return response.json();
+		} catch {
+			return null;
+		} finally {
+			window.clearTimeout(timeoutId);
+		}
+	}
+
 	async function getModelTreeById(
 		fileOrVersionId: string,
 	): Promise<unknown | null> {
 		const encoded = encodeURIComponent(fileOrVersionId);
-		const relativeUrls = [
+		const relativeUrlsPrimary = [
 			`/tc/api/2.0/model/${encoded}/tree?projectId=${encodeURIComponent(project.id)}&depth=-1`,
 			`/tc/api/2.0/model/${encoded}/tree?depth=-1`,
 			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/models/${encoded}/hierarchies?depth=-1`,
 			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/model/${encoded}/tree?depth=-1`,
 		];
-		const absoluteUrls = Object.values(TRIMBLE_REGIONS).flatMap((region) =>
-			relativeUrls.map((path) => `${region.host}${path}`),
+		// Fast path: query same-origin API variants in parallel and return first success.
+		const primaryResults = await Promise.all(
+			relativeUrlsPrimary.map((url) => fetchJsonWithTimeout(url, 3500)),
 		);
-		const candidateUrls = [...relativeUrls, ...absoluteUrls];
-		for (const url of candidateUrls) {
-			try {
-				const response = await fetch(url, {
-					headers: {
-						Authorization: `Bearer ${token}`,
-						Accept: "application/json",
-						"Content-Type": "application/json",
-					},
-				});
-				if (!response.ok) continue;
-				return response.json();
-			} catch {
-				// Try next candidate
-			}
-		}
+		const primaryMatch = primaryResults.find((item) => item !== null);
+		if (primaryMatch) return primaryMatch;
+
+		// Slow fallback: only if fast path failed, try absolute regional hosts in parallel.
+		const absoluteUrls = Object.values(TRIMBLE_REGIONS).flatMap((region) =>
+			relativeUrlsPrimary.map((path) => `${region.host}${path}`),
+		);
+		const absoluteResults = await Promise.all(
+			absoluteUrls.map((url) => fetchJsonWithTimeout(url, 5000)),
+		);
+		const absoluteMatch = absoluteResults.find((item) => item !== null);
+		if (absoluteMatch) return absoluteMatch;
 		return null;
 	}
 
@@ -363,24 +384,21 @@ export async function fetchIfcAssembliesFromFile(
 			`/tc/api/2.0/files/${encoded}?projectId=${encodeURIComponent(project.id)}`,
 			`/tc/api/2.0/files/${encoded}`,
 		];
+		const relativeResults = await Promise.all(
+			relativeUrls.map((url) => fetchJsonWithTimeout(url, 2500)),
+		);
+		const relativeMatch = relativeResults.find((item) => item !== null);
+		if (relativeMatch) return relativeMatch;
+
 		const absoluteUrls = Object.values(TRIMBLE_REGIONS).flatMap((region) =>
 			relativeUrls.map((path) => `${region.host}${path}`),
 		);
-		const candidateUrls = [...relativeUrls, ...absoluteUrls];
-		for (const url of candidateUrls) {
-			try {
-				const response = await fetch(url, {
-					headers: {
-						Authorization: `Bearer ${token}`,
-						Accept: "application/json",
-					},
-				});
-				if (!response.ok) continue;
-				return response.json();
-			} catch {
-				// Try next candidate
-			}
-		}
+		const absoluteResults = await Promise.all(
+			absoluteUrls.map((url) => fetchJsonWithTimeout(url, 4000)),
+		);
+		const absoluteMatch = absoluteResults.find((item) => item !== null);
+		if (absoluteMatch) return absoluteMatch;
+
 		return null;
 	}
 
