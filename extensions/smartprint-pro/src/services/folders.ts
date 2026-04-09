@@ -307,6 +307,47 @@ function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], see
 	}
 }
 
+function collectAllObjectNodesFromTree(
+	tree: unknown,
+	acc: IfcAssemblyItem[],
+	seen: Set<string>,
+): void {
+	if (!tree || typeof tree !== "object") return;
+	const node = tree as Record<string, unknown>;
+	const id = readNodeString(node, ["guid", "id", "runtimeId", "entityId"]);
+	const classOrType =
+		readNodeString(node, ["class", "type", "entityType", "ifcClass", "category"]) ??
+		"UNKNOWN";
+	const name = readNodeString(node, ["name", "label"]);
+
+	if (id && !seen.has(id)) {
+		seen.add(id);
+		acc.push({
+			id,
+			name: name ?? `${classOrType} ${id}`,
+			type: classOrType.toUpperCase(),
+			material: "Unknown",
+			link: readNodeString(node, ["frn", "link"]),
+		});
+	}
+
+	for (const child of readNodeChildren(node)) {
+		collectAllObjectNodesFromTree(child, acc, seen);
+	}
+	for (const value of Object.values(node)) {
+		if (!value) continue;
+		if (Array.isArray(value)) {
+			for (const item of value) {
+				if (item && typeof item === "object") {
+					collectAllObjectNodesFromTree(item, acc, seen);
+				}
+			}
+		} else if (typeof value === "object") {
+			collectAllObjectNodesFromTree(value, acc, seen);
+		}
+	}
+}
+
 export async function fetchIfcAssembliesFromFile(
 	api: WorkspaceApi,
 	ifcFileId: string,
@@ -498,8 +539,14 @@ export async function fetchIfcAssembliesFromFile(
 		const classHint = diagnostics.classSamples.length
 			? diagnostics.classSamples.join(", ")
 			: "none";
+		const debugAllNodes: IfcAssemblyItem[] = [];
+		const debugSeen = new Set<string>();
+		collectAllObjectNodesFromTree(tree, debugAllNodes, debugSeen);
+		if (debugAllNodes.length > 0) {
+			return debugAllNodes;
+		}
 		throw new Error(
-			`No assembly nodes found. Nodes inspected: ${diagnostics.nodeCount}. Top classes/types: ${classHint}.`,
+			`No assembly nodes found and no object nodes extracted. Nodes inspected: ${diagnostics.nodeCount}. Top classes/types: ${classHint}.`,
 		);
 	}
 

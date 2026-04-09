@@ -632,6 +632,15 @@ export async function renderWbs(
 		setStatus(
 			`Loaded ${parts.length} assembly item(s) for ${selectedModel?.name ?? "selected IFC model"}.`,
 		);
+		const hasNonAssembly = parts.some(
+			(part) => !part.type.toLowerCase().includes("assembly"),
+		);
+		if (hasNonAssembly) {
+			setStatus(
+				`Debug mode: loaded ${parts.length} object node(s) for ${selectedModel?.name ?? "selected IFC model"} (not assembly-filtered).`,
+				"error",
+			);
+		}
 	}
 
 	function refreshModelOptions(): void {
