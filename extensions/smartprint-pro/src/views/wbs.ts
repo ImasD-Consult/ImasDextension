@@ -360,6 +360,16 @@ export async function renderWbs(
             <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-model-filter>
               <option value="">Select IFC model</option>
             </select>
+            <div class="mt-2 flex items-center justify-between gap-2">
+              <p class="text-xs text-gray-500" data-assembly-last-checked>Last checked: -</p>
+              <button
+                type="button"
+                class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-retry-assemblies
+              >
+                Retry
+              </button>
+            </div>
           </div>
 
           <div class="grid grid-cols-2 gap-2">
@@ -410,6 +420,12 @@ export async function renderWbs(
 	);
 	const modelFilter = container.querySelector<HTMLSelectElement>("[data-model-filter]");
 	const modelSearch = container.querySelector<HTMLInputElement>("[data-model-search]");
+	const retryAssembliesButton = container.querySelector<HTMLButtonElement>(
+		"[data-retry-assemblies]",
+	);
+	const lastCheckedLabel = container.querySelector<HTMLElement>(
+		"[data-assembly-last-checked]",
+	);
 	const partsList = container.querySelector<HTMLElement>("[data-parts-list]");
 	const assignButton = container.querySelector<HTMLButtonElement>("[data-assign]");
 	const assignmentsList = container.querySelector<HTMLElement>(
@@ -425,6 +441,8 @@ export async function renderWbs(
 		!materialFilter ||
 		!modelFilter ||
 		!modelSearch ||
+		!retryAssembliesButton ||
+		!lastCheckedLabel ||
 		!partsList ||
 		!assignButton ||
 		!assignmentsList
@@ -433,13 +451,25 @@ export async function renderWbs(
 	}
 
 	const tableContainerEl = tableContainer;
+	const statusEl = status;
 	const typeFilterEl = typeFilter;
 	const materialFilterEl = materialFilter;
 	const modelFilterEl = modelFilter;
 	const modelSearchEl = modelSearch;
+	const retryAssembliesButtonEl = retryAssembliesButton;
+	const lastCheckedLabelEl = lastCheckedLabel;
 	const partsListEl = partsList;
 	const assignButtonEl = assignButton;
 	const assignmentsListEl = assignmentsList;
+
+	function setStatus(
+		message: string,
+		tone: "info" | "error" = "info",
+	): void {
+		statusEl.textContent = message;
+		statusEl.classList.remove("text-gray-600", "text-red-600");
+		statusEl.classList.add(tone === "error" ? "text-red-600" : "text-gray-600");
+	}
 
 	let tableData: WbsTableData = { headers: [], rows: [] };
 	let selectedWbsRowIndex: number | null = null;
@@ -525,6 +555,85 @@ export async function renderWbs(
 		refreshAssignButton();
 	}
 
+	function setLastCheckedNow(): void {
+		const now = new Date();
+		lastCheckedLabelEl.textContent = `Last checked: ${now.toLocaleTimeString()}`;
+	}
+
+	async function loadAssembliesForSelectedModel(forceRefetch: boolean): Promise<void> {
+		selectedPartIds.clear();
+		const selectedModelId = modelFilterEl.value;
+		if (!selectedModelId) {
+			parts = [];
+			refreshPartFilters();
+			refreshPartsList();
+			setStatus("Select an IFC model to load parts.");
+			return;
+		}
+
+		let loadMessage: string | null = null;
+		const cachedParts = partsByModelId.get(selectedModelId);
+		const shouldRefetch =
+			forceRefetch ||
+			!partsByModelId.has(selectedModelId) ||
+			(cachedParts?.length ?? 0) === 0;
+		if (shouldRefetch) {
+			const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
+			setStatus(`Loading assemblies for ${selectedModel?.name ?? "selected IFC"}...`);
+			partsListEl.innerHTML =
+				'<p class="text-sm text-gray-400 italic animate-pulse">Loading assemblies from IFC...</p>';
+			retryAssembliesButtonEl.disabled = true;
+			try {
+				const assemblyPartsRaw = await fetchIfcAssembliesFromFile(
+					api,
+					selectedModelId,
+					selectedModel?.versionId,
+				);
+				const assemblyParts = assemblyPartsRaw.map((item) => ({
+					id: item.id,
+					name: item.name,
+					type: item.type,
+					material: item.material,
+					modelId: selectedModelId,
+					modelName: selectedModel?.name ?? "IFC",
+					link: item.link,
+				}));
+				partsByModelId.set(selectedModelId, assemblyParts);
+			} catch (error) {
+				partsByModelId.set(selectedModelId, []);
+				loadMessage =
+					error instanceof Error
+						? error.message
+						: "Failed to read assemblies from viewer.";
+				partsListEl.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(loadMessage)}</p>`;
+			} finally {
+				retryAssembliesButtonEl.disabled = false;
+				setLastCheckedNow();
+			}
+		}
+
+		parts = partsByModelId.get(selectedModelId) ?? [];
+		refreshPartFilters();
+		refreshPartsList();
+		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
+		if (loadMessage) {
+			setStatus(loadMessage, "error");
+			return;
+		}
+
+		if (parts.length === 0) {
+			setStatus(
+				`No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Check processing status, tree availability, or assembly naming in model tree.`,
+				"error",
+			);
+			return;
+		}
+
+		setStatus(
+			`Loaded ${parts.length} assembly item(s) for ${selectedModel?.name ?? "selected IFC model"}.`,
+		);
+	}
+
 	function refreshModelOptions(): void {
 		const search = modelSearchEl.value.trim().toLowerCase();
 		const filteredModels = allIfcModels.filter((model) =>
@@ -554,7 +663,7 @@ export async function renderWbs(
 	}
 
 	try {
-		status.textContent = "Loading IFC models from project folders...";
+		setStatus("Loading IFC models from project folders...");
 		const ifcModels = await fetchProjectIfcModels(api);
 		allIfcModels = ifcModels.map((model, index) => ({
 			id: model.id || model.versionId || `ifc-${index + 1}`,
@@ -564,13 +673,15 @@ export async function renderWbs(
 
 		if (allIfcModels.length > 0) {
 			refreshModelOptions();
-			status.textContent = `Found ${allIfcModels.length} IFC file(s). Select one to load assemblies.`;
+			setStatus(
+				`Found ${allIfcModels.length} IFC file(s). Select one to load assemblies.`,
+			);
 
 		} else {
 			modelFilterEl.innerHTML =
 				'<option value="">No IFC files found in project folders</option>';
 			partsByModelId.clear();
-			status.textContent = "No IFC files found in project folders.";
+			setStatus("No IFC files found in project folders.", "error");
 		}
 
 		refreshPartsList();
@@ -579,7 +690,7 @@ export async function renderWbs(
 			'<option value="">Failed to load IFC files from project</option>';
 		partsByModelId.clear();
 		refreshPartsList();
-		status.textContent = "Failed to load IFC files from project.";
+		setStatus("Failed to load IFC files from project.", "error");
 	}
 
 	refreshAssignments();
@@ -591,7 +702,7 @@ export async function renderWbs(
 			refreshWbsTable();
 			status.textContent = `Loaded ${cachedFile.name} from local storage (${tableData.rows.length} rows). Select a WBS row.`;
 		} catch {
-			status.textContent = "Stored WBS file is invalid. Please upload again.";
+			setStatus("Stored WBS file is invalid. Please upload again.", "error");
 			localStorage.removeItem(WBS_STORAGE_KEY);
 		}
 	}
@@ -599,66 +710,11 @@ export async function renderWbs(
 	modelSearchEl.addEventListener("input", refreshModelOptions);
 
 	modelFilterEl.addEventListener("change", async () => {
-		selectedPartIds.clear();
-		const selectedModelId = modelFilterEl.value;
-		if (!selectedModelId) {
-			parts = [];
-			refreshPartFilters();
-			refreshPartsList();
-			status.textContent = "Select an IFC model to load parts.";
-			return;
-		}
+		await loadAssembliesForSelectedModel(false);
+	});
 
-		let loadMessage: string | null = null;
-		const cachedParts = partsByModelId.get(selectedModelId);
-		const shouldRefetch =
-			!partsByModelId.has(selectedModelId) || (cachedParts?.length ?? 0) === 0;
-		if (shouldRefetch) {
-			const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
-			status.textContent = `Loading assemblies for ${selectedModel?.name ?? "selected IFC"}...`;
-			partsListEl.innerHTML =
-				'<p class="text-sm text-gray-400 italic animate-pulse">Loading assemblies from IFC...</p>';
-			try {
-				const assemblyPartsRaw = await fetchIfcAssembliesFromFile(
-					api,
-					selectedModelId,
-					selectedModel?.versionId,
-				);
-				const assemblyParts = assemblyPartsRaw.map((item) => ({
-					id: item.id,
-					name: item.name,
-					type: item.type,
-					material: item.material,
-					modelId: selectedModelId,
-					modelName: selectedModel?.name ?? "IFC",
-					link: item.link,
-				}));
-				partsByModelId.set(selectedModelId, assemblyParts);
-			} catch (error) {
-				partsByModelId.set(selectedModelId, []);
-				loadMessage =
-					error instanceof Error
-						? error.message
-						: "Failed to read assemblies from viewer.";
-				partsListEl.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(loadMessage)}</p>`;
-			}
-		}
-
-		parts = partsByModelId.get(selectedModelId) ?? [];
-		refreshPartFilters();
-		refreshPartsList();
-		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
-		if (loadMessage) {
-			status.textContent = loadMessage;
-			return;
-		}
-
-		if (parts.length === 0) {
-			status.textContent = `No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Check processing status, tree availability, or assembly naming in model tree.`;
-			return;
-		}
-
-		status.textContent = `Loaded ${parts.length} assembly item(s) for ${selectedModel?.name ?? "selected IFC model"}.`;
+	retryAssembliesButtonEl.addEventListener("click", async () => {
+		await loadAssembliesForSelectedModel(true);
 	});
 
 	typeFilterEl.addEventListener("change", refreshPartsList);
@@ -762,12 +818,17 @@ export async function renderWbs(
 			.then(() => {
 				saveAssignmentsToLocalStorage(assignments);
 				refreshAssignments();
-				status.textContent = `Assigned WBS row ${assignedRowIndex + 4} to ${selectedParts.length} part(s) and updated Pset_IMASD_WBS.`;
+				setStatus(
+					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedParts.length} part(s) and updated Pset_IMASD_WBS.`,
+				);
 			})
 			.catch((error) => {
 				const message =
 					error instanceof Error ? error.message : "Failed to write property set.";
-				status.textContent = `Assignment saved locally, but Pset write failed: ${message}`;
+				setStatus(
+					`Assignment saved locally, but Pset write failed: ${message}`,
+					"error",
+				);
 				saveAssignmentsToLocalStorage(assignments);
 				refreshAssignments();
 			});
@@ -776,11 +837,11 @@ export async function renderWbs(
 	uploadButton.addEventListener("click", async () => {
 		const selectedFile = fileInput.files?.[0];
 		if (!selectedFile) {
-			status.textContent = "Please select a WBS Excel file first.";
+			setStatus("Please select a WBS Excel file first.", "error");
 			return;
 		}
 
-		status.textContent = `Uploading ${selectedFile.name}...`;
+		setStatus(`Uploading ${selectedFile.name}...`);
 		tableContainerEl.innerHTML =
 			'<p class="text-sm text-gray-400 italic animate-pulse">Parsing file...</p>';
 
@@ -792,13 +853,15 @@ export async function renderWbs(
 			descriptionFilterValue = "";
 			saveFileToLocalStorage(selectedFile, fileBuffer);
 			refreshWbsTable();
-			status.textContent = `Loaded ${selectedFile.name} (${tableData.rows.length} rows). File saved locally.`;
+			setStatus(
+				`Loaded ${selectedFile.name} (${tableData.rows.length} rows). File saved locally.`,
+			);
 		} catch (error) {
 			const message =
 				error instanceof Error
 					? error.message
 					: "Failed to parse the selected Excel file.";
-			status.textContent = "Upload failed.";
+			setStatus("Upload failed.", "error");
 			tableContainer.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
 		}
 	});
