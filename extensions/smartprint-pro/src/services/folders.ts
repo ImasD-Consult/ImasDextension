@@ -319,15 +319,34 @@ export async function fetchIfcAssembliesFromFile(
 		);
 	}
 
-	const client = new TrimbleClient({
-		accessToken: token,
-		region: "eu",
-		useDevProxy: import.meta.env.DEV,
-	});
+	const baseOrigin =
+		window.top?.location?.origin || "https://app21.connect.trimble.com";
 
-	let tree = await client.getModelTree(ifcFileId, project.id);
+	async function getModelTreeById(
+		fileOrVersionId: string,
+	): Promise<unknown | null> {
+		const params = new URLSearchParams({
+			projectId: project.id,
+			depth: "-1",
+		});
+		const url = `${baseOrigin}/tc/api/2.0/model/${encodeURIComponent(fileOrVersionId)}/tree?${params}`;
+		try {
+			const response = await fetch(url, {
+				headers: {
+					Authorization: `Bearer ${token}`,
+					"Content-Type": "application/json",
+				},
+			});
+			if (!response.ok) return null;
+			return response.json();
+		} catch {
+			return null;
+		}
+	}
+
+	let tree = await getModelTreeById(ifcFileId);
 	if (!tree && ifcVersionId) {
-		tree = await client.getModelTree(ifcVersionId, project.id);
+		tree = await getModelTreeById(ifcVersionId);
 	}
 	if (!tree) return [];
 
