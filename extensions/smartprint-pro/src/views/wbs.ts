@@ -50,6 +50,11 @@ type IfcModelOption = {
 	name: string;
 };
 
+export type RenderWbsOptions = {
+	/** 3D manifest: only models open in the viewer (no project folder IFC list). */
+	useViewerModelOnly?: boolean;
+};
+
 function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
 	const workbook = read(fileBuffer, { type: "array" });
 	const firstSheetName = workbook.SheetNames[0];
@@ -315,13 +320,18 @@ function renderAssignmentsList(assignments: WbsAssignment[]): string {
 export async function renderWbs(
 	container: HTMLElement,
 	api: WorkspaceApi,
+	options?: RenderWbsOptions,
 ): Promise<void> {
+	const viewerOnly = options?.useViewerModelOnly === true;
+
 	container.innerHTML = `
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 class="text-lg font-semibold">WBS</h2>
-          <p class="mt-1 text-sm text-gray-500">Upload, preview, and assign WBS rows to IFC parts</p>
+          <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
+						viewerOnly ? " (uses the model open in 3D)" : ""
+					}</p>
         </div>
         <div class="flex items-center gap-2">
           <input
@@ -346,9 +356,16 @@ export async function renderWbs(
 
       <div class="grid grid-cols-12 gap-4">
         <div class="col-span-12 lg:col-span-6 rounded-lg border border-gray-200 p-3 space-y-2">
-          <h3 class="text-sm font-semibold text-gray-700">IFC Parts (MVP)</h3>
+          <h3 class="text-sm font-semibold text-gray-700">${
+						viewerOnly ? "IFC parts (3D viewer)" : "IFC Parts (MVP)"
+					}</h3>
+          ${
+						viewerOnly
+							? `<p class="text-xs text-gray-500" data-viewer-hint>Parts come from the model loaded in the viewer — no project folder scan.</p>`
+							: ""
+					}
 
-          <div>
+          <div class="${viewerOnly ? "hidden" : ""}">
             <label class="mb-1 block text-xs font-medium text-gray-600">Filter IFC models</label>
             <input
               type="text"
@@ -356,9 +373,15 @@ export async function renderWbs(
               data-model-search
               placeholder="Type to filter by name..."
             />
-            <label class="mb-1 block text-xs font-medium text-gray-600">IFC Model</label>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600">${
+							viewerOnly ? "Loaded model" : "IFC Model"
+						}</label>
             <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-model-filter>
-              <option value="">Select IFC model</option>
+              <option value="">${
+								viewerOnly ? "Detecting viewer model…" : "Select IFC model"
+							}</option>
             </select>
             <div class="mt-2 flex items-center justify-between gap-2">
               <p class="text-xs text-gray-500" data-assembly-last-checked>Last checked: -</p>
@@ -440,7 +463,7 @@ export async function renderWbs(
 		!typeFilter ||
 		!materialFilter ||
 		!modelFilter ||
-		!modelSearch ||
+		(!viewerOnly && !modelSearch) ||
 		!retryAssembliesButton ||
 		!lastCheckedLabel ||
 		!partsList ||
@@ -455,7 +478,7 @@ export async function renderWbs(
 	const typeFilterEl = typeFilter;
 	const materialFilterEl = materialFilter;
 	const modelFilterEl = modelFilter;
-	const modelSearchEl = modelSearch;
+	const modelSearchEl = modelSearch as HTMLInputElement | null;
 	const retryAssembliesButtonEl = retryAssembliesButton;
 	const lastCheckedLabelEl = lastCheckedLabel;
 	const partsListEl = partsList;
@@ -647,7 +670,7 @@ export async function renderWbs(
 	}
 
 	function refreshModelOptions(): void {
-		const search = modelSearchEl.value.trim().toLowerCase();
+		const search = (modelSearchEl?.value ?? "").trim().toLowerCase();
 		const filteredModels = allIfcModels.filter((model) =>
 			model.name.toLowerCase().includes(search),
 		);
@@ -675,34 +698,85 @@ export async function renderWbs(
 	}
 
 	try {
-		setStatus("Loading IFC models from project folders...");
-		const ifcModels = await fetchProjectIfcModels(api);
-		allIfcModels = ifcModels.map((model, index) => ({
-			id: model.id || model.versionId || `ifc-${index + 1}`,
-			versionId: model.versionId,
-			name: model.name || `IFC ${index + 1}`,
-		}));
+		if (viewerOnly) {
+			setStatus("Loading model from 3D viewer…");
+			if (!api.viewer?.getModels) {
+				modelFilterEl.innerHTML =
+					'<option value="">Viewer API unavailable</option>';
+				partsByModelId.clear();
+				setStatus(
+					"Viewer API not available. Use the 3D manifest and open an IFC in the viewer.",
+					"error",
+				);
+				refreshPartsList();
+			} else {
+				const models = await api.viewer.getModels();
+				const list = (models ?? []) as Array<{
+					id: string;
+					versionId?: string;
+					name?: string;
+				}>;
+				allIfcModels = list.map((m, i) => ({
+					id: m.id,
+					versionId: m.versionId,
+					name: m.name ?? `Model ${i + 1}`,
+				}));
 
-		if (allIfcModels.length > 0) {
-			refreshModelOptions();
-			setStatus(
-				`Found ${allIfcModels.length} IFC file(s). Select one to load assemblies.`,
-			);
-
+				if (allIfcModels.length === 0) {
+					modelFilterEl.innerHTML =
+						'<option value="">No model in viewer</option>';
+					partsByModelId.clear();
+					setStatus(
+						"No loaded model in the viewer. Open your IFC in 3D, then Retry.",
+						"error",
+					);
+					refreshPartsList();
+				} else {
+					refreshModelOptions();
+					if (!modelFilterEl.value && allIfcModels[0]) {
+						modelFilterEl.value = allIfcModels[0].id;
+					}
+					setStatus(
+						`Using ${allIfcModels.length} model(s) from the viewer. Select another if needed.`,
+					);
+					await loadAssembliesForSelectedModel(false);
+				}
+			}
 		} else {
-			modelFilterEl.innerHTML =
-				'<option value="">No IFC files found in project folders</option>';
-			partsByModelId.clear();
-			setStatus("No IFC files found in project folders.", "error");
-		}
+			setStatus("Loading IFC models from project folders...");
+			const ifcModels = await fetchProjectIfcModels(api);
+			allIfcModels = ifcModels.map((model, index) => ({
+				id: model.id || model.versionId || `ifc-${index + 1}`,
+				versionId: model.versionId,
+				name: model.name || `IFC ${index + 1}`,
+			}));
 
-		refreshPartsList();
+			if (allIfcModels.length > 0) {
+				refreshModelOptions();
+				setStatus(
+					`Found ${allIfcModels.length} IFC file(s). Select one to load assemblies.`,
+				);
+			} else {
+				modelFilterEl.innerHTML =
+					'<option value="">No IFC files found in project folders</option>';
+				partsByModelId.clear();
+				setStatus("No IFC files found in project folders.", "error");
+			}
+
+			refreshPartsList();
+		}
 	} catch {
-		modelFilterEl.innerHTML =
-			'<option value="">Failed to load IFC files from project</option>';
+		modelFilterEl.innerHTML = viewerOnly
+			? '<option value="">Failed to read viewer models</option>'
+			: '<option value="">Failed to load IFC files from project</option>';
 		partsByModelId.clear();
 		refreshPartsList();
-		setStatus("Failed to load IFC files from project.", "error");
+		setStatus(
+			viewerOnly
+				? "Failed to load models from the 3D viewer."
+				: "Failed to load IFC files from project.",
+			"error",
+		);
 	}
 
 	refreshAssignments();
@@ -719,7 +793,7 @@ export async function renderWbs(
 		}
 	}
 
-	modelSearchEl.addEventListener("input", refreshModelOptions);
+	modelSearchEl?.addEventListener("input", refreshModelOptions);
 
 	modelFilterEl.addEventListener("change", async () => {
 		await loadAssembliesForSelectedModel(false);

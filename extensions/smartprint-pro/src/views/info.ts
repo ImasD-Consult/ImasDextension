@@ -19,7 +19,8 @@ export function renderInfo(container: HTMLElement): void {
       <section>
         <h3 class="text-sm font-semibold text-gray-700">Two manifests (same server)</h3>
         <p class="mt-1 text-sm text-gray-600">
-          Use <strong class="text-gray-800">manifest.json</strong> only under <strong>Project → Extensions</strong> (Data / folders), and <strong class="text-gray-800">manifest-3d.json</strong> only under <strong>3D Viewer → Settings → Extensions</strong>. Same app URL; different <code class="text-xs bg-gray-100 px-1 rounded">extensionType</code> avoids duplicate sidebar entries. For assembly loading from the IFC, prefer the 3D viewer install and open the model in 3D.
+          <strong class="text-gray-800">manifest.json</strong> → Project → Extensions: <strong>Processes only</strong> (<code class="text-xs bg-gray-100 px-1 rounded">?mode=project</code>).
+          <strong class="text-gray-800">manifest-3d.json</strong> → 3D Viewer → Extensions: <strong>WBS only</strong>, uses the IFC already open in the viewer (<code class="text-xs bg-gray-100 px-1 rounded">?mode=3d</code>).
         </p>
       </section>
 

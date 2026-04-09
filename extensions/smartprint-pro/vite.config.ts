@@ -28,12 +28,19 @@ function buildProxyConfig() {
 	return proxy;
 }
 
-/** Two manifests, same `url` — register project manifest under Project → Extensions, 3D manifest under 3D Viewer → Extensions (avoids duplicate entries). */
+/** App entry: `?mode=project` (Processes only) vs `?mode=3d` (WBS, viewer model only). */
+function appEntryUrl(base: string, mode: "project" | "3d"): string {
+	if (!base || base === ".") {
+		return `./?mode=${mode}`;
+	}
+	return `${base.replace(/\/$/, "")}/?mode=${mode}`;
+}
+
 function manifestBody(
 	extensionType: readonly ["project"] | readonly ["3dviewer"],
 	description: string,
 	icon: string,
-	url: string,
+	appUrl: string,
 ) {
 	return JSON.stringify(
 		{
@@ -43,7 +50,7 @@ function manifestBody(
 			enabled: true,
 			extensionType,
 			icon,
-			url,
+			url: appUrl,
 		},
 		null,
 		2,
@@ -81,9 +88,9 @@ function trimbleManifestPlugin(): Plugin {
 					res,
 					manifestBody(
 						["project"],
-						"smartprintPRO — add under Project → Extensions (Data / folders). Same app URL as manifest-3d.json.",
+						"smartprintPRO — Project → Extensions (Processes only).",
 						"logo.svg",
-						".",
+						appEntryUrl(".", "project"),
 					),
 				);
 			});
@@ -93,9 +100,9 @@ function trimbleManifestPlugin(): Plugin {
 					res,
 					manifestBody(
 						["3dviewer"],
-						"smartprintPRO — add under 3D Viewer → Settings → Extensions only.",
+						"smartprintPRO — 3D Viewer → WBS only (uses open model).",
 						"logo.svg",
-						".",
+						appEntryUrl(".", "3d"),
 					),
 				);
 			});
@@ -106,16 +113,16 @@ function trimbleManifestPlugin(): Plugin {
 			const icon = origin
 				? `${origin.replace(/\/$/, "")}/logo.svg`
 				: "logo.svg";
-			const url = origin ? origin.replace(/\/$/, "") : ".";
+			const base = origin ? origin.replace(/\/$/, "") : ".";
 
 			this.emitFile({
 				type: "asset",
 				fileName: "manifest.json",
 				source: manifestBody(
 					["project"],
-					"smartprintPRO — Project → Extensions (Data). Pair with manifest-3d.json for 3D.",
+					"smartprintPRO — Project → Extensions (Processes only).",
 					icon,
-					url,
+					appEntryUrl(base, "project"),
 				),
 			});
 			this.emitFile({
@@ -123,9 +130,9 @@ function trimbleManifestPlugin(): Plugin {
 				fileName: "manifest-3d.json",
 				source: manifestBody(
 					["3dviewer"],
-					"smartprintPRO — 3D Viewer → Extensions only.",
+					"smartprintPRO — 3D Viewer → WBS only (open IFC in viewer).",
 					icon,
-					url,
+					appEntryUrl(base, "3d"),
 				),
 			});
 		},

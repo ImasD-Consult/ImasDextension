@@ -29,7 +29,7 @@ if [ -n "$BASE" ]; then
   "enabled": true,
   "extensionType": ["project"],
   "icon": "${BASE}/logo.svg",
-  "url": "${BASE}"
+  "url": "${BASE}/?mode=project"
 }
 EOF
 	cat > /app/manifest-3d.json <<EOF
@@ -40,7 +40,7 @@ EOF
   "enabled": true,
   "extensionType": ["3dviewer"],
   "icon": "${BASE}/logo.svg",
-  "url": "${BASE}"
+  "url": "${BASE}/?mode=3d"
 }
 EOF
 fi

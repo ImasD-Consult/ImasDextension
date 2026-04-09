@@ -37,6 +37,8 @@ declare module "trimble-connect-workspace-api" {
 			requestPermission(permission: string): Promise<string>;
 			/** Host context: "project" (Data) vs "3dviewer" — see manifest `extensionType`. */
 			getHost?(): Promise<{ name: "project" | "3dviewer" | string }>;
+			/** 3D viewer: e.g. `{ type: "panel" }` for side-panel placement (lists-like). */
+			configure?(config: Record<string, unknown>): Promise<boolean>;
 		};
 		ui: {
 			setMenu(config: MenuConfig): Promise<void>;
