@@ -21,6 +21,9 @@ export function renderInfo(container: HTMLElement): void {
         <p class="mt-1 text-sm text-gray-600">
           Add this extension under <strong class="text-gray-800">3D Viewer → Settings → Extensions</strong> (manifest includes 3D viewer mode), then open your IFC in the 3D viewer before loading assemblies. Project‑only installs have limited viewer API access.
         </p>
+        <p class="mt-2 text-sm text-gray-600">
+          If <strong class="text-gray-800">smartprintPRO</strong> appears twice in the sidebar, you likely added the same manifest in both <strong>Project → Extensions</strong> and <strong>3D Viewer → Extensions</strong>. Remove one of the entries so only a single install remains.
+        </p>
       </section>
 
       <section>

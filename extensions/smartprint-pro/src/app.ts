@@ -7,30 +7,91 @@ import { renderWbs } from "./views/wbs";
 
 type Command = "smartprint_main" | "processes" | "wbs" | "info";
 
+const ROOT_ID = "smartprint-root";
+const NAV_MOUNT_ID = "smartprint-nav-mount";
+const CONTENT_ID = "smartprint-content";
+
+function normalizeRoute(raw: string): Command {
+	const r = raw.replace(/^#/, "").trim();
+	if (
+		r === "wbs" ||
+		r === "processes" ||
+		r === "info" ||
+		r === "smartprint_main"
+	) {
+		return r;
+	}
+	return "smartprint_main";
+}
+
+function renderInPanelNav(active: Command): string {
+	const item = (cmd: Command, label: string) => {
+		const isOn = active === cmd;
+		return `<a href="#${cmd}" class="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium border transition-colors ${
+			isOn
+				? "border-blue-400 bg-blue-50 text-blue-900"
+				: "border-transparent text-gray-600 hover:bg-gray-100"
+		}">${label}</a>`;
+	};
+	return `<nav class="flex flex-wrap gap-1 border-b border-gray-200 pb-2 mb-3 shrink-0" aria-label="smartprintPRO sections">
+      ${item("wbs", "WBS")}
+      ${item("processes", "Processes")}
+      ${item("info", "Info")}
+    </nav>`;
+}
+
+function ensureShell(container: HTMLElement, active: Command): HTMLElement {
+	let root = container.querySelector(`#${ROOT_ID}`);
+	if (!root) {
+		container.innerHTML = `
+      <div id="${ROOT_ID}" class="flex flex-col min-h-[200px] max-h-[min(85vh,900px)]">
+        <div id="${NAV_MOUNT_ID}" class="shrink-0"></div>
+        <div id="${CONTENT_ID}" class="flex-1 min-h-0 overflow-auto"></div>
+      </div>
+    `;
+	}
+	const mount = container.querySelector(`#${NAV_MOUNT_ID}`);
+	if (mount) {
+		mount.innerHTML = renderInPanelNav(active);
+	}
+	return container.querySelector(`#${CONTENT_ID}`) as HTMLElement;
+}
+
 async function handleCommand(
 	command: string,
 	container: HTMLElement,
 	api: WorkspaceApi,
 ): Promise<void> {
-	switch (command as Command) {
-		case "smartprint_main":
-			container.innerHTML = `
-        <h2 class="text-lg font-semibold">smartprintPRO</h2>
-        <p class="mt-1 text-sm text-gray-500">Choose a submenu: WBS, Processes, or Info.</p>
-      `;
-			break;
-		case "processes":
-			await renderProcesses(container, api);
-			await api.ui.setActiveMenuItem("processes");
-			break;
-		case "info":
-			renderInfo(container);
-			await api.ui.setActiveMenuItem("info");
-			break;
-		case "wbs":
-			renderWbs(container, api);
-			await api.ui.setActiveMenuItem("wbs");
-			break;
+	const cmd = normalizeRoute(command);
+	const content = ensureShell(container, cmd);
+
+	try {
+		switch (cmd) {
+			case "smartprint_main":
+				content.innerHTML = `
+          <p class="text-sm text-gray-500">Select <strong class="text-gray-700">WBS</strong>, <strong class="text-gray-700">Processes</strong>, or <strong class="text-gray-700">Info</strong> above.</p>
+        `;
+				break;
+			case "processes":
+				await renderProcesses(content, api);
+				break;
+			case "info":
+				renderInfo(content);
+				break;
+			case "wbs":
+				await renderWbs(content, api);
+				break;
+		}
+		try {
+			await api.ui.setActiveMenuItem(
+				cmd === "smartprint_main" ? "smartprint_main" : cmd,
+			);
+		} catch {
+			/* 3D viewer host may not expose the same submenu chrome */
+		}
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		content.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
 	}
 }
 
@@ -40,10 +101,29 @@ export async function initApp(): Promise<void> {
 
 	let api: WorkspaceApi | undefined;
 
+	const runRoute = async (raw: string) => {
+		if (!api) return;
+		const trimmed = raw.trim();
+		const route: Command = trimmed === "" ? "wbs" : normalizeRoute(trimmed);
+		await handleCommand(route, container, api);
+	};
+
 	try {
 		api = await connectToTrimble(window.parent, async (command) => {
 			if (!api) return;
-			await handleCommand(command, container, api);
+			const cmd = (command || "smartprint_main").trim();
+			if (
+				cmd === "wbs" ||
+				cmd === "processes" ||
+				cmd === "info" ||
+				cmd === "smartprint_main"
+			) {
+				if (window.location.hash !== `#${cmd}`) {
+					window.location.hash = cmd;
+					return;
+				}
+			}
+			await handleCommand(cmd, container, api);
 		});
 
 		await api.ui.setMenu({
@@ -57,8 +137,16 @@ export async function initApp(): Promise<void> {
 			],
 		});
 
-		const route = window.location.hash.replace(/^#/, "") || "smartprint_main";
-		await handleCommand(route, container, api);
+		window.addEventListener("hashchange", () => {
+			const route = window.location.hash.replace(/^#/, "").trim();
+			void runRoute(route);
+		});
+
+		if (!window.location.hash) {
+			window.location.hash = "wbs";
+		} else {
+			await runRoute(window.location.hash.replace(/^#/, "").trim());
+		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : "Failed to connect";
 		container.innerHTML = `
