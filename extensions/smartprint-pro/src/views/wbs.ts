@@ -610,7 +610,10 @@ export async function renderWbs(
 		}
 
 		let loadMessage: string | null = null;
-		if (!partsByModelId.has(selectedModelId)) {
+		const cachedParts = partsByModelId.get(selectedModelId);
+		const shouldRefetch =
+			!partsByModelId.has(selectedModelId) || (cachedParts?.length ?? 0) === 0;
+		if (shouldRefetch) {
 			const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
 			status.textContent = `Loading assemblies for ${selectedModel?.name ?? "selected IFC"}...`;
 			partsListEl.innerHTML =
@@ -637,6 +640,7 @@ export async function renderWbs(
 					error instanceof Error
 						? error.message
 						: "Failed to read assemblies from viewer.";
+				partsListEl.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(loadMessage)}</p>`;
 			}
 		}
 
