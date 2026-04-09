@@ -19,8 +19,8 @@ export function renderInfo(container: HTMLElement): void {
       <section>
         <h3 class="text-sm font-semibold text-gray-700">Two manifests (same server)</h3>
         <p class="mt-1 text-sm text-gray-600">
-          <strong class="text-gray-800">manifest.json</strong> → Project → Extensions: <strong>Processes only</strong> (<code class="text-xs bg-gray-100 px-1 rounded">?mode=project</code>).
-          <strong class="text-gray-800">manifest-3d.json</strong> → 3D Viewer → Extensions: <strong>WBS only</strong>, uses the IFC already open in the viewer (<code class="text-xs bg-gray-100 px-1 rounded">?mode=3d</code>).
+          <strong class="text-gray-800">manifest.json</strong> → Project → Extensions: <strong>Processes</strong> and this <strong>Info</strong> screen (<code class="text-xs bg-gray-100 px-1 rounded">?mode=project</code>).
+          <strong class="text-gray-800">manifest-3d.json</strong> → 3D Viewer → Extensions: full <strong>WBS</strong> workflow (Excel, assemblies from the open IFC, Pset_IMASD_WBS) (<code class="text-xs bg-gray-100 px-1 rounded">?mode=3d</code>).
         </p>
       </section>
 

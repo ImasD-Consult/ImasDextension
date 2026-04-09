@@ -28,7 +28,7 @@ function buildProxyConfig() {
 	return proxy;
 }
 
-/** App entry: `?mode=project` (Processes only) vs `?mode=3d` (WBS, viewer model only). */
+/** App entry: `?mode=project` (Processes + Info) vs `?mode=3d` (WBS + open IFC). */
 function appEntryUrl(base: string, mode: "project" | "3d"): string {
 	if (!base || base === ".") {
 		return `./?mode=${mode}`;
@@ -88,7 +88,7 @@ function trimbleManifestPlugin(): Plugin {
 					res,
 					manifestBody(
 						["project"],
-						"smartprintPRO — Project → Extensions (Processes only).",
+						"smartprintPRO — Project → Extensions (Processes & Info).",
 						"logo.svg",
 						appEntryUrl(".", "project"),
 					),
@@ -100,7 +100,7 @@ function trimbleManifestPlugin(): Plugin {
 					res,
 					manifestBody(
 						["3dviewer"],
-						"smartprintPRO — 3D Viewer → WBS only (uses open model).",
+						"smartprintPRO — 3D Viewer → WBS (Excel, IFC assemblies, Psets).",
 						"logo.svg",
 						appEntryUrl(".", "3d"),
 					),
@@ -120,7 +120,7 @@ function trimbleManifestPlugin(): Plugin {
 				fileName: "manifest.json",
 				source: manifestBody(
 					["project"],
-					"smartprintPRO — Project → Extensions (Processes only).",
+					"smartprintPRO — Project → Extensions (Processes & Info).",
 					icon,
 					appEntryUrl(base, "project"),
 				),
@@ -130,7 +130,7 @@ function trimbleManifestPlugin(): Plugin {
 				fileName: "manifest-3d.json",
 				source: manifestBody(
 					["3dviewer"],
-					"smartprintPRO — 3D Viewer → WBS only (open IFC in viewer).",
+					"smartprintPRO — 3D Viewer → WBS (Excel, IFC assemblies, Psets).",
 					icon,
 					appEntryUrl(base, "3d"),
 				),

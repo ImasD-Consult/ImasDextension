@@ -1,6 +1,7 @@
 import { connectToTrimble, escapeHtml } from "@imasd/shared";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
 import { SMARTPRINT_LOGO } from "./assets/logo";
+import { renderInfo } from "./views/info";
 import { renderProcesses } from "./views/processes";
 import { renderWbs } from "./views/wbs";
 
@@ -9,6 +10,7 @@ function getAppMode(): "project" | "3d" {
 	return m === "3d" ? "3d" : "project";
 }
 
+/** 3D viewer: bottom “properties” strip (lists-like horizontal band). `height` applies to `properties` placement. */
 async function tryConfigureViewerPanel(api: WorkspaceApi): Promise<void> {
 	const ext = api.extension as WorkspaceApi["extension"] & {
 		configure?: (c: Record<string, unknown>) => Promise<boolean>;
@@ -27,7 +29,8 @@ async function tryConfigureViewerPanel(api: WorkspaceApi): Promise<void> {
 			url,
 			title: "smartprintPRO",
 			extensionType: ["3dviewer"],
-			type: "panel",
+			type: "properties",
+			height: "42vh",
 		});
 	} catch {
 		/* optional — host may ignore */
@@ -48,12 +51,18 @@ export async function initApp(): Promise<void> {
 				if (
 					command &&
 					command !== "processes" &&
+					command !== "info" &&
 					command !== "smartprint_main"
 				) {
 					return;
 				}
+				container.className = "p-4";
 				container.innerHTML = "";
-				await renderProcesses(container, api);
+				if (command === "info") {
+					renderInfo(container);
+				} else {
+					await renderProcesses(container, api);
+				}
 				return;
 			}
 			if (
@@ -68,6 +77,8 @@ export async function initApp(): Promise<void> {
 		});
 
 		if (mode === "3d") {
+			container.className =
+				"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
 			await api.ui.setMenu({
 				title: "smartprintPRO",
 				icon: SMARTPRINT_LOGO,
@@ -75,20 +86,28 @@ export async function initApp(): Promise<void> {
 			});
 			await tryConfigureViewerPanel(api);
 			container.innerHTML = "";
-			await renderWbs(container, api, { useViewerModelOnly: true });
+			await renderWbs(container, api, {
+				useViewerModelOnly: true,
+				horizontalDockLayout: true,
+			});
 			return;
 		}
 
+		container.className = "p-4";
 		await api.ui.setMenu({
 			title: "smartprintPRO",
 			icon: SMARTPRINT_LOGO,
 			command: "processes",
-			subMenus: [{ title: "Processes", command: "processes" }],
+			subMenus: [
+				{ title: "Processes", command: "processes" },
+				{ title: "Info", command: "info" },
+			],
 		});
 
 		container.innerHTML = "";
 		await renderProcesses(container, api);
 	} catch (err) {
+		container.className = "p-4";
 		const message = err instanceof Error ? err.message : "Failed to connect";
 		container.innerHTML = `
       <h2 class="text-lg font-semibold">smartprintPRO</h2>

@@ -53,6 +53,8 @@ type IfcModelOption = {
 export type RenderWbsOptions = {
 	/** 3D manifest: only models open in the viewer (no project folder IFC list). */
 	useViewerModelOnly?: boolean;
+	/** Wide bottom band: Excel + assemblies side by side (3D viewer). */
+	horizontalDockLayout?: boolean;
 };
 
 function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
@@ -164,10 +166,15 @@ function renderTable(
 	selectedRowIndex: number | null,
 	wbsFilter: string,
 	descriptionFilter: string,
+	tableScrollClass = "max-h-[62vh] overflow-auto",
+	compactOuter = false,
 ): string {
 	if (!tableData.headers.length) {
 		return '<p class="text-sm text-gray-500 italic">No data found in the selected file.</p>';
 	}
+	const outerClass = compactOuter
+		? "flex flex-col flex-1 min-h-0 min-w-0"
+		: "rounded-lg border border-gray-200 overflow-hidden";
 
 	const normalizedWbsFilter = wbsFilter.trim().toLowerCase();
 	const normalizedDescriptionFilter = descriptionFilter.trim().toLowerCase();
@@ -210,8 +217,8 @@ function renderTable(
 		: `<tr><td class="px-3 py-3 text-sm text-gray-500 italic" colspan="${tableData.headers.length}">No rows found.</td></tr>`;
 
 	return `
-    <div class="rounded-lg border border-gray-200 overflow-hidden">
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 p-2 border-b border-gray-200 bg-gray-50">
+    <div class="${outerClass}">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 p-2 border-b border-gray-200 bg-gray-50 shrink-0">
         <input
           type="text"
           value="${escapeHtml(wbsFilter)}"
@@ -227,7 +234,7 @@ function renderTable(
           data-description-filter
         />
       </div>
-      <div class="max-h-[62vh] overflow-auto">
+      <div class="${tableScrollClass}">
         <table class="min-w-full border-collapse">
           <thead class="sticky top-0 z-10">
             <tr>${headerCells}</tr>
@@ -323,8 +330,98 @@ export async function renderWbs(
 	options?: RenderWbsOptions,
 ): Promise<void> {
 	const viewerOnly = options?.useViewerModelOnly === true;
+	const dockLayout = viewerOnly && options?.horizontalDockLayout === true;
 
-	container.innerHTML = `
+	if (dockLayout) {
+		container.innerHTML = `
+    <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
+      <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
+        <div class="flex flex-col min-w-0">
+          <h2 class="text-base font-semibold leading-tight">WBS</h2>
+          <p class="text-xs text-gray-500">Excel (A–D) · IFC assemblies · Pset_IMASD_WBS</p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
+          <input
+            id="wbs-file"
+            type="file"
+            accept=".xlsx,.xls"
+            class="min-w-0 block text-sm text-gray-700 file:mr-2 file:rounded file:border-0 file:bg-brand-50 file:px-2 file:py-1.5 file:font-medium file:text-brand-700 hover:file:bg-brand-100"
+          />
+          <button
+            type="button"
+            class="shrink-0 rounded px-3 py-1.5 text-sm font-medium bg-brand-600 text-white hover:bg-brand-700"
+            data-wbs-upload
+          >
+            Upload
+          </button>
+          <span class="text-xs text-gray-600 whitespace-nowrap hidden sm:inline">IFC model</span>
+          <select class="min-w-[140px] max-w-[240px] rounded border border-gray-300 px-2 py-1 text-sm" data-model-filter>
+            <option value="">Detecting viewer model…</option>
+          </select>
+          <button
+            type="button"
+            class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            data-retry-assemblies
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+      <p class="shrink-0 text-xs text-gray-600" data-wbs-status>No file uploaded yet. Expected: Excel template (.xlsx / .xls).</p>
+
+      <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-2 min-h-0 overflow-hidden">
+        <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
+          <div class="px-2 py-1.5 bg-gray-100 border-b border-gray-200 flex items-center justify-between gap-2 shrink-0">
+            <span class="text-xs font-semibold text-gray-700">WBS (Excel)</span>
+            <span class="text-xs text-gray-500">Header row 3 · columns A–D</span>
+          </div>
+          <div class="flex-1 min-h-0 flex flex-col p-2 overflow-hidden" data-wbs-table>
+            <p class="text-sm text-gray-400 italic">Upload a WBS file to preview and select a row.</p>
+          </div>
+        </div>
+        <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
+          <div class="px-2 py-1.5 bg-gray-100 border-b border-gray-200 shrink-0">
+            <span class="text-xs font-semibold text-gray-700">IFC assemblies</span>
+            <p class="text-xs text-gray-500 mt-0.5" data-viewer-hint>From the model open in 3D (not the project folder).</p>
+          </div>
+          <div class="px-2 pt-2 grid grid-cols-2 gap-2 shrink-0">
+            <select class="rounded border border-gray-300 px-2 py-1 text-sm" data-type-filter>
+              <option value="ALL">All Types</option>
+            </select>
+            <select class="rounded border border-gray-300 px-2 py-1 text-sm" data-material-filter>
+              <option value="ALL">All Materials</option>
+            </select>
+          </div>
+          <div class="px-2 pt-1 flex items-center justify-between gap-2 shrink-0">
+            <p class="text-xs text-gray-500" data-assembly-last-checked>Last checked: -</p>
+          </div>
+          <div class="flex-1 min-h-0 overflow-auto px-2 pb-2 space-y-2" data-parts-list>
+            <p class="text-sm text-gray-400 italic">Loading parts...</p>
+          </div>
+          <div class="px-2 pb-2 shrink-0 border-t border-gray-100">
+            <button
+              type="button"
+              class="w-full rounded px-3 py-2 text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              data-assign
+              disabled
+            >
+              Assign selected assemblies to selected WBS row
+            </button>
+            <p class="text-xs text-gray-500 mt-1">Writes Pset_IMASD_WBS on the open IFC.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="shrink-0 flex flex-col min-h-0 max-h-[32vh] border-t border-gray-200 pt-2">
+        <h3 class="text-xs font-semibold text-gray-700 mb-1">Assigned property sets (Pset_IMASD_WBS)</h3>
+        <div class="flex-1 min-h-0 overflow-auto" data-assignments-list>
+          <p class="text-sm text-gray-400 italic">No assignments yet.</p>
+        </div>
+      </div>
+    </div>
+  `;
+	} else {
+		container.innerHTML = `
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -432,6 +529,7 @@ export async function renderWbs(
       </div>
     </div>
   `;
+	}
 
 	const fileInput = container.querySelector<HTMLInputElement>("#wbs-file");
 	const uploadButton = container.querySelector<HTMLButtonElement>("[data-wbs-upload]");
@@ -559,6 +657,8 @@ export async function renderWbs(
 			selectedWbsRowIndex,
 			wbsFilterValue,
 			descriptionFilterValue,
+			dockLayout ? "flex-1 min-h-0 overflow-auto" : "max-h-[62vh] overflow-auto",
+			dockLayout,
 		);
 
 		if (preserveFocus) {
@@ -948,7 +1048,7 @@ export async function renderWbs(
 					? error.message
 					: "Failed to parse the selected Excel file.";
 			setStatus("Upload failed.", "error");
-			tableContainer.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
+			tableContainerEl.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
 		}
 	});
 }
