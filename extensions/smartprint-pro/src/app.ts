@@ -46,8 +46,8 @@ export async function initApp(): Promise<void> {
 			icon: SMARTPRINT_LOGO,
 			command: "smartprint_main",
 			subMenus: [
-				{ title: "Processes", command: "processes" },
 				{ title: "WBS", command: "wbs" },
+				{ title: "Processes", command: "processes" },
 				{ title: "Info", command: "info" },
 			],
 		});

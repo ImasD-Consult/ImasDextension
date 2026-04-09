@@ -149,64 +149,121 @@ function saveAssignmentsToLocalStorage(assignments: WbsAssignment[]): void {
 	localStorage.setItem(WBS_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(assignments));
 }
 
-function getViewerPartsFallback(): IfcPart[] {
-	return [
-		{
-			id: "part-001",
-			name: "Wall Exterior A1",
-			type: "IFCWALL",
-			material: "Concrete",
-			modelId: "fallback-model-1",
-			modelName: "Sample IFC 1",
-		},
-		{
-			id: "part-002",
-			name: "Column C-01",
-			type: "IFCCOLUMN",
-			material: "Concrete",
-			modelId: "fallback-model-1",
-			modelName: "Sample IFC 1",
-		},
-		{
-			id: "part-003",
-			name: "Beam B-14",
-			type: "IFCBEAM",
-			material: "Steel",
-			modelId: "fallback-model-2",
-			modelName: "Sample IFC 2",
-		},
-		{
-			id: "part-004",
-			name: "Slab S-02",
-			type: "IFCSLAB",
-			material: "Concrete",
-			modelId: "fallback-model-2",
-			modelName: "Sample IFC 2",
-		},
-		{
-			id: "part-005",
-			name: "Door D-05",
-			type: "IFCDOOR",
-			material: "Wood",
-			modelId: "fallback-model-2",
-			modelName: "Sample IFC 2",
-		},
-	];
+type ViewerProperty = { name?: string; value?: string | number };
+type ViewerPropertySet = { name?: string; properties?: ViewerProperty[] };
+type ViewerObjectProperties = {
+	id?: number | string;
+	class?: string;
+	product?: { name?: string };
+	properties?: ViewerPropertySet[];
+};
+
+function pickMaterial(properties: ViewerObjectProperties): string {
+	const sets = properties.properties ?? [];
+	for (const set of sets) {
+		for (const property of set.properties ?? []) {
+			const key = (property.name ?? "").toLowerCase();
+			if (key.includes("material")) {
+				return String(property.value ?? "Unknown");
+			}
+		}
+	}
+	return "Unknown";
 }
 
-function createSeededPartsForModel(modelId: string, modelName: string): IfcPart[] {
-	const seedParts = getViewerPartsFallback();
-	const hash = modelId.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
-	const count = 3 + (hash % 3); // 3..5 items per model so lists visibly differ
-	const modelLabel = modelName.replace(/\.ifc$/i, "");
+function extractAssemblyRuntimeIds(raw: unknown): number[] {
+	const found = new Set<number>();
 
-	return seedParts.slice(0, count).map((part, index) => ({
-		...part,
-		id: `${modelId}-${index + 1}`,
-		name: `${modelLabel} - ${part.type} ${index + 1}`,
-		modelId,
-		modelName,
-	}));
+	function walk(node: unknown): void {
+		if (!node || typeof node !== "object") return;
+		const obj = node as Record<string, unknown>;
+		const candidateIds = [
+			obj.id,
+			obj.entityId,
+			obj.runtimeId,
+			obj.objectRuntimeId,
+		];
+		for (const candidate of candidateIds) {
+			if (typeof candidate === "number" && Number.isFinite(candidate)) {
+				found.add(candidate);
+			}
+		}
+
+		const maybeChildren = [
+			obj.children,
+			obj.items,
+			obj.entities,
+			obj.nodes,
+		];
+		for (const children of maybeChildren) {
+			if (Array.isArray(children)) {
+				for (const child of children) walk(child);
+			}
+		}
+	}
+
+	if (Array.isArray(raw)) {
+		for (const item of raw) walk(item);
+	} else {
+		walk(raw);
+	}
+
+	return [...found];
+}
+
+async function fetchAssemblyPartsFromViewer(
+	api: WorkspaceApi,
+	modelId: string,
+	modelName: string,
+): Promise<IfcPart[]> {
+	const viewer = api.viewer as unknown as {
+		getHierarchyChildren?: (
+			model: string,
+			entityIds: number[],
+			hierarchyType?: string,
+			recursive?: boolean,
+		) => Promise<unknown>;
+		getObjectProperties?: (
+			model: string,
+			objectRuntimeIds: number[],
+		) => Promise<ViewerObjectProperties[]>;
+	};
+
+	if (!viewer?.getHierarchyChildren || !viewer?.getObjectProperties) {
+		throw new Error("Viewer API for assembly queries is not available.");
+	}
+
+	const hierarchy = await viewer.getHierarchyChildren(modelId, [0], "assembly", true);
+	const runtimeIds = extractAssemblyRuntimeIds(hierarchy);
+	if (!runtimeIds.length) return [];
+
+	const chunkSize = 200;
+	const propertiesRows: ViewerObjectProperties[] = [];
+	for (let index = 0; index < runtimeIds.length; index += chunkSize) {
+		const slice = runtimeIds.slice(index, index + chunkSize);
+		const rows = await viewer.getObjectProperties(modelId, slice);
+		if (Array.isArray(rows)) propertiesRows.push(...rows);
+	}
+
+	const unique = new Map<string, IfcPart>();
+	for (const row of propertiesRows) {
+		const rowId = row.id;
+		const partId = typeof rowId === "number" ? String(rowId) : String(rowId ?? "");
+		if (!partId) continue;
+		if (unique.has(partId)) continue;
+		const partType = (row.class || "ASSEMBLY").toUpperCase();
+		const partName = row.product?.name || `${modelName} - Assembly ${partId}`;
+		unique.set(partId, {
+			id: partId,
+			name: partName,
+			type: partType,
+			material: pickMaterial(row),
+			modelId,
+			modelName,
+		});
+	}
+
+	return [...unique.values()];
 }
 
 function renderTable(
@@ -501,7 +558,7 @@ export async function renderWbs(
 	let wbsFilterValue = "";
 	let descriptionFilterValue = "";
 	let allIfcModels: IfcModelOption[] = [];
-	let allParts: IfcPart[] = [];
+	const partsByModelId = new Map<string, IfcPart[]>();
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
 	let assignments = loadAssignmentsFromLocalStorage();
@@ -618,22 +675,17 @@ export async function renderWbs(
 		if (allIfcModels.length > 0) {
 			refreshModelOptions();
 
-			// Current SDK does not expose per-object IFC querying in typings yet.
-			// Seed parts for UI flow and scope by selected IFC model.
-			allParts = allIfcModels.flatMap((model) =>
-				createSeededPartsForModel(model.id, model.name),
-			);
 		} else {
 			modelFilterEl.innerHTML =
 				'<option value="">No IFC files found in project folders</option>';
-			allParts = [];
+			partsByModelId.clear();
 		}
 
 		refreshPartsList();
 	} catch {
 		modelFilterEl.innerHTML =
 			'<option value="">Failed to load IFC files from project</option>';
-		allParts = [];
+		partsByModelId.clear();
 		refreshPartsList();
 	}
 
@@ -653,17 +705,44 @@ export async function renderWbs(
 
 	modelSearchEl.addEventListener("input", refreshModelOptions);
 
-	modelFilterEl.addEventListener("change", () => {
+	modelFilterEl.addEventListener("change", async () => {
 		selectedPartIds.clear();
 		const selectedModelId = modelFilterEl.value;
-		parts = selectedModelId
-			? allParts.filter((part) => part.modelId === selectedModelId)
-			: [];
+		if (!selectedModelId) {
+			parts = [];
+			refreshPartFilters();
+			refreshPartsList();
+			status.textContent = "Select an IFC model to load parts.";
+			return;
+		}
+
+		if (!partsByModelId.has(selectedModelId)) {
+			const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
+			partsListEl.innerHTML =
+				'<p class="text-sm text-gray-400 italic animate-pulse">Loading assemblies from IFC...</p>';
+			try {
+				const assemblyParts = await fetchAssemblyPartsFromViewer(
+					api,
+					selectedModelId,
+					selectedModel?.name ?? "IFC",
+				);
+				partsByModelId.set(selectedModelId, assemblyParts);
+			} catch (error) {
+				partsByModelId.set(selectedModelId, []);
+				const message =
+					error instanceof Error
+						? error.message
+						: "Failed to read assemblies from viewer.";
+				status.textContent = message;
+			}
+		}
+
+		parts = partsByModelId.get(selectedModelId) ?? [];
 		refreshPartFilters();
 		refreshPartsList();
 		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
 		status.textContent = selectedModelId
-			? `Loaded ${parts.length} part(s) for ${selectedModel?.name ?? "selected IFC model"}.`
+			? `Loaded ${parts.length} assembly item(s) for ${selectedModel?.name ?? "selected IFC model"}.`
 			: "Select an IFC model to load parts.";
 	});
 
