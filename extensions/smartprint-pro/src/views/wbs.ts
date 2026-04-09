@@ -605,6 +605,7 @@ export async function renderWbs(
 			return;
 		}
 
+		let loadMessage: string | null = null;
 		if (!partsByModelId.has(selectedModelId)) {
 			const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
 			partsListEl.innerHTML =
@@ -627,11 +628,10 @@ export async function renderWbs(
 				partsByModelId.set(selectedModelId, assemblyParts);
 			} catch (error) {
 				partsByModelId.set(selectedModelId, []);
-				const message =
+				loadMessage =
 					error instanceof Error
 						? error.message
 						: "Failed to read assemblies from viewer.";
-				status.textContent = message;
 			}
 		}
 
@@ -639,9 +639,17 @@ export async function renderWbs(
 		refreshPartFilters();
 		refreshPartsList();
 		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
-		status.textContent = selectedModelId
-			? `Loaded ${parts.length} assembly item(s) for ${selectedModel?.name ?? "selected IFC model"}.`
-			: "Select an IFC model to load parts.";
+		if (loadMessage) {
+			status.textContent = loadMessage;
+			return;
+		}
+
+		if (parts.length === 0) {
+			status.textContent = `No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Check processing status, tree availability, or class naming in model tree.`;
+			return;
+		}
+
+		status.textContent = `Loaded ${parts.length} assembly item(s) for ${selectedModel?.name ?? "selected IFC model"}.`;
 	});
 
 	typeFilterEl.addEventListener("change", refreshPartsList);
