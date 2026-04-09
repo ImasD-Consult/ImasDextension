@@ -2,6 +2,7 @@ import { escapeHtml } from "@imasd/shared";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
 import { read, utils } from "xlsx";
 import { fetchProjectIfcModels } from "../services/folders";
+import { writeWbsPropertySetValues } from "../services/pset";
 
 type WbsTableData = {
 	headers: string[];
@@ -28,6 +29,7 @@ type IfcPart = {
 
 type WbsAssignment = {
 	partId: string;
+	modelId?: string;
 	partName: string;
 	partType: string;
 	partMaterial: string;
@@ -741,6 +743,7 @@ export async function renderWbs(
 				partName: part.name,
 				partType: part.type,
 				partMaterial: part.material,
+				modelId: part.modelId ?? modelFilterEl.value,
 				wbsRowIndex: assignedRowIndex,
 				wbsValues: selectedRow,
 				propertySetName: "Pset_IMASD_WBS",
@@ -749,9 +752,30 @@ export async function renderWbs(
 			});
 		});
 
-		saveAssignmentsToLocalStorage(assignments);
-		refreshAssignments();
-		status.textContent = `Assigned WBS row ${assignedRowIndex + 4} to ${selectedParts.length} part(s).`;
+		const psetWriteItems = selectedParts.map((part) => {
+			const columnB = (selectedRow[1] ?? "").trim();
+			const columnD = (selectedRow[3] ?? "").trim();
+			const propertySetValue = `${columnB} - ${columnD}`;
+			return {
+				modelId: part.modelId ?? modelFilterEl.value,
+				partId: part.id,
+				value: propertySetValue,
+			};
+		});
+
+		writeWbsPropertySetValues(api, psetWriteItems)
+			.then(() => {
+				saveAssignmentsToLocalStorage(assignments);
+				refreshAssignments();
+				status.textContent = `Assigned WBS row ${assignedRowIndex + 4} to ${selectedParts.length} part(s) and updated Pset_IMASD_WBS.`;
+			})
+			.catch((error) => {
+				const message =
+					error instanceof Error ? error.message : "Failed to write property set.";
+				status.textContent = `Assignment saved locally, but Pset write failed: ${message}`;
+				saveAssignmentsToLocalStorage(assignments);
+				refreshAssignments();
+			});
 	});
 
 	uploadButton.addEventListener("click", async () => {
