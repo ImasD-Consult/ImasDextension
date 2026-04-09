@@ -717,42 +717,107 @@ export async function fetchIfcAssembliesFromFile(
 		return { nodeCount, classSamples };
 	}
 
+	/** Matches Trimble Workspace API `HierarchyType.ElementAssembly` (see trimble-connect-workspace-api). */
+	const HIERARCHY_TYPE_ELEMENT_ASSEMBLY = 4;
+
+	type ViewerModelLike = {
+		id: string;
+		versionId?: string;
+		name?: string;
+	};
+
+	function collectMatchingViewerModels(
+		models: ViewerModelLike[],
+	): ViewerModelLike[] {
+		const fileNameNorm = (ifcDisplayName ?? "").toLowerCase().trim();
+		const matched: ViewerModelLike[] = [];
+		for (const m of models) {
+			const nameNorm = (m.name ?? "").toLowerCase().trim();
+			const matchById =
+				m.id === ifcFileId ||
+				m.versionId === ifcVersionId ||
+				m.versionId === ifcFileId ||
+				m.id === ifcVersionId;
+			const matchByName =
+				fileNameNorm.length > 0 &&
+				nameNorm.length > 0 &&
+				(nameNorm === fileNameNorm ||
+					nameNorm.endsWith(fileNameNorm) ||
+					fileNameNorm.endsWith(nameNorm));
+			if (matchById || matchByName) matched.push(m);
+		}
+		if (matched.length === 0 && models.length === 1) return [models[0]];
+		return matched;
+	}
+
+	/**
+	 * Load assembly list via Viewer API (postMessage to Connect host). Avoids browser CORS on
+	 * `fetch(https://app*.connect.trimble.com/tc/api/...)` from a third-party extension origin.
+	 */
+	async function tryFetchAssembliesViaViewerHierarchy(): Promise<
+		IfcAssemblyItem[] | null
+	> {
+		const viewer = api.viewer;
+		if (!viewer?.getModels || !viewer.getHierarchyChildren) return null;
+		let models: ViewerModelLike[];
+		try {
+			models = (await viewer.getModels()) as ViewerModelLike[];
+		} catch {
+			return null;
+		}
+		if (!models?.length) return null;
+
+		const matched = collectMatchingViewerModels(models);
+		const primary = matched[0];
+		if (!primary?.id) return null;
+
+		try {
+			const entities = await viewer.getHierarchyChildren(
+				primary.id,
+				[],
+				HIERARCHY_TYPE_ELEMENT_ASSEMBLY,
+				true,
+			);
+			if (!entities?.length) return null;
+			const seen = new Set<string>();
+			const out: IfcAssemblyItem[] = [];
+			for (const e of entities) {
+				const key = String(e.id);
+				if (seen.has(key)) continue;
+				seen.add(key);
+				out.push({
+					id: key,
+					name: e.name?.trim() || `Assembly ${key}`,
+					type: "IFCELEMENTASSEMBLY",
+					material: "Unknown",
+				});
+			}
+			return out.length > 0 ? out : null;
+		} catch {
+			return null;
+		}
+	}
+
 	async function collectViewerTreeIds(): Promise<string[]> {
 		if (!api.viewer?.getModels) return [];
 		try {
-			const models = await api.viewer.getModels();
+			const models = (await api.viewer.getModels()) as ViewerModelLike[];
 			if (!models?.length) return [];
+			const matched = collectMatchingViewerModels(models);
 			const out: string[] = [];
-			const fileNameNorm = (ifcDisplayName ?? "").toLowerCase().trim();
-
-			for (const m of models) {
-				const nameNorm = (m.name ?? "").toLowerCase().trim();
-				const matchById =
-					m.id === ifcFileId ||
-					m.versionId === ifcVersionId ||
-					m.versionId === ifcFileId ||
-					m.id === ifcVersionId;
-				const matchByName =
-					fileNameNorm.length > 0 &&
-					nameNorm.length > 0 &&
-					(nameNorm === fileNameNorm ||
-						nameNorm.endsWith(fileNameNorm) ||
-						fileNameNorm.endsWith(nameNorm));
-				if (matchById || matchByName) {
-					if (m.id) out.push(m.id);
-					if (m.versionId) out.push(m.versionId);
-				}
+			for (const m of matched) {
+				if (m.id) out.push(m.id);
+				if (m.versionId) out.push(m.versionId);
 			}
-
-			if (out.length === 0 && models.length === 1) {
-				if (models[0].id) out.push(models[0].id);
-				if (models[0].versionId) out.push(models[0].versionId);
-			}
-
 			return [...new Set(out)];
 		} catch {
 			return [];
 		}
+	}
+
+	const viaViewerHierarchy = await tryFetchAssembliesViaViewerHierarchy();
+	if (viaViewerHierarchy) {
+		return viaViewerHierarchy;
 	}
 
 	let idCandidates = uniqStrings([
@@ -847,7 +912,7 @@ export async function fetchIfcAssembliesFromFile(
 				);
 			}
 			throw new Error(
-				`Model tree unavailable for selected IFC (no usable tree from API). Data API processing state: ${finalState}. ${originHint}`,
+				`Model tree unavailable for selected IFC (REST returned no usable tree; browser may block cross-origin requests from the extension host). Data API processing state: ${finalState}. Open the IFC in the 3D viewer and Retry — assemblies can load via the Viewer API without CORS. ${originHint}`,
 			);
 		}
 	}

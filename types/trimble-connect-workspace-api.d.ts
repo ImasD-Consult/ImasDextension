@@ -42,6 +42,15 @@ declare module "trimble-connect-workspace-api" {
 		};
 		viewer?: {
 			getModels(): Promise<ViewerModel[]>;
+			/** Assembly / spatial hierarchy without cross-origin fetch (postMessage to Connect). */
+			getHierarchyChildren?(
+				modelId: string,
+				entityIds: number[],
+				hierarchyType?: number,
+				recursive?: boolean,
+			): Promise<
+				Array<{ id: number; fileId: string; name: string }>
+			>;
 			toggleModel?(
 				modelId: string | string[],
 				loaded?: boolean,
