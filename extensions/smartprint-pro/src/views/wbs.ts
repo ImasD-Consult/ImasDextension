@@ -207,10 +207,30 @@ function createSeededPartsForModel(modelId: string, modelName: string): IfcPart[
 	}));
 }
 
-function renderTable(tableData: WbsTableData, selectedRowIndex: number | null): string {
+function renderTable(
+	tableData: WbsTableData,
+	selectedRowIndex: number | null,
+	wbsFilter: string,
+	descriptionFilter: string,
+): string {
 	if (!tableData.headers.length) {
 		return '<p class="text-sm text-gray-500 italic">No data found in the selected file.</p>';
 	}
+
+	const normalizedWbsFilter = wbsFilter.trim().toLowerCase();
+	const normalizedDescriptionFilter = descriptionFilter.trim().toLowerCase();
+	const visibleRows = tableData.rows
+		.map((row, sourceIndex) => ({ row, sourceIndex }))
+		.filter(({ row }) => {
+			const wbsValue = (row[1] ?? "").toLowerCase();
+			const descriptionValue = (row[3] ?? "").toLowerCase();
+			const matchesWbs =
+				!normalizedWbsFilter || wbsValue.includes(normalizedWbsFilter);
+			const matchesDescription =
+				!normalizedDescriptionFilter ||
+				descriptionValue.includes(normalizedDescriptionFilter);
+			return matchesWbs && matchesDescription;
+		});
 
 	const headerCells = tableData.headers
 		.map(
@@ -219,10 +239,10 @@ function renderTable(tableData: WbsTableData, selectedRowIndex: number | null): 
 		)
 		.join("");
 
-	const bodyRows = tableData.rows.length
-		? tableData.rows
-				.map((row, index) => {
-					const isSelected = selectedRowIndex === index;
+	const bodyRows = visibleRows.length
+		? visibleRows
+				.map(({ row, sourceIndex }) => {
+					const isSelected = selectedRowIndex === sourceIndex;
 					const cellClass = isSelected
 						? "px-3 py-2 text-sm text-white border-b border-brand-600 align-top"
 						: "px-3 py-2 text-sm text-gray-800 border-b border-gray-100 align-top";
@@ -232,13 +252,29 @@ function renderTable(tableData: WbsTableData, selectedRowIndex: number | null): 
 								`<td class="${cellClass}">${escapeHtml(cell)}</td>`,
 						)
 						.join("");
-					return `<tr class="cursor-pointer ${isSelected ? "bg-brand-700" : "hover:bg-gray-50"}" data-wbs-row="${index}">${cells}</tr>`;
+					return `<tr class="cursor-pointer ${isSelected ? "bg-brand-700" : "hover:bg-gray-50"}" data-wbs-row="${sourceIndex}">${cells}</tr>`;
 				})
 				.join("")
 		: `<tr><td class="px-3 py-3 text-sm text-gray-500 italic" colspan="${tableData.headers.length}">No rows found.</td></tr>`;
 
 	return `
     <div class="rounded-lg border border-gray-200 overflow-hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 p-2 border-b border-gray-200 bg-gray-50">
+        <input
+          type="text"
+          value="${escapeHtml(wbsFilter)}"
+          placeholder="Filter WBS (column B)"
+          class="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+          data-wbs-filter
+        />
+        <input
+          type="text"
+          value="${escapeHtml(descriptionFilter)}"
+          placeholder="Filter Description (column D)"
+          class="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+          data-description-filter
+        />
+      </div>
       <div class="max-h-[62vh] overflow-auto">
         <table class="min-w-full border-collapse">
           <thead class="sticky top-0 z-10">
@@ -334,30 +370,35 @@ export async function renderWbs(
 	api: WorkspaceApi,
 ): Promise<void> {
 	container.innerHTML = `
-    <h2 class="text-lg font-semibold">WBS</h2>
-    <p class="mt-1 text-sm text-gray-500">Upload, preview, and assign WBS rows to IFC parts</p>
+    <div class="rounded-lg border border-gray-200 p-3">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-lg font-semibold">WBS</h2>
+          <p class="mt-1 text-sm text-gray-500">Upload, preview, and assign WBS rows to IFC parts</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <input
+            id="wbs-file"
+            type="file"
+            accept=".xlsx,.xls"
+            class="min-w-0 block text-sm text-gray-700 file:mr-2 file:rounded file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:font-medium file:text-brand-700 hover:file:bg-brand-100"
+          />
+          <button
+            type="button"
+            class="shrink-0 rounded px-4 py-2 text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
+            data-wbs-upload
+          >
+            Upload File
+          </button>
+        </div>
+      </div>
+      <p class="mt-2 text-sm text-gray-600" data-wbs-status>No file uploaded yet. Expected file type: Excel template (.xlsx).</p>
+    </div>
 
     <div class="mt-3 space-y-3">
-      <div class="flex items-center gap-2">
-        <input
-          id="wbs-file"
-          type="file"
-          accept=".xlsx,.xls"
-          class="min-w-0 flex-1 block text-sm text-gray-700 file:mr-3 file:rounded file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:font-medium file:text-brand-700 hover:file:bg-brand-100"
-        />
-        <button
-          type="button"
-          class="shrink-0 rounded px-4 py-2 text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
-          data-wbs-upload
-        >
-          Upload File
-        </button>
-      </div>
-
-      <p class="text-sm text-gray-600" data-wbs-status>No file uploaded yet. Expected file type: Excel template (.xlsx).</p>
 
       <div class="grid grid-cols-12 gap-4">
-        <div class="col-span-12 lg:col-span-4 rounded-lg border border-gray-200 p-3 space-y-2">
+        <div class="col-span-12 lg:col-span-7 rounded-lg border border-gray-200 p-3 space-y-2">
           <h3 class="text-sm font-semibold text-gray-700">IFC Parts (MVP)</h3>
 
           <div>
@@ -398,7 +439,7 @@ export async function renderWbs(
           <p class="text-xs text-gray-500">Assignments are stored in local Pset_IMASD_WBS mapping for now.</p>
         </div>
 
-        <div class="col-span-12 lg:col-span-8" data-wbs-table>
+        <div class="col-span-12 lg:col-span-5" data-wbs-table>
           <p class="text-sm text-gray-400 italic">Upload a WBS file to preview and select a row.</p>
         </div>
       </div>
@@ -455,6 +496,8 @@ export async function renderWbs(
 
 	let tableData: WbsTableData = { headers: [], rows: [] };
 	let selectedWbsRowIndex: number | null = null;
+	let wbsFilterValue = "";
+	let descriptionFilterValue = "";
 	let allIfcModels: IfcModelOption[] = [];
 	let allParts: IfcPart[] = [];
 	let parts: IfcPart[] = [];
@@ -503,7 +546,12 @@ export async function renderWbs(
 	}
 
 	function refreshWbsTable(): void {
-		tableContainerEl.innerHTML = renderTable(tableData, selectedWbsRowIndex);
+		tableContainerEl.innerHTML = renderTable(
+			tableData,
+			selectedWbsRowIndex,
+			wbsFilterValue,
+			descriptionFilterValue,
+		);
 		refreshAssignButton();
 	}
 
@@ -621,6 +669,24 @@ export async function renderWbs(
 		refreshWbsTable();
 	});
 
+	container.addEventListener("input", (event) => {
+		const target = event.target as HTMLElement;
+		const wbsFilterInput = target.closest<HTMLInputElement>("[data-wbs-filter]");
+		if (wbsFilterInput) {
+			wbsFilterValue = wbsFilterInput.value;
+			refreshWbsTable();
+			return;
+		}
+
+		const descriptionFilterInput = target.closest<HTMLInputElement>(
+			"[data-description-filter]",
+		);
+		if (descriptionFilterInput) {
+			descriptionFilterValue = descriptionFilterInput.value;
+			refreshWbsTable();
+		}
+	});
+
 	assignButtonEl.addEventListener("click", () => {
 		if (selectedWbsRowIndex === null) return;
 		const assignedRowIndex = selectedWbsRowIndex;
@@ -668,6 +734,8 @@ export async function renderWbs(
 			const fileBuffer = await selectedFile.arrayBuffer();
 			tableData = parseWorkbookToTableData(fileBuffer);
 			selectedWbsRowIndex = null;
+			wbsFilterValue = "";
+			descriptionFilterValue = "";
 			saveFileToLocalStorage(selectedFile, fileBuffer);
 			refreshWbsTable();
 			status.textContent = `Loaded ${selectedFile.name} (${tableData.rows.length} rows). File saved locally.`;
