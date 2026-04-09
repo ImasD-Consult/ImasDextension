@@ -177,6 +177,42 @@ function isIfcFile(name: string): boolean {
 	return IFC_EXTENSIONS.some((ext) => lower.endsWith(ext));
 }
 
+/**
+ * When the extension runs on a custom host (e.g. extensions.imasd.dev), relative `/tc/api/...`
+ * requests do not reach Trimble Connect. Prefer VITE_TRIMBLE_CONNECT_ORIGIN, then the Connect
+ * iframe parent from ancestorOrigins, then known regional hosts.
+ */
+function getConnectTrimbleBaseUrls(): string[] {
+	const bases = new Set<string>();
+	const env = (
+		import.meta as ImportMeta & {
+			env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string };
+		}
+	).env?.VITE_TRIMBLE_CONNECT_ORIGIN;
+	if (env?.trim()) {
+		bases.add(env.replace(/\/$/, ""));
+	}
+
+	if (typeof window !== "undefined" && window.location.ancestorOrigins?.length) {
+		for (let i = 0; i < window.location.ancestorOrigins.length; i++) {
+			try {
+				const { origin, hostname } = new URL(window.location.ancestorOrigins[i]);
+				if (/connect\.trimble\.com$/i.test(hostname)) {
+					bases.add(origin);
+				}
+			} catch {
+				/* ignore invalid ancestor URL */
+			}
+		}
+	}
+
+	for (const r of Object.values(TRIMBLE_REGIONS)) {
+		bases.add(r.host);
+	}
+
+	return [...bases];
+}
+
 export async function fetchProjectIfcModels(
 	api: WorkspaceApi,
 ): Promise<IfcModelItem[]> {
@@ -348,6 +384,53 @@ function collectAllObjectNodesFromTree(
 	}
 }
 
+function treeWalkCount(node: unknown): number {
+	if (node == null) return 0;
+	if (Array.isArray(node)) {
+		return node.reduce((sum, n) => sum + treeWalkCount(n), 0);
+	}
+	if (typeof node !== "object") return 0;
+	const o = node as Record<string, unknown>;
+	let count = 1;
+	for (const child of readNodeChildren(o)) {
+		count += treeWalkCount(child);
+	}
+	return count;
+}
+
+/** Reject empty 200 bodies (e.g. `{}`) that are not a real model tree. */
+function isUsableTreeResponse(data: unknown): boolean {
+	if (data == null) return false;
+	if (Array.isArray(data)) return data.length > 0;
+	if (typeof data !== "object") return false;
+	const o = data as Record<string, unknown>;
+	if (Object.keys(o).length === 0) return false;
+	const wc = treeWalkCount(data);
+	if (wc > 1) return true;
+	if (wc === 1) {
+		const hasId =
+			readNodeString(o, ["guid", "id", "runtimeId", "entityId"])?.length ?? 0;
+		return hasId > 0;
+	}
+	return false;
+}
+
+function deepFindString(obj: unknown, keys: string[]): string | undefined {
+	if (!obj || typeof obj !== "object") return undefined;
+	const o = obj as Record<string, unknown>;
+	for (const k of keys) {
+		const v = o[k];
+		if (typeof v === "string" && v.trim().length > 0) return v;
+	}
+	for (const v of Object.values(o)) {
+		if (v && typeof v === "object") {
+			const found = deepFindString(v, keys);
+			if (found) return found;
+		}
+	}
+	return undefined;
+}
+
 export async function fetchIfcAssembliesFromFile(
 	api: WorkspaceApi,
 	ifcFileId: string,
@@ -389,58 +472,70 @@ export async function fetchIfcAssembliesFromFile(
 		}
 	}
 
+	function buildModelTreePaths(encoded: string, projectIdEnc: string): string[] {
+		return [
+			`/tc/api/2.0/model/${encoded}/tree?projectId=${projectIdEnc}&depth=-1`,
+			`/tc/api/2.0/model/${encoded}/tree?depth=-1`,
+			`/tc/api/2.1/model/${encoded}/tree?projectId=${projectIdEnc}&depth=-1`,
+			`/tc/api/2.1/model/${encoded}/tree?depth=-1`,
+			`/tc/api/2.0/projects/${projectIdEnc}/models/${encoded}/hierarchies?depth=-1&hierarchyType=assembly`,
+			`/tc/api/2.0/projects/${projectIdEnc}/models/${encoded}/hierarchies?depth=-1`,
+			`/tc/api/2.0/projects/${projectIdEnc}/model/${encoded}/tree?depth=-1`,
+		];
+	}
+
+	function expandToAbsoluteUrls(paths: string[]): string[] {
+		const out: string[] = [];
+		const seen = new Set<string>();
+		for (const base of getConnectTrimbleBaseUrls()) {
+			for (const p of paths) {
+				const u = `${base}${p}`;
+				if (!seen.has(u)) {
+					seen.add(u);
+					out.push(u);
+				}
+			}
+		}
+		for (const p of paths) {
+			if (!seen.has(p)) {
+				seen.add(p);
+				out.push(p);
+			}
+		}
+		return out;
+	}
+
 	async function getModelTreeById(
 		fileOrVersionId: string,
 	): Promise<unknown | null> {
 		const encoded = encodeURIComponent(fileOrVersionId);
-		const relativeUrlsPrimary = [
-			`/tc/api/2.0/model/${encoded}/tree?projectId=${encodeURIComponent(project.id)}&depth=-1`,
-			`/tc/api/2.0/model/${encoded}/tree?depth=-1`,
-			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/models/${encoded}/hierarchies?depth=-1`,
-			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/model/${encoded}/tree?depth=-1`,
-		];
-		// Fast path: query same-origin API variants in parallel and return first success.
-		const primaryResults = await Promise.all(
-			relativeUrlsPrimary.map((url) => fetchJsonWithTimeout(url, 3500)),
+		const projectIdEnc = encodeURIComponent(project.id);
+		const paths = buildModelTreePaths(encoded, projectIdEnc);
+		const urls = expandToAbsoluteUrls(paths);
+		const results = await Promise.all(
+			urls.map((url) => fetchJsonWithTimeout(url, 5500)),
 		);
-		const primaryMatch = primaryResults.find((item) => item !== null);
-		if (primaryMatch) return primaryMatch;
-
-		// Slow fallback: only if fast path failed, try absolute regional hosts in parallel.
-		const absoluteUrls = Object.values(TRIMBLE_REGIONS).flatMap((region) =>
-			relativeUrlsPrimary.map((path) => `${region.host}${path}`),
-		);
-		const absoluteResults = await Promise.all(
-			absoluteUrls.map((url) => fetchJsonWithTimeout(url, 5000)),
-		);
-		const absoluteMatch = absoluteResults.find((item) => item !== null);
-		if (absoluteMatch) return absoluteMatch;
+		for (let i = 0; i < results.length; i++) {
+			const item = results[i];
+			if (item !== null && isUsableTreeResponse(item)) {
+				return item;
+			}
+		}
 		return null;
 	}
 
 	async function getFileInfoById(fileOrVersionId: string): Promise<unknown | null> {
 		const encoded = encodeURIComponent(fileOrVersionId);
-		const relativeUrls = [
+		const paths = [
 			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/files/${encoded}`,
 			`/tc/api/2.0/files/${encoded}?projectId=${encodeURIComponent(project.id)}`,
 			`/tc/api/2.0/files/${encoded}`,
 		];
-		const relativeResults = await Promise.all(
-			relativeUrls.map((url) => fetchJsonWithTimeout(url, 2500)),
+		const urls = expandToAbsoluteUrls(paths);
+		const results = await Promise.all(
+			urls.map((url) => fetchJsonWithTimeout(url, 4500)),
 		);
-		const relativeMatch = relativeResults.find((item) => item !== null);
-		if (relativeMatch) return relativeMatch;
-
-		const absoluteUrls = Object.values(TRIMBLE_REGIONS).flatMap((region) =>
-			relativeUrls.map((path) => `${region.host}${path}`),
-		);
-		const absoluteResults = await Promise.all(
-			absoluteUrls.map((url) => fetchJsonWithTimeout(url, 4000)),
-		);
-		const absoluteMatch = absoluteResults.find((item) => item !== null);
-		if (absoluteMatch) return absoluteMatch;
-
-		return null;
+		return results.find((item) => item !== null) ?? null;
 	}
 
 	function analyzeTree(treeValue: unknown): {
@@ -497,19 +592,33 @@ export async function fetchIfcAssembliesFromFile(
 	);
 
 	function getFileProcessingState(fileObj: Record<string, unknown> | null): string {
-		return (
-			readNodeString(fileObj ?? {}, [
-				"processingState",
-				"processingStatus",
-				"status",
-				"conversionStatus",
-			]) ?? "unknown"
-		);
+		if (!fileObj) return "unknown";
+		const specific = deepFindString(fileObj, [
+			"processingState",
+			"processingStatus",
+			"conversionStatus",
+			"modelProcessingState",
+		]);
+		if (specific) return specific;
+		const generic = deepFindString(fileObj, ["status"]);
+		return generic ?? "unknown";
 	}
 
 	function shouldPollForModelTree(stateRaw: string): boolean {
 		const s = stateRaw.toUpperCase().replace(/\s+/g, "");
-		if (s === "UNKNOWN") return true;
+		if (!s || s === "UNKNOWN") return false;
+		if (s.includes("FAIL") || s.includes("ERROR")) return false;
+		if (
+			s.includes("READY") ||
+			s.includes("COMPLETE") ||
+			s.includes("SUCCESS") ||
+			s.includes("PROCESSED") ||
+			s === "OK" ||
+			s.includes("AVAILABLE") ||
+			s === "ACTIVE"
+		) {
+			return false;
+		}
 		if (s.includes("PROCESS")) return true;
 		if (s === "QUEUED" || s === "PENDING" || s.includes("CONVERT")) return true;
 		return false;
@@ -559,13 +668,15 @@ export async function fetchIfcAssembliesFromFile(
 
 		if (!tree) {
 			const finalState = getFileProcessingState(fileObj);
+			const originHint =
+				"If the model opens in 3D but this fails, set VITE_TRIMBLE_CONNECT_ORIGIN to your Trimble Connect origin (e.g. https://app21.connect.trimble.com) and rebuild the extension.";
 			if (shouldPollForModelTree(finalState)) {
 				throw new Error(
-					`Model tree still unavailable after waiting (~3 min). File processing state: ${finalState}. Open the file in Trimble Connect Data view and confirm processing finished, then Retry.`,
+					`Model tree still unavailable after waiting (~3 min). File processing state: ${finalState}. Open the file in Trimble Connect Data view and confirm processing finished, then Retry. ${originHint}`,
 				);
 			}
 			throw new Error(
-				`Model tree unavailable for selected IFC. File processing state: ${finalState}.`,
+				`Model tree unavailable for selected IFC (no usable tree from API). File processing state: ${finalState}. ${originHint}`,
 			);
 		}
 	}

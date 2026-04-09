@@ -144,9 +144,10 @@ export class TrimbleClient {
 		fileId: string,
 		projectId?: string,
 	): Promise<TrimbleModelTreeNode | TrimbleModelTreeNode[] | null> {
-		const query = projectId
-			? `?projectId=${encodeURIComponent(projectId)}`
-			: "";
+		const params = new URLSearchParams();
+		if (projectId) params.set("projectId", projectId);
+		params.set("depth", "-1");
+		const query = params.toString() ? `?${params.toString()}` : "";
 		try {
 			return await this.get<TrimbleModelTreeNode | TrimbleModelTreeNode[]>(
 				"2.0",
