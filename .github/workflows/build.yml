@@ -59,6 +59,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             EXTENSION_URL=${{ matrix.extension.extension_url }}
+            VITE_TRIMBLE_CONNECT_ORIGIN=${{ vars.VITE_TRIMBLE_CONNECT_ORIGIN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

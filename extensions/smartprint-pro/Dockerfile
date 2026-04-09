@@ -20,6 +20,10 @@ COPY types/ ./types/
 COPY packages/ ./packages/
 COPY extensions/smartprint-pro/ ./extensions/smartprint-pro/
 
+# Baked into the bundle so cross-origin fetches target the same Connect host as the viewer (set per region).
+ARG VITE_TRIMBLE_CONNECT_ORIGIN=
+ENV VITE_TRIMBLE_CONNECT_ORIGIN=${VITE_TRIMBLE_CONNECT_ORIGIN}
+
 RUN pnpm --filter @imasd/ext-smartprint-pro build
 
 FROM node:22-alpine

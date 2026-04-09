@@ -206,6 +206,18 @@ function getConnectTrimbleBaseUrls(): string[] {
 		}
 	}
 
+	// When ancestorOrigins is missing (some browsers), the embedding Connect tab is often in referrer.
+	if (typeof document !== "undefined" && document.referrer) {
+		try {
+			const { origin, hostname } = new URL(document.referrer);
+			if (/connect\.trimble\.com$/i.test(hostname)) {
+				bases.add(origin);
+			}
+		} catch {
+			/* ignore */
+		}
+	}
+
 	for (const r of Object.values(TRIMBLE_REGIONS)) {
 		bases.add(r.host);
 	}
@@ -289,9 +301,33 @@ function readNodeString(
 }
 
 function readNodeChildren(node: Record<string, unknown>): unknown[] {
-	const candidates = [node.children, node.items, node.nodes, node.entities];
-	for (const candidate of candidates) {
+	const arrayKeys = [
+		"children",
+		"items",
+		"nodes",
+		"entities",
+		"elements",
+		"members",
+	];
+	for (const key of arrayKeys) {
+		const candidate = node[key];
 		if (Array.isArray(candidate)) return candidate;
+	}
+	// Common single-child wrappers from Connect / model APIs (treeWalkCount & validation)
+	const objectKeys = [
+		"tree",
+		"data",
+		"model",
+		"hierarchy",
+		"root",
+		"result",
+		"value",
+	];
+	for (const key of objectKeys) {
+		const v = node[key];
+		if (v != null && typeof v === "object") {
+			return Array.isArray(v) ? v : [v];
+		}
 	}
 	return [];
 }
@@ -398,14 +434,43 @@ function treeWalkCount(node: unknown): number {
 	return count;
 }
 
+/**
+ * Core API often wraps the tree as { tree }, { data }, or puts roots in items[].
+ * Without unwrapping, validation sees a single empty shell and rejects a valid payload.
+ */
+function unwrapModelTreePayload(data: unknown): unknown {
+	if (data == null) return data;
+	if (Array.isArray(data)) return data;
+	if (typeof data !== "object") return data;
+	const o = data as Record<string, unknown>;
+	if (Array.isArray(o.items) && o.items.length > 0) return o.items;
+	if (Array.isArray(o.models) && o.models.length > 0) return o.models;
+	if (Array.isArray(o.nodes) && o.nodes.length > 0) return o.nodes;
+	for (const k of [
+		"tree",
+		"model",
+		"hierarchy",
+		"result",
+		"value",
+		"data",
+	]) {
+		const v = o[k];
+		if (v != null && typeof v === "object") {
+			return unwrapModelTreePayload(v);
+		}
+	}
+	return data;
+}
+
 /** Reject empty 200 bodies (e.g. `{}`) that are not a real model tree. */
 function isUsableTreeResponse(data: unknown): boolean {
-	if (data == null) return false;
-	if (Array.isArray(data)) return data.length > 0;
-	if (typeof data !== "object") return false;
-	const o = data as Record<string, unknown>;
+	const payload = unwrapModelTreePayload(data);
+	if (payload == null) return false;
+	if (Array.isArray(payload)) return payload.length > 0;
+	if (typeof payload !== "object") return false;
+	const o = payload as Record<string, unknown>;
 	if (Object.keys(o).length === 0) return false;
-	const wc = treeWalkCount(data);
+	const wc = treeWalkCount(payload);
 	if (wc > 1) return true;
 	if (wc === 1) {
 		const hasId =
@@ -577,7 +642,7 @@ export async function fetchIfcAssembliesFromFile(
 		for (let i = 0; i < results.length; i++) {
 			const item = results[i];
 			if (item !== null && isUsableTreeResponse(item)) {
-				return item;
+				return unwrapModelTreePayload(item);
 			}
 		}
 		return null;
