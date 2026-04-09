@@ -24,10 +24,21 @@ if [ -n "$BASE" ]; then
 	cat > /app/manifest.json <<EOF
 {
   "title": "smartprintPRO",
-  "description": "ImasD / smartprintPRO integration for Trimble Connect",
+  "description": "smartprintPRO — register under Project → Extensions (Data) only. Use manifest-3d.json for 3D Viewer.",
   "configCommand": "do_config",
   "enabled": true,
-  "extensionType": ["project", "3dviewer"],
+  "extensionType": ["project"],
+  "icon": "${BASE}/logo.svg",
+  "url": "${BASE}"
+}
+EOF
+	cat > /app/manifest-3d.json <<EOF
+{
+  "title": "smartprintPRO",
+  "description": "smartprintPRO — register under 3D Viewer → Settings → Extensions only.",
+  "configCommand": "do_config",
+  "enabled": true,
+  "extensionType": ["3dviewer"],
   "icon": "${BASE}/logo.svg",
   "url": "${BASE}"
 }

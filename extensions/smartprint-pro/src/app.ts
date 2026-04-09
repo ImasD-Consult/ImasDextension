@@ -10,6 +10,7 @@ type Command = "smartprint_main" | "processes" | "wbs" | "info";
 const ROOT_ID = "smartprint-root";
 const NAV_MOUNT_ID = "smartprint-nav-mount";
 const CONTENT_ID = "smartprint-content";
+const TAB_PARAM = "tab";
 
 function normalizeRoute(raw: string): Command {
 	const r = raw.replace(/^#/, "").trim();
@@ -24,14 +25,36 @@ function normalizeRoute(raw: string): Command {
 	return "smartprint_main";
 }
 
+/** Use query `?tab=` instead of `#hash` so we do not fight Trimble Connect’s own `#/project/...` routing in the host. */
+function getTabFromLocation(): Command {
+	const t = new URLSearchParams(window.location.search)
+		.get(TAB_PARAM)
+		?.trim();
+	if (
+		t === "wbs" ||
+		t === "processes" ||
+		t === "info" ||
+		t === "smartprint_main"
+	) {
+		return t;
+	}
+	return "wbs";
+}
+
+function setTabQuery(cmd: Command): void {
+	const u = new URL(window.location.href);
+	u.searchParams.set(TAB_PARAM, cmd);
+	history.replaceState(null, "", `${u.pathname}${u.search}`);
+}
+
 function renderInPanelNav(active: Command): string {
 	const item = (cmd: Command, label: string) => {
 		const isOn = active === cmd;
-		return `<a href="#${cmd}" class="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium border transition-colors ${
+		return `<button type="button" data-sp-tab="${cmd}" class="inline-flex items-center px-3 py-1.5 rounded-md text-sm font-medium border transition-colors ${
 			isOn
 				? "border-blue-400 bg-blue-50 text-blue-900"
 				: "border-transparent text-gray-600 hover:bg-gray-100"
-		}">${label}</a>`;
+		}">${label}</button>`;
 	};
 	return `<nav class="flex flex-wrap gap-1 border-b border-gray-200 pb-2 mb-3 shrink-0" aria-label="smartprintPRO sections">
       ${item("wbs", "WBS")}
@@ -87,12 +110,34 @@ async function handleCommand(
 				cmd === "smartprint_main" ? "smartprint_main" : cmd,
 			);
 		} catch {
-			/* 3D viewer host may not expose the same submenu chrome */
+			/* host may not expose submenu chrome */
 		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		content.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
 	}
+}
+
+function bindTabClicks(
+	container: HTMLElement,
+	runRoute: (raw: string) => void | Promise<void>,
+): void {
+	container.addEventListener("click", (e) => {
+		const btn = (e.target as HTMLElement).closest("[data-sp-tab]");
+		if (!btn) return;
+		e.preventDefault();
+		const tab = btn.getAttribute("data-sp-tab");
+		if (
+			tab !== "wbs" &&
+			tab !== "processes" &&
+			tab !== "info" &&
+			tab !== "smartprint_main"
+		) {
+			return;
+		}
+		setTabQuery(tab);
+		void runRoute(tab);
+	});
 }
 
 export async function initApp(): Promise<void> {
@@ -118,8 +163,9 @@ export async function initApp(): Promise<void> {
 				cmd === "info" ||
 				cmd === "smartprint_main"
 			) {
-				if (window.location.hash !== `#${cmd}`) {
-					window.location.hash = cmd;
+				if (getTabFromLocation() !== cmd) {
+					setTabQuery(cmd as Command);
+					await handleCommand(cmd, container, api);
 					return;
 				}
 			}
@@ -137,16 +183,16 @@ export async function initApp(): Promise<void> {
 			],
 		});
 
-		window.addEventListener("hashchange", () => {
-			const route = window.location.hash.replace(/^#/, "").trim();
-			void runRoute(route);
+		bindTabClicks(container, runRoute);
+
+		window.addEventListener("popstate", () => {
+			void runRoute(getTabFromLocation());
 		});
 
-		if (!window.location.hash) {
-			window.location.hash = "wbs";
-		} else {
-			await runRoute(window.location.hash.replace(/^#/, "").trim());
+		if (!new URLSearchParams(window.location.search).has(TAB_PARAM)) {
+			setTabQuery("wbs");
 		}
+		await runRoute(getTabFromLocation());
 	} catch (err) {
 		const message = err instanceof Error ? err.message : "Failed to connect";
 		container.innerHTML = `

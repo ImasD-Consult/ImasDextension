@@ -17,12 +17,9 @@ export function renderInfo(container: HTMLElement): void {
       </section>
 
       <section>
-        <h3 class="text-sm font-semibold text-gray-700">WBS &amp; IFC assemblies</h3>
+        <h3 class="text-sm font-semibold text-gray-700">Two manifests (same server)</h3>
         <p class="mt-1 text-sm text-gray-600">
-          Add this extension under <strong class="text-gray-800">3D Viewer → Settings → Extensions</strong> (manifest includes 3D viewer mode), then open your IFC in the 3D viewer before loading assemblies. Project‑only installs have limited viewer API access.
-        </p>
-        <p class="mt-2 text-sm text-gray-600">
-          If <strong class="text-gray-800">smartprintPRO</strong> appears twice in the sidebar, you likely added the same manifest in both <strong>Project → Extensions</strong> and <strong>3D Viewer → Extensions</strong>. Remove one of the entries so only a single install remains.
+          Use <strong class="text-gray-800">manifest.json</strong> only under <strong>Project → Extensions</strong> (Data / folders), and <strong class="text-gray-800">manifest-3d.json</strong> only under <strong>3D Viewer → Settings → Extensions</strong>. Same app URL; different <code class="text-xs bg-gray-100 px-1 rounded">extensionType</code> avoids duplicate sidebar entries. For assembly loading from the IFC, prefer the 3D viewer install and open the model in 3D.
         </p>
       </section>
 
