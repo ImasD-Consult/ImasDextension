@@ -57,6 +57,96 @@ export type RenderWbsOptions = {
 	horizontalDockLayout?: boolean;
 };
 
+/** BIM models we support for WBS / IFC assembly APIs (excludes DWG etc. from the file tree). */
+function isIfcFileName(name: string | undefined): boolean {
+	if (!name) return false;
+	return /\.(ifc|ifczip|ifcxml)$/i.test(name.trim());
+}
+
+type ViewerModelRow = {
+	id: string;
+	versionId?: string;
+	name?: string;
+	state?: string;
+};
+
+function modelIdInSet(m: ViewerModelRow, ids: Set<string>): boolean {
+	const a = m.id ? String(m.id) : "";
+	const b = m.versionId ? String(m.versionId) : "";
+	return (a.length > 0 && ids.has(a)) || (b.length > 0 && ids.has(b));
+}
+
+/**
+ * `getModels()` lists files from the project tree (order not guaranteed — a DWG can appear before an IFC).
+ * `getPresentation()?.applyToModels` lists model ids applied to the current 3D view (same idea as “Selected models”).
+ */
+async function resolveViewerModelsForWbs(
+	api: WorkspaceApi,
+): Promise<ViewerModelRow[]> {
+	const viewer = api.viewer;
+	if (!viewer?.getModels) return [];
+
+	const gv = viewer.getModels.bind(viewer) as (
+		state?: "loaded" | "unloaded",
+	) => Promise<ViewerModelRow[]>;
+
+	async function fetchAll(): Promise<ViewerModelRow[]> {
+		try {
+			const all = (await gv()) as ViewerModelRow[];
+			return Array.isArray(all) ? all : [];
+		} catch {
+			return [];
+		}
+	}
+
+	let appliedIds: string[] | undefined;
+	try {
+		const pres = await viewer.getPresentation?.();
+		appliedIds = pres?.applyToModels;
+	} catch {
+		appliedIds = undefined;
+	}
+	const appliedSet = new Set(
+		(appliedIds ?? []).map((x) => String(x)).filter(Boolean),
+	);
+
+	let pool = await fetchAll();
+
+	if (appliedSet.size > 0) {
+		const narrowed = pool.filter((m) => modelIdInSet(m, appliedSet));
+		if (narrowed.length > 0) {
+			pool = narrowed;
+		}
+	}
+
+	let list: ViewerModelRow[] = [];
+	try {
+		const loadedOnly = (await gv("loaded")) as ViewerModelRow[];
+		if (Array.isArray(loadedOnly) && loadedOnly.length > 0) {
+			const poolIds = new Set(pool.map((p) => p.id));
+			const intersect = loadedOnly.filter((m) => poolIds.has(m.id));
+			list = intersect.length > 0 ? intersect : loadedOnly.filter((m) =>
+				pool.some((p) => p.id === m.id || (p.versionId && p.versionId === m.versionId)),
+			);
+			if (list.length === 0) {
+				list = loadedOnly;
+			}
+		}
+	} catch {
+		/* host may not support "loaded" */
+	}
+
+	if (list.length === 0) {
+		const byState = pool.filter(
+			(m) => (m.state ?? "").toLowerCase() === "loaded",
+		);
+		list = byState.length > 0 ? byState : pool;
+	}
+
+	const ifcPreferred = list.filter((m) => isIfcFileName(m.name));
+	return ifcPreferred.length > 0 ? ifcPreferred : list;
+}
+
 function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
 	const workbook = read(fileBuffer, { type: "array" });
 	const firstSheetName = workbook.SheetNames[0];
@@ -892,52 +982,7 @@ export async function renderWbs(
 				);
 				refreshPartsList();
 			} else {
-				type ViewerRow = {
-					id: string;
-					versionId?: string;
-					name?: string;
-					state?: string;
-				};
-
-				const gv = api.viewer.getModels.bind(api.viewer) as (
-					state?: "loaded" | "unloaded",
-				) => Promise<ViewerRow[]>;
-
-				async function fetchAllModelsRaw(): Promise<ViewerRow[]> {
-					try {
-						const all = (await gv()) as ViewerRow[];
-						return Array.isArray(all) ? all : [];
-					} catch {
-						return [];
-					}
-				}
-
-				/**
-				 * Many Connect builds return [] for `getModels("loaded")` or omit `state` on `getModels()`.
-				 * Fall back to the full list (same idea as the old IFC dropdown — first model usually matches the open file).
-				 */
-				let list: ViewerRow[] = [];
-				try {
-					const loadedOnly = (await gv("loaded")) as ViewerRow[];
-					if (Array.isArray(loadedOnly) && loadedOnly.length > 0) {
-						list = loadedOnly;
-					}
-				} catch {
-					/* host may not support the "loaded" argument */
-				}
-
-				if (list.length === 0) {
-					const all = await fetchAllModelsRaw();
-					const withStateLoaded = all.filter(
-						(m) => (m.state ?? "").toLowerCase() === "loaded",
-					);
-					list =
-						withStateLoaded.length > 0
-							? withStateLoaded
-							: all.length > 0
-								? all
-								: [];
-				}
+				const list = await resolveViewerModelsForWbs(api);
 
 				if (list.length === 0) {
 					partsByModelId.clear();
@@ -960,9 +1005,9 @@ export async function renderWbs(
 					setViewerModelUi(chosen);
 					const multiHint =
 						list.length > 1
-							? ` (first of ${list.length} models reported by the viewer)`
+							? ` (using first of ${list.length} after view / IFC filters)`
 							: "";
-					setStatus(`Using IFC: ${chosen.name}${multiHint}.`);
+					setStatus(`Using model: ${chosen.name}${multiHint}.`);
 					await loadAssembliesForSelectedModel(false);
 				}
 			}

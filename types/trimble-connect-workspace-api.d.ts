@@ -57,6 +57,8 @@ declare module "trimble-connect-workspace-api" {
 				modelId: string,
 				objectRuntimeIds: number[],
 			): Promise<Array<{ class?: string; id?: number }>>;
+			/** Current view: `applyToModels` aligns with models selected for the 3D view (vs raw `getModels()` file tree). */
+			getPresentation?(): Promise<{ applyToModels?: string[] }>;
 			/** Children of parent entity IDs — use roots like `[0]` not `[]`. */
 			getHierarchyChildren?(
 				modelId: string,
