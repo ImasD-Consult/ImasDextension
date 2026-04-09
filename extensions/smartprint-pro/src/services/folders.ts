@@ -260,17 +260,13 @@ function readNodeChildren(node: Record<string, unknown>): unknown[] {
 	return [];
 }
 
-function collectIfcAssembliesFromTree(
-	tree: unknown,
-	acc: IfcAssemblyItem[],
-	seen: Set<string>,
-): void {
+function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], seen: Set<string>): void {
 	if (!tree || typeof tree !== "object") return;
 	const node = tree as Record<string, unknown>;
 
 	const classOrType =
-		readNodeString(node, ["class", "type", "entityType", "ifcClass"]) ?? "";
-	if (classOrType.toLowerCase() === "ifcelementassembly") {
+		readNodeString(node, ["class", "type", "entityType", "ifcClass", "category"]) ?? "";
+	if (classOrType.toLowerCase().includes("ifcelementassembly")) {
 		const id =
 			readNodeString(node, ["guid", "id", "runtimeId", "entityId"]) ??
 			`assembly-${acc.length + 1}`;
@@ -286,14 +282,30 @@ function collectIfcAssembliesFromTree(
 		}
 	}
 
+	// Walk explicit child collections first
 	for (const child of readNodeChildren(node)) {
 		collectIfcAssembliesFromTree(child, acc, seen);
+	}
+
+	// Also walk any nested objects/arrays to handle variant payload structures.
+	for (const value of Object.values(node)) {
+		if (!value) continue;
+		if (Array.isArray(value)) {
+			for (const item of value) {
+				if (item && typeof item === "object") {
+					collectIfcAssembliesFromTree(item, acc, seen);
+				}
+			}
+		} else if (typeof value === "object") {
+			collectIfcAssembliesFromTree(value, acc, seen);
+		}
 	}
 }
 
 export async function fetchIfcAssembliesFromFile(
 	api: WorkspaceApi,
 	ifcFileId: string,
+	ifcVersionId?: string,
 ): Promise<IfcAssemblyItem[]> {
 	const project = await api.project.getProject();
 	if (!project?.id) {
@@ -313,7 +325,10 @@ export async function fetchIfcAssembliesFromFile(
 		useDevProxy: import.meta.env.DEV,
 	});
 
-	const tree = await client.getModelTree(ifcFileId, project.id);
+	let tree = await client.getModelTree(ifcFileId, project.id);
+	if (!tree && ifcVersionId) {
+		tree = await client.getModelTree(ifcVersionId, project.id);
+	}
 	if (!tree) return [];
 
 	const result: IfcAssemblyItem[] = [];

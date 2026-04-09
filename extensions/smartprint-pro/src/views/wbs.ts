@@ -46,6 +46,7 @@ type WbsAssignment = {
 
 type IfcModelOption = {
 	id: string;
+	versionId?: string;
 	name: string;
 };
 
@@ -555,7 +556,8 @@ export async function renderWbs(
 	try {
 		const ifcModels = await fetchProjectIfcModels(api);
 		allIfcModels = ifcModels.map((model, index) => ({
-			id: model.versionId || model.id || `ifc-${index + 1}`,
+			id: model.id || model.versionId || `ifc-${index + 1}`,
+			versionId: model.versionId,
 			name: model.name || `IFC ${index + 1}`,
 		}));
 
@@ -611,6 +613,7 @@ export async function renderWbs(
 				const assemblyPartsRaw = await fetchIfcAssembliesFromFile(
 					api,
 					selectedModelId,
+					selectedModel?.versionId,
 				);
 				const assemblyParts = assemblyPartsRaw.map((item) => ({
 					id: item.id,
