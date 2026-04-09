@@ -11,7 +11,8 @@
 		"clean": "rm -rf dist"
 	},
 	"dependencies": {
-		"@imasd/shared": "workspace:*"
+		"@imasd/shared": "workspace:*",
+		"xlsx": "^0.18.5"
 	},
 	"devDependencies": {
 		"@imasd/tailwind-config": "workspace:*",
