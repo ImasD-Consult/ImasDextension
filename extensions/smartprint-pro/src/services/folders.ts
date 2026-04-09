@@ -319,9 +319,6 @@ export async function fetchIfcAssembliesFromFile(
 		);
 	}
 
-	const baseOrigin =
-		window.top?.location?.origin || "https://app21.connect.trimble.com";
-
 	async function getModelTreeById(
 		fileOrVersionId: string,
 	): Promise<unknown | null> {
@@ -329,7 +326,7 @@ export async function fetchIfcAssembliesFromFile(
 			projectId: project.id,
 			depth: "-1",
 		});
-		const url = `${baseOrigin}/tc/api/2.0/model/${encodeURIComponent(fileOrVersionId)}/tree?${params}`;
+		const url = `/tc/api/2.0/model/${encodeURIComponent(fileOrVersionId)}/tree?${params}`;
 		try {
 			const response = await fetch(url, {
 				headers: {
@@ -347,7 +344,7 @@ export async function fetchIfcAssembliesFromFile(
 
 	async function getFileInfoById(fileOrVersionId: string): Promise<unknown | null> {
 		const params = new URLSearchParams({ projectId: project.id });
-		const url = `${baseOrigin}/tc/api/2.0/files/${encodeURIComponent(fileOrVersionId)}?${params}`;
+		const url = `/tc/api/2.0/files/${encodeURIComponent(fileOrVersionId)}?${params}`;
 		try {
 			const response = await fetch(url, {
 				headers: {
