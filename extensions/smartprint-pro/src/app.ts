@@ -105,6 +105,10 @@ export async function initApp(): Promise<void> {
 				useViewerModelOnly: true,
 				horizontalDockLayout: true,
 			});
+			// Second pass after iframe paints — some Connect builds apply `properties` placement only here.
+			window.setTimeout(() => {
+				if (api) void tryConfigureViewerPanel(api);
+			}, 500);
 			return;
 		}
 

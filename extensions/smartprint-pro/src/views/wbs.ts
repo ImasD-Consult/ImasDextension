@@ -251,6 +251,7 @@ function renderPartsList(
 	selectedPartIds: Set<string>,
 	typeFilter: string,
 	materialFilter: string,
+	listStyle: "nameTypeMaterial" | "nameMaterial" = "nameTypeMaterial",
 ): string {
 	const filtered = parts.filter((part) => {
 		const typeMatches = typeFilter === "ALL" || part.type === typeFilter;
@@ -266,11 +267,15 @@ function renderPartsList(
 	return filtered
 		.map((part) => {
 			const checked = selectedPartIds.has(part.id) ? "checked" : "";
+			const metaRight =
+				listStyle === "nameMaterial"
+					? `<span class="ml-auto text-xs text-gray-600 truncate max-w-[45%] text-right" title="${escapeHtml(part.material)}">${escapeHtml(part.material)}</span>`
+					: `<span class="ml-auto text-xs text-gray-500">${escapeHtml(part.type)} | ${escapeHtml(part.material)}</span>`;
 			return `
         <label class="flex items-center gap-2 rounded border border-gray-200 px-2 py-2 hover:bg-gray-50">
           <input type="checkbox" data-part-id="${escapeHtml(part.id)}" ${checked} />
-          <span class="text-sm text-gray-800">${escapeHtml(part.name)}</span>
-          <span class="ml-auto text-xs text-gray-500">${escapeHtml(part.type)} | ${escapeHtml(part.material)}</span>
+          <span class="text-sm text-gray-800 min-w-0 flex-1 truncate" title="${escapeHtml(part.name)}">${escapeHtml(part.name)}</span>
+          ${metaRight}
         </label>
       `;
 		})
@@ -341,6 +346,7 @@ export async function renderWbs(
           <p class="text-xs text-gray-500">Excel (A–D) · IFC assemblies · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
+          <input type="hidden" data-viewer-model-id value="" />
           <input
             id="wbs-file"
             type="file"
@@ -354,10 +360,7 @@ export async function renderWbs(
           >
             Upload
           </button>
-          <span class="text-xs text-gray-600 whitespace-nowrap hidden sm:inline">IFC model</span>
-          <select class="min-w-[140px] max-w-[240px] rounded border border-gray-300 px-2 py-1 text-sm" data-model-filter>
-            <option value="">Detecting viewer model…</option>
-          </select>
+          <span class="text-xs text-gray-600 truncate max-w-[min(56vw,280px)]" data-viewer-model-label title="">Open IFC (viewer)</span>
           <button
             type="button"
             class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -384,11 +387,9 @@ export async function renderWbs(
             <span class="text-xs font-semibold text-gray-700">IFC assemblies</span>
             <p class="text-xs text-gray-500 mt-0.5" data-viewer-hint>From the model open in 3D (not the project folder).</p>
           </div>
-          <div class="px-2 pt-2 grid grid-cols-2 gap-2 shrink-0">
-            <select class="rounded border border-gray-300 px-2 py-1 text-sm" data-type-filter>
-              <option value="ALL">All Types</option>
-            </select>
-            <select class="rounded border border-gray-300 px-2 py-1 text-sm" data-material-filter>
+          <div class="px-2 pt-2 shrink-0">
+            <label class="mb-1 block text-xs font-medium text-gray-600">Filter by material</label>
+            <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-material-filter>
               <option value="ALL">All Materials</option>
             </select>
           </div>
@@ -471,14 +472,36 @@ export async function renderWbs(
               placeholder="Type to filter by name..."
             />
           </div>
+          ${
+						viewerOnly
+							? `
+          <input type="hidden" data-viewer-model-id value="" />
           <div>
-            <label class="mb-1 block text-xs font-medium text-gray-600">${
-							viewerOnly ? "Loaded model" : "IFC Model"
-						}</label>
+            <p class="text-xs font-medium text-gray-700">Open IFC</p>
+            <p class="text-xs text-gray-600 truncate" data-viewer-model-label title="">Detecting…</p>
+            <div class="mt-2 flex items-center justify-between gap-2">
+              <p class="text-xs text-gray-500" data-assembly-last-checked>Last checked: -</p>
+              <button
+                type="button"
+                class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                data-retry-assemblies
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600">Filter by material</label>
+            <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-material-filter>
+              <option value="ALL">All Materials</option>
+            </select>
+          </div>
+          `
+							: `
+          <div>
+            <label class="mb-1 block text-xs font-medium text-gray-600">IFC Model</label>
             <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-model-filter>
-              <option value="">${
-								viewerOnly ? "Detecting viewer model…" : "Select IFC model"
-							}</option>
+              <option value="">Select IFC model</option>
             </select>
             <div class="mt-2 flex items-center justify-between gap-2">
               <p class="text-xs text-gray-500" data-assembly-last-checked>Last checked: -</p>
@@ -500,6 +523,8 @@ export async function renderWbs(
               <option value="ALL">All Materials</option>
             </select>
           </div>
+          `
+					}
 
           <div class="max-h-[52vh] overflow-auto space-y-2" data-parts-list>
             <p class="text-sm text-gray-400 italic">Loading parts...</p>
@@ -541,6 +566,9 @@ export async function renderWbs(
 	);
 	const modelFilter = container.querySelector<HTMLSelectElement>("[data-model-filter]");
 	const modelSearch = container.querySelector<HTMLInputElement>("[data-model-search]");
+	const viewerModelLabel = container.querySelector<HTMLElement>(
+		"[data-viewer-model-label]",
+	);
 	const retryAssembliesButton = container.querySelector<HTMLButtonElement>(
 		"[data-retry-assemblies]",
 	);
@@ -558,16 +586,16 @@ export async function renderWbs(
 		!uploadButton ||
 		!status ||
 		!tableContainer ||
-		!typeFilter ||
 		!materialFilter ||
-		!modelFilter ||
-		(!viewerOnly && !modelSearch) ||
 		!retryAssembliesButton ||
 		!lastCheckedLabel ||
 		!partsList ||
 		!assignButton ||
 		!assignmentsList
 	) {
+		return;
+	}
+	if (!viewerOnly && (!typeFilter || !modelFilter || !modelSearch)) {
 		return;
 	}
 
@@ -577,11 +605,55 @@ export async function renderWbs(
 	const materialFilterEl = materialFilter;
 	const modelFilterEl = modelFilter;
 	const modelSearchEl = modelSearch as HTMLInputElement | null;
+	const viewerModelLabelEl = viewerModelLabel;
 	const retryAssembliesButtonEl = retryAssembliesButton;
 	const lastCheckedLabelEl = lastCheckedLabel;
 	const partsListEl = partsList;
 	const assignButtonEl = assignButton;
 	const assignmentsListEl = assignmentsList;
+
+	function getActiveModelId(): string {
+		if (viewerOnly) {
+			const first = container.querySelector<HTMLInputElement>(
+				"[data-viewer-model-id]",
+			);
+			return first?.value ?? "";
+		}
+		return modelFilterEl?.value ?? "";
+	}
+
+	function setViewerModelUi(model: IfcModelOption): void {
+		container
+			.querySelectorAll<HTMLInputElement>("[data-viewer-model-id]")
+			.forEach((el) => {
+				el.value = model.id;
+			});
+		if (viewerModelLabelEl) {
+			viewerModelLabelEl.textContent = model.name;
+			viewerModelLabelEl.title = model.name;
+		}
+	}
+
+	async function syncViewerSelection(): Promise<void> {
+		const v = api.viewer;
+		if (!viewerOnly || !v?.setSelection) return;
+		const modelId = getActiveModelId();
+		if (!modelId) return;
+		const runtimeIds = parts
+			.filter((p) => selectedPartIds.has(p.id))
+			.map((p) => Number(p.id))
+			.filter((n) => !Number.isNaN(n));
+		try {
+			await v.setSelection(
+				{
+					modelObjectIds: [{ modelId, objectRuntimeIds: runtimeIds }],
+				},
+				"set",
+			);
+		} catch {
+			/* optional — host may reject */
+		}
+	}
 
 	function setStatus(
 		message: string,
@@ -612,30 +684,37 @@ export async function renderWbs(
 	}
 
 	function refreshPartsList(): void {
-		if (!modelFilterEl.value) {
+		if (!getActiveModelId()) {
 			partsListEl.innerHTML =
 				'<p class="text-sm text-gray-500 italic">Select an IFC model to load parts.</p>';
 			refreshAssignButton();
 			return;
 		}
 
+		const typeVal = typeFilterEl?.value ?? "ALL";
 		partsListEl.innerHTML = renderPartsList(
 			parts,
 			selectedPartIds,
-			typeFilterEl.value,
+			typeVal,
 			materialFilterEl.value,
+			viewerOnly ? "nameMaterial" : "nameTypeMaterial",
 		);
 		refreshAssignButton();
 	}
 
 	function refreshPartFilters(): void {
-		const types = [...new Set(parts.map((part) => part.type))].sort();
+		if (typeFilterEl) {
+			const types = [...new Set(parts.map((part) => part.type))].sort();
+			typeFilterEl.innerHTML =
+				'<option value="ALL">All Types</option>' +
+				types
+					.map(
+						(value) =>
+							`<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`,
+					)
+					.join("");
+		}
 		const materials = [...new Set(parts.map((part) => part.material))].sort();
-		typeFilterEl.innerHTML =
-			'<option value="ALL">All Types</option>' +
-			types
-				.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
-				.join("");
 		materialFilterEl.innerHTML =
 			'<option value="ALL">All Materials</option>' +
 			materials
@@ -685,7 +764,8 @@ export async function renderWbs(
 
 	async function loadAssembliesForSelectedModel(forceRefetch: boolean): Promise<void> {
 		selectedPartIds.clear();
-		const selectedModelId = modelFilterEl.value;
+		void syncViewerSelection();
+		const selectedModelId = getActiveModelId();
 		if (!selectedModelId) {
 			parts = [];
 			refreshPartFilters();
@@ -770,6 +850,7 @@ export async function renderWbs(
 	}
 
 	function refreshModelOptions(): void {
+		if (!modelFilterEl) return;
 		const search = (modelSearchEl?.value ?? "").trim().toLowerCase();
 		const filteredModels = allIfcModels.filter((model) =>
 			model.name.toLowerCase().includes(search),
@@ -799,46 +880,71 @@ export async function renderWbs(
 
 	try {
 		if (viewerOnly) {
-			setStatus("Loading model from 3D viewer…");
+			setStatus("Loading open IFC from 3D viewer…");
 			if (!api.viewer?.getModels) {
-				modelFilterEl.innerHTML =
-					'<option value="">Viewer API unavailable</option>';
 				partsByModelId.clear();
+				if (viewerModelLabelEl) {
+					viewerModelLabelEl.textContent = "Viewer API unavailable";
+				}
 				setStatus(
 					"Viewer API not available. Use the 3D manifest and open an IFC in the viewer.",
 					"error",
 				);
 				refreshPartsList();
 			} else {
-				const models = await api.viewer.getModels();
-				const list = (models ?? []) as Array<{
+				type ViewerRow = {
 					id: string;
 					versionId?: string;
 					name?: string;
-				}>;
-				allIfcModels = list.map((m, i) => ({
-					id: m.id,
-					versionId: m.versionId,
-					name: m.name ?? `Model ${i + 1}`,
-				}));
+					state?: string;
+				};
+				let list: ViewerRow[] = [];
+				try {
+					list = (await api.viewer.getModels("loaded")) as ViewerRow[];
+				} catch {
+					list = [];
+				}
+				if (!list.length) {
+					try {
+						const all = (await api.viewer.getModels()) as ViewerRow[];
+						list = (all ?? []).filter(
+							(m) => (m.state ?? "").toLowerCase() === "loaded",
+						);
+					} catch {
+						list = [];
+					}
+				}
+				if (!list.length) {
+					try {
+						const all = (await api.viewer.getModels()) as ViewerRow[];
+						if (all?.length === 1) {
+							list = all;
+						}
+					} catch {
+						list = [];
+					}
+				}
 
-				if (allIfcModels.length === 0) {
-					modelFilterEl.innerHTML =
-						'<option value="">No model in viewer</option>';
+				if (list.length === 0) {
 					partsByModelId.clear();
+					if (viewerModelLabelEl) {
+						viewerModelLabelEl.textContent = "No loaded IFC";
+					}
 					setStatus(
-						"No loaded model in the viewer. Open your IFC in 3D, then Retry.",
+						"No loaded IFC in the viewer. Open your model in 3D, then Retry.",
 						"error",
 					);
 					refreshPartsList();
 				} else {
-					refreshModelOptions();
-					if (!modelFilterEl.value && allIfcModels[0]) {
-						modelFilterEl.value = allIfcModels[0].id;
-					}
-					setStatus(
-						`Using ${allIfcModels.length} model(s) from the viewer. Select another if needed.`,
-					);
+					const m = list[0];
+					const chosen: IfcModelOption = {
+						id: m.id,
+						versionId: m.versionId,
+						name: m.name ?? "IFC",
+					};
+					allIfcModels = [chosen];
+					setViewerModelUi(chosen);
+					setStatus(`Using open IFC: ${chosen.name}.`);
 					await loadAssembliesForSelectedModel(false);
 				}
 			}
@@ -857,8 +963,10 @@ export async function renderWbs(
 					`Found ${allIfcModels.length} IFC file(s). Select one to load assemblies.`,
 				);
 			} else {
-				modelFilterEl.innerHTML =
-					'<option value="">No IFC files found in project folders</option>';
+				if (modelFilterEl) {
+					modelFilterEl.innerHTML =
+						'<option value="">No IFC files found in project folders</option>';
+				}
 				partsByModelId.clear();
 				setStatus("No IFC files found in project folders.", "error");
 			}
@@ -866,9 +974,13 @@ export async function renderWbs(
 			refreshPartsList();
 		}
 	} catch {
-		modelFilterEl.innerHTML = viewerOnly
-			? '<option value="">Failed to read viewer models</option>'
-			: '<option value="">Failed to load IFC files from project</option>';
+		if (!viewerOnly && modelFilterEl) {
+			modelFilterEl.innerHTML =
+				'<option value="">Failed to load IFC files from project</option>';
+		}
+		if (viewerOnly && viewerModelLabelEl) {
+			viewerModelLabelEl.textContent = "Failed to read viewer";
+		}
 		partsByModelId.clear();
 		refreshPartsList();
 		setStatus(
@@ -895,7 +1007,7 @@ export async function renderWbs(
 
 	modelSearchEl?.addEventListener("input", refreshModelOptions);
 
-	modelFilterEl.addEventListener("change", async () => {
+	modelFilterEl?.addEventListener("change", async () => {
 		await loadAssembliesForSelectedModel(false);
 	});
 
@@ -903,7 +1015,7 @@ export async function renderWbs(
 		await loadAssembliesForSelectedModel(true);
 	});
 
-	typeFilterEl.addEventListener("change", refreshPartsList);
+	typeFilterEl?.addEventListener("change", refreshPartsList);
 	materialFilterEl.addEventListener("change", refreshPartsList);
 
 	container.addEventListener("change", (event) => {
@@ -918,6 +1030,7 @@ export async function renderWbs(
 			selectedPartIds.delete(partId);
 		}
 		refreshAssignButton();
+		void syncViewerSelection();
 	});
 
 	container.addEventListener("click", (event) => {
@@ -979,7 +1092,7 @@ export async function renderWbs(
 				partName: part.name,
 				partType: part.type,
 				partMaterial: part.material,
-				modelId: part.modelId ?? modelFilterEl.value,
+				modelId: part.modelId ?? getActiveModelId(),
 				wbsRowIndex: assignedRowIndex,
 				wbsValues: selectedRow,
 				propertySetName: "Pset_IMASD_WBS",
@@ -993,7 +1106,7 @@ export async function renderWbs(
 			const columnD = (selectedRow[3] ?? "").trim();
 			const propertySetValue = `${columnB} - ${columnD}`;
 			return {
-				modelId: part.modelId ?? modelFilterEl.value,
+				modelId: part.modelId ?? getActiveModelId(),
 				partId: part.id,
 				value: propertySetValue,
 				link: part.link,

@@ -11,6 +11,8 @@ declare module "trimble-connect-workspace-api" {
 		id: string;
 		versionId?: string;
 		name?: string;
+		/** Present on ModelSpec from getModels — use with `"loaded"` filter. */
+		state?: string;
 	}
 
 	export interface MenuItem {
@@ -45,7 +47,7 @@ declare module "trimble-connect-workspace-api" {
 			setActiveMenuItem(command: string): Promise<void>;
 		};
 		viewer?: {
-			getModels(): Promise<ViewerModel[]>;
+			getModels(state?: "loaded" | "unloaded"): Promise<ViewerModel[]>;
 			/** All visible model objects when selector omitted (see ObjectSelector). */
 			getObjects?(
 				selector?: Record<string, unknown>,
@@ -68,6 +70,17 @@ declare module "trimble-connect-workspace-api" {
 				modelId: string | string[],
 				loaded?: boolean,
 				fitToView?: boolean,
+			): Promise<void>;
+			/** Select objects in the 3D view (runtime entity ids per model). */
+			setSelection?(
+				selector: {
+					modelObjectIds?: Array<{
+						modelId: string;
+						objectRuntimeIds?: number[];
+						recursive?: boolean;
+					}>;
+				},
+				mode: "add" | "remove" | "set",
 			): Promise<void>;
 		};
 	}
