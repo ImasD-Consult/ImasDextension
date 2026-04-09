@@ -46,6 +46,7 @@ jobs:
           images: ghcr.io/${{ github.repository }}/${{ matrix.extension.image }}
           tags: |
             type=sha
+            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
