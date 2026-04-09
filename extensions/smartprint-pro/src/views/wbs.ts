@@ -223,20 +223,23 @@ function renderTable(tableData: WbsTableData, selectedRowIndex: number | null): 
 		? tableData.rows
 				.map((row, index) => {
 					const isSelected = selectedRowIndex === index;
+					const cellClass = isSelected
+						? "px-3 py-2 text-sm text-white border-b border-brand-600 align-top"
+						: "px-3 py-2 text-sm text-gray-800 border-b border-gray-100 align-top";
 					const cells = row
 						.map(
 							(cell) =>
-								`<td class="px-3 py-2 text-sm text-gray-800 border-b border-gray-100 align-top">${escapeHtml(cell)}</td>`,
+								`<td class="${cellClass}">${escapeHtml(cell)}</td>`,
 						)
 						.join("");
-					return `<tr class="hover:bg-gray-50 ${isSelected ? "bg-brand-50 ring-1 ring-inset ring-brand-300" : ""}" data-wbs-row="${index}">${cells}</tr>`;
+					return `<tr class="cursor-pointer ${isSelected ? "bg-brand-700" : "hover:bg-gray-50"}" data-wbs-row="${index}">${cells}</tr>`;
 				})
 				.join("")
 		: `<tr><td class="px-3 py-3 text-sm text-gray-500 italic" colspan="${tableData.headers.length}">No rows found.</td></tr>`;
 
 	return `
     <div class="rounded-lg border border-gray-200 overflow-hidden">
-      <div class="max-h-[55vh] overflow-auto">
+      <div class="max-h-[62vh] overflow-auto">
         <table class="min-w-full border-collapse">
           <thead class="sticky top-0 z-10">
             <tr>${headerCells}</tr>
@@ -334,28 +337,27 @@ export async function renderWbs(
     <h2 class="text-lg font-semibold">WBS</h2>
     <p class="mt-1 text-sm text-gray-500">Upload, preview, and assign WBS rows to IFC parts</p>
 
-    <div class="mt-6 space-y-4">
-      <div class="flex flex-wrap items-center gap-3">
+    <div class="mt-3 space-y-3">
+      <div class="flex items-center gap-2">
         <input
           id="wbs-file"
           type="file"
           accept=".xlsx,.xls"
-          class="block text-sm text-gray-700 file:mr-3 file:rounded file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:font-medium file:text-brand-700 hover:file:bg-brand-100"
+          class="min-w-0 flex-1 block text-sm text-gray-700 file:mr-3 file:rounded file:border-0 file:bg-brand-50 file:px-3 file:py-2 file:font-medium file:text-brand-700 hover:file:bg-brand-100"
         />
         <button
           type="button"
-          class="rounded px-4 py-2 text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
+          class="shrink-0 rounded px-4 py-2 text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500"
           data-wbs-upload
         >
           Upload File
         </button>
       </div>
 
-      <p class="text-xs text-gray-500">Expected file type: Excel template (.xlsx)</p>
-      <p class="text-sm text-gray-600" data-wbs-status>No file uploaded yet.</p>
+      <p class="text-sm text-gray-600" data-wbs-status>No file uploaded yet. Expected file type: Excel template (.xlsx).</p>
 
       <div class="grid grid-cols-12 gap-4">
-        <div class="col-span-12 lg:col-span-4 rounded-lg border border-gray-200 p-3 space-y-3">
+        <div class="col-span-12 lg:col-span-3 rounded-lg border border-gray-200 p-3 space-y-2">
           <h3 class="text-sm font-semibold text-gray-700">IFC Parts (MVP)</h3>
 
           <div>
@@ -381,7 +383,7 @@ export async function renderWbs(
             </select>
           </div>
 
-          <div class="max-h-[35vh] overflow-auto space-y-2" data-parts-list>
+          <div class="max-h-[52vh] overflow-auto space-y-2" data-parts-list>
             <p class="text-sm text-gray-400 italic">Loading parts...</p>
           </div>
 
@@ -396,14 +398,14 @@ export async function renderWbs(
           <p class="text-xs text-gray-500">Assignments are stored in local Pset_IMASD_WBS mapping for now.</p>
         </div>
 
-        <div class="col-span-12 lg:col-span-8" data-wbs-table>
+        <div class="col-span-12 lg:col-span-9" data-wbs-table>
           <p class="text-sm text-gray-400 italic">Upload a WBS file to preview and select a row.</p>
         </div>
       </div>
 
-      <div class="rounded-lg border border-gray-200 p-3">
+      <div class="rounded-lg border border-gray-200 p-2">
         <h3 class="text-sm font-semibold text-gray-700">Assigned Property Set Values (Pset_IMASD_WBS)</h3>
-        <div class="mt-2 space-y-2 max-h-[24vh] overflow-auto" data-assignments-list>
+        <div class="mt-2 max-h-[22vh] overflow-auto" data-assignments-list>
           <p class="text-sm text-gray-400 italic">No assignments yet.</p>
         </div>
       </div>
