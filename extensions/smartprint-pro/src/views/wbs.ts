@@ -398,7 +398,7 @@ export async function renderWbs(
     <div class="mt-3 space-y-3">
 
       <div class="grid grid-cols-12 gap-4">
-        <div class="col-span-12 lg:col-span-7 rounded-lg border border-gray-200 p-3 space-y-2">
+        <div class="col-span-12 lg:col-span-6 rounded-lg border border-gray-200 p-3 space-y-2">
           <h3 class="text-sm font-semibold text-gray-700">IFC Parts (MVP)</h3>
 
           <div>
@@ -439,7 +439,7 @@ export async function renderWbs(
           <p class="text-xs text-gray-500">Assignments are stored in local Pset_IMASD_WBS mapping for now.</p>
         </div>
 
-        <div class="col-span-12 lg:col-span-5" data-wbs-table>
+        <div class="col-span-12 lg:col-span-6" data-wbs-table>
           <p class="text-sm text-gray-400 italic">Upload a WBS file to preview and select a row.</p>
         </div>
       </div>
@@ -545,13 +545,36 @@ export async function renderWbs(
 				.join("");
 	}
 
-	function refreshWbsTable(): void {
+	function refreshWbsTable(
+		preserveFocus?:
+			| {
+					field: "wbs" | "description";
+					selectionStart: number;
+					selectionEnd: number;
+			  }
+			| undefined,
+	): void {
 		tableContainerEl.innerHTML = renderTable(
 			tableData,
 			selectedWbsRowIndex,
 			wbsFilterValue,
 			descriptionFilterValue,
 		);
+
+		if (preserveFocus) {
+			const selector =
+				preserveFocus.field === "wbs"
+					? "[data-wbs-filter]"
+					: "[data-description-filter]";
+			const input = tableContainerEl.querySelector<HTMLInputElement>(selector);
+			if (input) {
+				input.focus();
+				input.setSelectionRange(
+					preserveFocus.selectionStart,
+					preserveFocus.selectionEnd,
+				);
+			}
+		}
 		refreshAssignButton();
 	}
 
@@ -674,7 +697,11 @@ export async function renderWbs(
 		const wbsFilterInput = target.closest<HTMLInputElement>("[data-wbs-filter]");
 		if (wbsFilterInput) {
 			wbsFilterValue = wbsFilterInput.value;
-			refreshWbsTable();
+			refreshWbsTable({
+				field: "wbs",
+				selectionStart: wbsFilterInput.selectionStart ?? wbsFilterInput.value.length,
+				selectionEnd: wbsFilterInput.selectionEnd ?? wbsFilterInput.value.length,
+			});
 			return;
 		}
 
@@ -683,7 +710,15 @@ export async function renderWbs(
 		);
 		if (descriptionFilterInput) {
 			descriptionFilterValue = descriptionFilterInput.value;
-			refreshWbsTable();
+			refreshWbsTable({
+				field: "description",
+				selectionStart:
+					descriptionFilterInput.selectionStart ??
+					descriptionFilterInput.value.length,
+				selectionEnd:
+					descriptionFilterInput.selectionEnd ??
+					descriptionFilterInput.value.length,
+			});
 		}
 	});
 
