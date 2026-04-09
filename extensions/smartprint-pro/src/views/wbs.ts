@@ -77,8 +77,42 @@ function modelIdInSet(m: ViewerModelRow, ids: Set<string>): boolean {
 }
 
 /**
- * `getModels()` lists files from the project tree (order not guaranteed — a DWG can appear before an IFC).
- * `getPresentation()?.applyToModels` lists model ids applied to the current 3D view (same idea as “Selected models”).
+ * `getObjects()` returns model entities currently in the scene — each entry has `modelId`
+ * (often `versionId`). That matches what is actually visible better than raw `getModels()` order.
+ */
+async function matchModelsFromSceneObjects(
+	viewer: NonNullable<WorkspaceApi["viewer"]>,
+	allModels: ViewerModelRow[],
+): Promise<ViewerModelRow[]> {
+	if (!viewer.getObjects) return [];
+	try {
+		const rows = await viewer.getObjects();
+		if (!Array.isArray(rows) || rows.length === 0) return [];
+
+		const sceneModelIds = new Set<string>();
+		for (const mo of rows) {
+			if (!mo || typeof mo !== "object") continue;
+			const mid = (mo as { modelId?: string }).modelId;
+			if (typeof mid === "string" && mid.trim().length > 0) {
+				sceneModelIds.add(mid.trim());
+			}
+		}
+		if (sceneModelIds.size === 0) return [];
+
+		const matched = allModels.filter((m) => modelIdInSet(m, sceneModelIds));
+		return matched;
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Resolution order:
+ * 1. **Scene objects** (`getObjects` → modelIds with geometry) — strongest signal for “what is open”.
+ * 2. **Presentation** `applyToModels` — view-scoped ids when (1) is empty.
+ * 3. **Loaded** / **state** / full tree — same as before.
+ *
+ * `getModels()` alone is only the file tree; order can put DWG before IFC.
  */
 async function resolveViewerModelsForWbs(
 	api: WorkspaceApi,
@@ -99,6 +133,15 @@ async function resolveViewerModelsForWbs(
 		}
 	}
 
+	const allModels = await fetchAll();
+	if (allModels.length === 0) return [];
+
+	const fromScene = await matchModelsFromSceneObjects(viewer, allModels);
+	if (fromScene.length > 0) {
+		const ifcFromScene = fromScene.filter((m) => isIfcFileName(m.name));
+		return ifcFromScene.length > 0 ? ifcFromScene : fromScene;
+	}
+
 	let appliedIds: string[] | undefined;
 	try {
 		const pres = await viewer.getPresentation?.();
@@ -110,7 +153,7 @@ async function resolveViewerModelsForWbs(
 		(appliedIds ?? []).map((x) => String(x)).filter(Boolean),
 	);
 
-	let pool = await fetchAll();
+	let pool = allModels;
 
 	if (appliedSet.size > 0) {
 		const narrowed = pool.filter((m) => modelIdInSet(m, appliedSet));
