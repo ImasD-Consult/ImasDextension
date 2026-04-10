@@ -1,5 +1,6 @@
 import { TrimbleClient, TRIMBLE_REGIONS } from "@imasd/shared/trimble";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
+import { resolveViewerModelsForWbs } from "./viewer-model";
 
 export interface FolderItem {
 	id: string;
@@ -906,7 +907,73 @@ export async function fetchIfcAssembliesFromFile(
 		return out;
 	}
 
-	async function enrichTypesFromObjectProperties(
+	function extractProductNameAndMaterialFromProps(
+		root: unknown,
+	): { productName?: string; material?: string } {
+		let productName: string | undefined;
+		let material: string | undefined;
+
+		function considerPair(keyRaw: string, value: unknown): void {
+			if (typeof value !== "string") return;
+			const v = value.trim();
+			if (!v) return;
+			const k = keyRaw.trim().toLowerCase().replace(/\s+/g, " ");
+			if (!productName && (k === "product name" || k === "productname")) {
+				productName = v;
+			}
+			if (!material) {
+				if (
+					k === "material" ||
+					k === "material name" ||
+					k === "main material" ||
+					k === "constituent material" ||
+					k === "physical material"
+				) {
+					material = v;
+				}
+			}
+		}
+
+		function walk(node: unknown, depth: number): void {
+			if (depth > 14 || node == null) return;
+			if (Array.isArray(node)) {
+				for (const item of node) {
+					if (item && typeof item === "object") {
+						const o = item as Record<string, unknown>;
+						const nameKey =
+							(typeof o.name === "string" && o.name) ||
+							(typeof o.displayName === "string" && o.displayName) ||
+							(typeof o.propertyName === "string" && o.propertyName) ||
+							(typeof o.key === "string" && o.key);
+						const val =
+							o.value ??
+							o.stringValue ??
+							o.displayValue ??
+							(typeof o.nominalValue === "string" ? o.nominalValue : undefined);
+						if (nameKey && typeof val === "string") {
+							considerPair(nameKey, val);
+						}
+					}
+					walk(item, depth + 1);
+					if (productName && material) return;
+				}
+				return;
+			}
+			if (typeof node === "object") {
+				const o = node as Record<string, unknown>;
+				for (const [k, v] of Object.entries(o)) {
+					if (typeof v === "string") considerPair(k, v);
+					else walk(v, depth + 1);
+					if (productName && material) return;
+				}
+			}
+		}
+
+		walk(root, 0);
+		return { productName, material };
+	}
+
+	async function enrichPartsFromObjectProperties(
 		modelId: string,
 		parts: IfcAssemblyItem[],
 	): Promise<IfcAssemblyItem[]> {
@@ -916,8 +983,12 @@ export async function fetchIfcAssembliesFromFile(
 		const runtimeIds = parts
 			.map((p) => Number(p.id))
 			.filter((n) => !Number.isNaN(n));
+		if (runtimeIds.length === 0) return parts;
+
 		const BATCH = 120;
 		const classByRuntime = new Map<number, string>();
+		const productByRuntime = new Map<number, string>();
+		const materialByRuntime = new Map<number, string>();
 
 		for (let i = 0; i < runtimeIds.length; i += BATCH) {
 			const chunk = runtimeIds.slice(i, i + BATCH);
@@ -925,8 +996,21 @@ export async function fetchIfcAssembliesFromFile(
 				const props = await viewer.getObjectProperties(modelId, chunk);
 				if (!Array.isArray(props)) continue;
 				for (let j = 0; j < chunk.length; j++) {
-					const pr = props[j] as { class?: string } | undefined;
-					if (pr?.class) classByRuntime.set(chunk[j], pr.class);
+					const pr = props[j];
+					if (!pr || typeof pr !== "object") continue;
+					const po = pr as Record<string, unknown>;
+					const ridRaw = po.id;
+					const rid =
+						typeof ridRaw === "number" && !Number.isNaN(ridRaw)
+							? ridRaw
+							: chunk[j];
+					if (typeof po.class === "string" && po.class.trim()) {
+						classByRuntime.set(rid, po.class);
+					}
+					const { productName, material } =
+						extractProductNameAndMaterialFromProps(pr);
+					if (productName) productByRuntime.set(rid, productName);
+					if (material) materialByRuntime.set(rid, material);
 				}
 			} catch {
 				/* next batch */
@@ -935,11 +1019,18 @@ export async function fetchIfcAssembliesFromFile(
 
 		return parts.map((p) => {
 			const rid = Number(p.id);
+			if (Number.isNaN(rid)) return p;
 			const cls = classByRuntime.get(rid);
+			const pn = productByRuntime.get(rid);
+			const mat = materialByRuntime.get(rid);
+			let name = p.name;
+			if (pn) name = pn;
+			let material = p.material;
+			if (mat) material = mat;
 			if (cls) {
-				return { ...p, type: cls.toUpperCase() };
+				return { ...p, name, type: cls.toUpperCase(), material };
 			}
-			return p;
+			return { ...p, name, material };
 		});
 	}
 
@@ -993,9 +1084,7 @@ export async function fetchIfcAssembliesFromFile(
 		}));
 
 		const modelIdForProps = mids[0] ?? primary.id;
-		if (parts.some((p) => p.type === "UNKNOWN" || p.type === "")) {
-			parts = await enrichTypesFromObjectProperties(modelIdForProps, parts);
-		}
+		parts = await enrichPartsFromObjectProperties(modelIdForProps, parts);
 
 		const asmOnly = parts.filter((p) => {
 			const t = p.type.toUpperCase();
@@ -1025,12 +1114,46 @@ export async function fetchIfcAssembliesFromFile(
 		}
 		if (!models?.length) return null;
 
-		const matched = collectMatchingViewerModels(models);
-		const primary = matched[0];
+		let primary: ViewerModelLike | undefined;
+		try {
+			const resolved = await resolveViewerModelsForWbs(api);
+			if (resolved.length > 0) {
+				const r = resolved[0];
+				primary =
+					models.find(
+						(m) =>
+							m.id === r.id ||
+							m.versionId === r.id ||
+							m.id === r.versionId ||
+							(m.versionId != null &&
+								r.versionId != null &&
+								m.versionId === r.versionId),
+					) ??
+					{
+						id: r.id,
+						versionId: r.versionId,
+						name: r.name,
+					};
+			}
+		} catch {
+			primary = undefined;
+		}
+		if (!primary?.id) {
+			const matched = collectMatchingViewerModels(models);
+			primary = matched[0];
+		}
 		if (!primary?.id) return null;
 
+		const modelIdForProps =
+			viewerModelIdCandidates(primary)[0] ?? primary.id;
+
 		const fromHierarchy = await tryFetchViaHierarchyChildren(primary);
-		if (fromHierarchy?.length) return fromHierarchy;
+		if (fromHierarchy?.length) {
+			return enrichPartsFromObjectProperties(
+				modelIdForProps,
+				fromHierarchy,
+			);
+		}
 
 		const fromObjects = await tryFetchViaGetObjects(primary);
 		if (fromObjects?.length) return fromObjects;
@@ -1041,6 +1164,15 @@ export async function fetchIfcAssembliesFromFile(
 	async function collectViewerTreeIds(): Promise<string[]> {
 		if (!api.viewer?.getModels) return [];
 		try {
+			const resolved = await resolveViewerModelsForWbs(api);
+			if (resolved.length > 0) {
+				const out: string[] = [];
+				for (const r of resolved) {
+					if (r.id) out.push(r.id);
+					if (r.versionId) out.push(r.versionId);
+				}
+				return [...new Set(out)];
+			}
 			const models = (await api.viewer.getModels()) as ViewerModelLike[];
 			if (!models?.length) return [];
 			const matched = collectMatchingViewerModels(models);

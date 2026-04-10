@@ -53,10 +53,11 @@ declare module "trimble-connect-workspace-api" {
 				selector?: Record<string, unknown>,
 				objectState?: Record<string, unknown>,
 			): Promise<Array<{ modelId: string; objects: unknown }>>;
+			/** Host may return nested property sets; callers should treat entries as opaque and walk for IFC fields. */
 			getObjectProperties?(
 				modelId: string,
 				objectRuntimeIds: number[],
-			): Promise<Array<{ class?: string; id?: number }>>;
+			): Promise<Array<Record<string, unknown>>>;
 			/** Current view: `applyToModels` aligns with models selected for the 3D view (vs raw `getModels()` file tree). */
 			getPresentation?(): Promise<{ applyToModels?: string[] }>;
 			/** Children of parent entity IDs — use roots like `[0]` not `[]`. */
