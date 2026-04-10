@@ -9,10 +9,14 @@ const ext = trim(process.env.EXTENSION_URL);
 const connectOrigin = trim(
 	process.env.VITE_TRIMBLE_CONNECT_ORIGIN || process.env.TRIMBLE_CONNECT_ORIGIN || "",
 );
+const connectRegion = trim(
+	process.env.VITE_TRIMBLE_CONNECT_REGION || process.env.TRIMBLE_CONNECT_REGION || "",
+);
 const body = [
 	"window.__SMARTPRINT_PRO__ = window.__SMARTPRINT_PRO__ || {};",
 	`window.__SMARTPRINT_PRO__.EXTENSION_URL = ${JSON.stringify(ext)};`,
 	`window.__SMARTPRINT_PRO__.TRIMBLE_CONNECT_ORIGIN = ${JSON.stringify(connectOrigin)};`,
+	`window.__SMARTPRINT_PRO__.TRIMBLE_CONNECT_REGION = ${JSON.stringify(connectRegion)};`,
 	"",
 ].join("\n");
 fs.writeFileSync("/app/env.js", body, "utf8");

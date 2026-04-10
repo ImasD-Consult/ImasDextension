@@ -1,5 +1,4 @@
 import { PSet, ServiceCredentials } from "trimble-connect-sdk";
-import { TRIMBLE_REGIONS } from "@imasd/shared/trimble";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
 
 /** NA default from `GET https://app.connect.trimble.com/tc/api/2.0/regions` → `pset-api` (legacy `pset-api.connect.trimble.com` is not listed). */
@@ -13,6 +12,8 @@ const REGIONS_JSON_URL = "https://app.connect.trimble.com/tc/api/2.0/regions";
 
 type TrimbleRegionRow = {
 	isMaster?: boolean;
+	/** e.g. `na`, `eu`, `ap`, `ap2` — matches `VITE_TRIMBLE_CONNECT_REGION` */
+	serviceRegion?: string;
 	origin?: string;
 	/** Regional Property Set service base URL */
 	"pset-api"?: string;
@@ -29,8 +30,8 @@ function hostnameKey(raw: string | undefined): string {
 }
 
 /**
- * Origins for the Connect tab hosting the extension (same idea as folders.ts `getConnectTrimbleBaseUrls`,
- * trimmed to host matching for PSet region resolution).
+ * Origins for the Connect tab hosting the extension.
+ * Do **not** add every regional host here — that would match NA first and break EU projects.
  */
 function getConnectOriginHintsForPset(): string[] {
 	const bases = new Set<string>();
@@ -73,9 +74,6 @@ function getConnectOriginHintsForPset(): string[] {
 			/* ignore */
 		}
 	}
-	for (const r of Object.values(TRIMBLE_REGIONS)) {
-		bases.add(r.host);
-	}
 	return [...bases];
 }
 
@@ -101,6 +99,30 @@ async function loadTrimbleRegions(): Promise<TrimbleRegionRow[] | null> {
  * Resolves the Property Set API base URL for the Connect region that hosts the project.
  * Wrong region → common error: "Failed to fetch library descriptor with access control policy".
  */
+function psetUrlFromRow(row: TrimbleRegionRow | undefined): string | null {
+	const u = row?.["pset-api"];
+	if (typeof u === "string" && u.startsWith("http")) {
+		return ensureTrailingSlash(u);
+	}
+	return null;
+}
+
+function resolveConnectRegionHint(): string | undefined {
+	if (typeof window !== "undefined") {
+		const w = window as Window & {
+			__SMARTPRINT_PRO__?: { TRIMBLE_CONNECT_REGION?: string };
+		};
+		const rt = w.__SMARTPRINT_PRO__?.TRIMBLE_CONNECT_REGION?.trim();
+		if (rt) return rt.toLowerCase();
+	}
+	const vite = (
+		import.meta as ImportMeta & {
+			env?: { VITE_TRIMBLE_CONNECT_REGION?: string };
+		}
+	).env?.VITE_TRIMBLE_CONNECT_REGION?.trim();
+	return vite ? vite.toLowerCase() : undefined;
+}
+
 export async function resolvePsetServiceUri(): Promise<string> {
 	const env = (
 		import.meta as ImportMeta & {
@@ -116,25 +138,36 @@ export async function resolvePsetServiceUri(): Promise<string> {
 		return ensureTrailingSlash(DEFAULT_PSET_SERVICE_URI);
 	}
 
+	/** Match parent Connect tab host (e.g. app21 → EU pset). */
 	const hints = getConnectOriginHintsForPset();
 	for (const hint of hints) {
 		const hk = hostnameKey(hint);
 		if (!hk) continue;
 		for (const row of rows) {
 			if (hostnameKey(row.origin) === hk) {
-				const u = row["pset-api"];
-				if (typeof u === "string" && u.startsWith("http")) {
-					return ensureTrailingSlash(u);
-				}
+				const resolved = psetUrlFromRow(row);
+				if (resolved) return resolved;
 			}
 		}
 	}
 
-	const master = rows.find((r) => r.isMaster === true);
-	const fromMaster = master?.["pset-api"];
-	if (typeof fromMaster === "string" && fromMaster.startsWith("http")) {
-		return ensureTrailingSlash(fromMaster);
+	/**
+	 * When the iframe does not expose `ancestorOrigins` / referrer (common), host detection fails.
+	 * Set `VITE_TRIMBLE_CONNECT_REGION=eu` (build) or `TRIMBLE_CONNECT_REGION=eu` (Docker `env.js`) for Europe.
+	 * Values match `serviceRegion` in `GET .../tc/api/2.0/regions` (`na`, `eu`, `ap`, `ap2`, …).
+	 */
+	const regionHint = resolveConnectRegionHint();
+	if (regionHint) {
+		const row = rows.find(
+			(r) => (r.serviceRegion ?? "").toLowerCase() === regionHint,
+		);
+		const resolved = psetUrlFromRow(row);
+		if (resolved) return resolved;
 	}
+
+	const master = rows.find((r) => r.isMaster === true);
+	const fromMaster = psetUrlFromRow(master);
+	if (fromMaster) return fromMaster;
 
 	return ensureTrailingSlash(DEFAULT_PSET_SERVICE_URI);
 }
@@ -164,7 +197,7 @@ function withPsetTroubleshootingHint(apiMessage: string): string {
 	) {
 		return (
 			`${m} ` +
-			"Common causes: (1) Wrong Property Set **region** — the extension must call the regional `pset-api` URL for your Connect host (e.g. EU app21 uses eu-west-1, not the generic hostname). The build resolves this from Trimble’s /regions API when possible; set `VITE_PSET_SERVICE_URI` if needed. " +
+			"Common causes: (1) Wrong Property Set **region** — EU projects need the EU `pset-api` host. Set **`VITE_TRIMBLE_CONNECT_REGION=eu`** at build, or **`TRIMBLE_CONNECT_REGION=eu`** for Docker/runtime `env.js`, or **`VITE_PSET_SERVICE_URI`** to the `pset-api` URL from `GET .../tc/api/2.0/regions`. " +
 			"(2) Library permissions — in Property Set Libraries → your library → Manage access control: use the new permissions model if prompted, Save, then **Publish** the library. " +
 			"(3) Confirm library id **WBS** and definition **Pset_IMASD_WBS** match the extension defaults (or your env vars)."
 		);
