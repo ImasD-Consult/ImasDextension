@@ -373,8 +373,8 @@ export async function renderWbs(
       </div>
       <p class="shrink-0 text-xs text-gray-600" data-wbs-status>No file uploaded yet. Expected: Excel template (.xlsx / .xls).</p>
 
-      <div class="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-2 min-h-0 overflow-hidden">
-        <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <div class="flex-1 flex flex-col min-h-0 gap-2 overflow-hidden">
+        <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden shrink-0 max-h-[min(44vh,520px)]">
           <div class="px-2 py-1.5 bg-gray-100 border-b border-gray-200 flex items-center justify-between gap-2 shrink-0">
             <span class="text-xs font-semibold text-gray-700">WBS (Excel)</span>
             <span class="text-xs text-gray-500">Header row 3 · columns A–D</span>
@@ -383,7 +383,7 @@ export async function renderWbs(
             <p class="text-sm text-gray-400 italic">Upload a WBS file to preview and select a row.</p>
           </div>
         </div>
-        <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
+        <div class="flex-1 flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
           <div class="px-2 py-1.5 bg-gray-100 border-b border-gray-200 shrink-0">
             <span class="text-xs font-semibold text-gray-700">IFC objects</span>
             <p class="text-xs text-gray-500 mt-0.5" data-viewer-hint>From the model open in 3D (not the project folder).</p>
@@ -422,12 +422,7 @@ export async function renderWbs(
         </div>
       </div>
 
-      <div class="shrink-0 flex flex-col min-h-0 max-h-[32vh] border-t border-gray-200 pt-2">
-        <h3 class="text-xs font-semibold text-gray-700 mb-1">Assigned property sets (Pset_IMASD_WBS)</h3>
-        <div class="flex-1 min-h-0 overflow-auto" data-assignments-list>
-          <p class="text-sm text-gray-400 italic">No assignments yet.</p>
-        </div>
-      </div>
+      <div class="hidden" data-assignments-list aria-hidden="true"></div>
     </div>
   `;
 	} else {

@@ -917,10 +917,16 @@ export async function fetchIfcAssembliesFromFile(
 		return out;
 	}
 
-	function extractProductNameAndMaterialFromProps(
+	/**
+	 * Pull human-readable labels from nested viewer property payloads (IFC Name, Tag, Product Name, etc.).
+	 */
+	function extractDisplayNameAndMaterialFromProps(
 		root: unknown,
-	): { productName?: string; material?: string } {
+	): { displayName?: string; material?: string } {
 		let productName: string | undefined;
+		let objectName: string | undefined;
+		let genericName: string | undefined;
+		let tag: string | undefined;
 		let material: string | undefined;
 
 		function considerPair(keyRaw: string, value: unknown): void {
@@ -928,8 +934,21 @@ export async function fetchIfcAssembliesFromFile(
 			const v = value.trim();
 			if (!v) return;
 			const k = keyRaw.trim().toLowerCase().replace(/\s+/g, " ");
-			if (!productName && (k === "product name" || k === "productname")) {
-				productName = v;
+			if (k === "product name" || k === "productname") {
+				if (!productName) productName = v;
+				return;
+			}
+			if (k === "object name" || k === "objectname") {
+				if (!objectName) objectName = v;
+				return;
+			}
+			if (k === "name" && !genericName) {
+				genericName = v;
+				return;
+			}
+			if ((k === "tag" || k === "ifc tag" || k === "item tag") && !tag) {
+				tag = v;
+				return;
 			}
 			if (!material) {
 				if (
@@ -965,7 +984,6 @@ export async function fetchIfcAssembliesFromFile(
 						}
 					}
 					walk(item, depth + 1);
-					if (productName && material) return;
 				}
 				return;
 			}
@@ -974,13 +992,14 @@ export async function fetchIfcAssembliesFromFile(
 				for (const [k, v] of Object.entries(o)) {
 					if (typeof v === "string") considerPair(k, v);
 					else walk(v, depth + 1);
-					if (productName && material) return;
 				}
 			}
 		}
 
 		walk(root, 0);
-		return { productName, material };
+		const displayName =
+			productName ?? objectName ?? genericName ?? tag;
+		return { displayName, material };
 	}
 
 	async function enrichPartsFromObjectProperties(
@@ -997,7 +1016,7 @@ export async function fetchIfcAssembliesFromFile(
 
 		const BATCH = 120;
 		const classByRuntime = new Map<number, string>();
-		const productByRuntime = new Map<number, string>();
+		const displayNameByRuntime = new Map<number, string>();
 		const materialByRuntime = new Map<number, string>();
 
 		for (let i = 0; i < runtimeIds.length; i += BATCH) {
@@ -1017,9 +1036,18 @@ export async function fetchIfcAssembliesFromFile(
 					if (typeof po.class === "string" && po.class.trim()) {
 						classByRuntime.set(rid, po.class);
 					}
-					const { productName, material } =
-						extractProductNameAndMaterialFromProps(pr);
-					if (productName) productByRuntime.set(rid, productName);
+					let topLevelName: string | undefined;
+					if (typeof po.name === "string" && po.name.trim()) {
+						topLevelName = po.name.trim();
+					} else if (typeof po.displayName === "string" && po.displayName.trim()) {
+						topLevelName = po.displayName.trim();
+					} else if (typeof po.label === "string" && po.label.trim()) {
+						topLevelName = po.label.trim();
+					}
+					const { displayName: fromTree, material } =
+						extractDisplayNameAndMaterialFromProps(pr);
+					const displayName = topLevelName ?? fromTree;
+					if (displayName) displayNameByRuntime.set(rid, displayName);
 					if (material) materialByRuntime.set(rid, material);
 				}
 			} catch {
@@ -1031,10 +1059,15 @@ export async function fetchIfcAssembliesFromFile(
 			const rid = Number(p.id);
 			if (Number.isNaN(rid)) return p;
 			const cls = classByRuntime.get(rid);
-			const pn = productByRuntime.get(rid);
+			const dn = displayNameByRuntime.get(rid);
 			const mat = materialByRuntime.get(rid);
-			let name = p.name;
-			if (pn) name = pn;
+			const baseName = p.name?.trim() ?? "";
+			const isPlaceholder =
+				baseName.length === 0 || /^object\s+\d+$/i.test(baseName);
+			const name =
+				dn ??
+				(!isPlaceholder ? baseName : cls) ??
+				`Object ${p.id}`;
 			let material = p.material;
 			if (mat) material = mat;
 			if (cls) {
