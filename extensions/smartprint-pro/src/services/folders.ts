@@ -580,12 +580,22 @@ function uniqStrings(ids: (string | undefined)[]): string[] {
 	return out;
 }
 
+export type FetchIfcPartsOptions = {
+	/**
+	 * When true (default), include all IFC entities from the viewer / model tree,
+	 * not only IFCELEMENTASSEMBLY.
+	 */
+	listAllIfcObjects?: boolean;
+};
+
 export async function fetchIfcAssembliesFromFile(
 	api: WorkspaceApi,
 	ifcFileId: string,
 	ifcVersionId?: string,
 	ifcDisplayName?: string,
+	options?: FetchIfcPartsOptions,
 ): Promise<IfcAssemblyItem[]> {
+	const listAllIfcObjects = options?.listAllIfcObjects !== false;
 	const project = await api.project.getProject();
 	if (!project?.id) {
 		throw new Error("No project selected.");
@@ -1034,7 +1044,7 @@ export async function fetchIfcAssembliesFromFile(
 		});
 	}
 
-	/** Uses ViewerAPI.getObjects — all model objects when selector is omitted — then filters assemblies. */
+	/** Uses ViewerAPI.getObjects — all model objects when selector is omitted. */
 	async function tryFetchViaGetObjects(
 		primary: ViewerModelLike,
 	): Promise<IfcAssemblyItem[] | null> {
@@ -1061,20 +1071,12 @@ export async function fetchIfcAssembliesFromFile(
 
 		if (collected.length === 0) return null;
 
-		const isAssemblyLike = (r: ParsedViewerObject) => {
-			const c = (r.classHint ?? "").toUpperCase();
-			const n = (r.name ?? "").toUpperCase();
-			return (
-				c.includes("ASSEMBLY") ||
-				c.includes("IFCELEMENTASSEMBLY") ||
-				n.includes("ASSEMBLY")
-			);
-		};
-
-		let chosen = collected.filter(isAssemblyLike);
-		if (chosen.length === 0) {
-			chosen = collected.slice(0, MAX_VIEWER_OBJECTS_FALLBACK);
+		const byRuntime = new Map<number, ParsedViewerObject>();
+		for (const r of collected) {
+			if (!byRuntime.has(r.runtimeId)) byRuntime.set(r.runtimeId, r);
 		}
+		const unique = [...byRuntime.values()];
+		const chosen = unique.slice(0, MAX_VIEWER_OBJECTS_FALLBACK);
 
 		let parts: IfcAssemblyItem[] = chosen.map((r) => ({
 			id: String(r.runtimeId),
@@ -1085,14 +1087,6 @@ export async function fetchIfcAssembliesFromFile(
 
 		const modelIdForProps = mids[0] ?? primary.id;
 		parts = await enrichPartsFromObjectProperties(modelIdForProps, parts);
-
-		const asmOnly = parts.filter((p) => {
-			const t = p.type.toUpperCase();
-			return t.includes("ASSEMBLY") || t.includes("IFCELEMENTASSEMBLY");
-		});
-		if (asmOnly.length > 0) {
-			parts = asmOnly;
-		}
 
 		return parts.length > 0 ? parts : null;
 	}
@@ -1147,6 +1141,9 @@ export async function fetchIfcAssembliesFromFile(
 		const modelIdForProps =
 			viewerModelIdCandidates(primary)[0] ?? primary.id;
 
+		const fromObjects = await tryFetchViaGetObjects(primary);
+		if (fromObjects?.length) return fromObjects;
+
 		const fromHierarchy = await tryFetchViaHierarchyChildren(primary);
 		if (fromHierarchy?.length) {
 			return enrichPartsFromObjectProperties(
@@ -1154,9 +1151,6 @@ export async function fetchIfcAssembliesFromFile(
 				fromHierarchy,
 			);
 		}
-
-		const fromObjects = await tryFetchViaGetObjects(primary);
-		if (fromObjects?.length) return fromObjects;
 
 		return null;
 	}
@@ -1291,12 +1285,24 @@ export async function fetchIfcAssembliesFromFile(
 
 	const result: IfcAssemblyItem[] = [];
 	const seen = new Set<string>();
-	if (Array.isArray(tree)) {
-		for (const root of tree) {
-			collectIfcAssembliesFromTree(root, result, seen);
+	if (listAllIfcObjects) {
+		if (Array.isArray(tree)) {
+			for (const root of tree) {
+				collectAllObjectNodesFromTree(root, result, seen);
+			}
+		} else {
+			collectAllObjectNodesFromTree(tree, result, seen);
 		}
-	} else {
-		collectIfcAssembliesFromTree(tree, result, seen);
+	}
+	if (result.length === 0) {
+		seen.clear();
+		if (Array.isArray(tree)) {
+			for (const root of tree) {
+				collectIfcAssembliesFromTree(root, result, seen);
+			}
+		} else {
+			collectIfcAssembliesFromTree(tree, result, seen);
+		}
 	}
 
 	if (result.length === 0) {
@@ -1311,7 +1317,7 @@ export async function fetchIfcAssembliesFromFile(
 			return debugAllNodes;
 		}
 		throw new Error(
-			`No assembly nodes found and no object nodes extracted. Nodes inspected: ${diagnostics.nodeCount}. Top classes/types: ${classHint}.`,
+			`No IFC object nodes found in the model tree. Nodes inspected: ${diagnostics.nodeCount}. Top classes/types: ${classHint}.`,
 		);
 	}
 

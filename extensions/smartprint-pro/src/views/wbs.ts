@@ -344,7 +344,7 @@ export async function renderWbs(
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
           <h2 class="text-base font-semibold leading-tight">WBS</h2>
-          <p class="text-xs text-gray-500">Excel (A–D) · IFC assemblies · Pset_IMASD_WBS</p>
+          <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
           <input type="hidden" data-viewer-model-id value="" />
@@ -385,14 +385,22 @@ export async function renderWbs(
         </div>
         <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
           <div class="px-2 py-1.5 bg-gray-100 border-b border-gray-200 shrink-0">
-            <span class="text-xs font-semibold text-gray-700">IFC assemblies</span>
+            <span class="text-xs font-semibold text-gray-700">IFC objects</span>
             <p class="text-xs text-gray-500 mt-0.5" data-viewer-hint>From the model open in 3D (not the project folder).</p>
           </div>
-          <div class="px-2 pt-2 shrink-0">
-            <label class="mb-1 block text-xs font-medium text-gray-600">Filter by material</label>
-            <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-material-filter>
-              <option value="ALL">All Materials</option>
-            </select>
+          <div class="px-2 pt-2 shrink-0 grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-600">Filter by type</label>
+              <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-type-filter>
+                <option value="ALL">All Types</option>
+              </select>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-600">Filter by material</label>
+              <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-material-filter>
+                <option value="ALL">All Materials</option>
+              </select>
+            </div>
           </div>
           <div class="px-2 pt-1 flex items-center justify-between gap-2 shrink-0">
             <p class="text-xs text-gray-500" data-assembly-last-checked>Last checked: -</p>
@@ -407,7 +415,7 @@ export async function renderWbs(
               data-assign
               disabled
             >
-              Assign selected assemblies to selected WBS row
+              Assign selected objects to selected WBS row
             </button>
             <p class="text-xs text-gray-500 mt-1">Writes Pset_IMASD_WBS on the open IFC.</p>
           </div>
@@ -491,11 +499,19 @@ export async function renderWbs(
               </button>
             </div>
           </div>
-          <div>
-            <label class="mb-1 block text-xs font-medium text-gray-600">Filter by material</label>
-            <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-material-filter>
-              <option value="ALL">All Materials</option>
-            </select>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-600">Filter by type</label>
+              <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-type-filter>
+                <option value="ALL">All Types</option>
+              </select>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-600">Filter by material</label>
+              <select class="w-full rounded border border-gray-300 px-2 py-1 text-sm" data-material-filter>
+                <option value="ALL">All Materials</option>
+              </select>
+            </div>
           </div>
           `
 							: `
@@ -596,7 +612,7 @@ export async function renderWbs(
 	) {
 		return;
 	}
-	if (!viewerOnly && (!typeFilter || !modelFilter || !modelSearch)) {
+	if (!typeFilter || (!viewerOnly && (!modelFilter || !modelSearch))) {
 		return;
 	}
 
@@ -698,7 +714,7 @@ export async function renderWbs(
 			selectedPartIds,
 			typeVal,
 			materialFilterEl.value,
-			viewerOnly ? "nameMaterial" : "nameTypeMaterial",
+			"nameTypeMaterial",
 		);
 		refreshAssignButton();
 	}
@@ -812,10 +828,10 @@ export async function renderWbs(
 		if (shouldRefetch) {
 			const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
 			setStatus(
-				`Loading assemblies for ${selectedModel?.name ?? "selected IFC"}… If the file is still processing, this may take up to a few minutes.`,
+				`Loading IFC objects for ${selectedModel?.name ?? "selected IFC"}… If the file is still processing, this may take up to a few minutes.`,
 			);
 			partsListEl.innerHTML =
-				'<p class="text-sm text-gray-400 italic animate-pulse">Loading assemblies from IFC (waiting for model tree if processing)…</p>';
+				'<p class="text-sm text-gray-400 italic animate-pulse">Loading objects from IFC (waiting for model tree if processing)…</p>';
 			retryAssembliesButtonEl.disabled = true;
 			try {
 				const assemblyPartsRaw = await fetchIfcAssembliesFromFile(
@@ -823,6 +839,7 @@ export async function renderWbs(
 					selectedModelId,
 					selectedModel?.versionId,
 					selectedModel?.name,
+					{ listAllIfcObjects: true },
 				);
 				const assemblyParts = assemblyPartsRaw.map((item) => ({
 					id: item.id,
@@ -839,7 +856,7 @@ export async function renderWbs(
 				loadMessage =
 					error instanceof Error
 						? error.message
-						: "Failed to read assemblies from viewer.";
+						: "Failed to read objects from viewer.";
 				partsListEl.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(loadMessage)}</p>`;
 			} finally {
 				retryAssembliesButtonEl.disabled = false;
@@ -858,24 +875,15 @@ export async function renderWbs(
 
 		if (parts.length === 0) {
 			setStatus(
-				`No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Check processing status, tree availability, or assembly naming in model tree.`,
+				`No IFC objects found for ${selectedModel?.name ?? "selected IFC model"}. Check processing status or tree availability.`,
 				"error",
 			);
 			return;
 		}
 
 		setStatus(
-			`Loaded ${parts.length} assembly item(s) for ${selectedModel?.name ?? "selected IFC model"}.`,
+			`Loaded ${parts.length} IFC object(s) for ${selectedModel?.name ?? "selected IFC model"}. Use filters to narrow by type or material.`,
 		);
-		const hasNonAssembly = parts.some(
-			(part) => !part.type.toLowerCase().includes("assembly"),
-		);
-		if (hasNonAssembly) {
-			setStatus(
-				`Debug mode: loaded ${parts.length} object node(s) for ${selectedModel?.name ?? "selected IFC model"} (not assembly-filtered).`,
-				"error",
-			);
-		}
 	}
 
 	function refreshModelOptions(): void {

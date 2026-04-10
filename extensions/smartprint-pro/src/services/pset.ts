@@ -22,6 +22,24 @@ function buildEntityLink(projectId: string, modelId: string, partId: string): st
 	return `frn:tc:project:${projectId}:model:${modelId}:entity:${partId}`;
 }
 
+/** Turn raw PSet API errors into something actionable in Connect Browser. */
+function withPsetTroubleshootingHint(apiMessage: string): string {
+	const m = apiMessage.trim();
+	if (
+		m.includes("library descriptor") &&
+		m.includes("access control")
+	) {
+		return (
+			`${m} ` +
+			"This usually means the Property Set library cannot load its access-control policy: the library may need the newer permissions model, or your user group has no access. " +
+			"In Trimble Connect for Browser (3D Viewer): open Property Set Libraries → select the library that matches your integration library id → Manage access control. " +
+			"If offered, choose “Use new permissions model”, Save, then Publish the library. " +
+			"Confirm a library exists with the id configured for this extension (default lib id: WBS, definition: Pset_IMASD_WBS) and that your group has Edit access to that property set."
+		);
+	}
+	return m;
+}
+
 export async function writeWbsPropertySetValues(
 	api: WorkspaceApi,
 	items: WbsPsetWriteItem[],
@@ -59,7 +77,14 @@ export async function writeWbsPropertySetValues(
 		props: { [propertyName]: item.value },
 	}));
 
-	const response = await pset.changeset({ items: changesetItems });
+	let response: Awaited<ReturnType<PSet["changeset"]>>;
+	try {
+		response = await pset.changeset({ items: changesetItems });
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(withPsetTroubleshootingHint(msg));
+	}
+
 	const inline = response.data as {
 		errorCount?: number;
 		errors?: Array<{ message?: string }>;
@@ -67,6 +92,10 @@ export async function writeWbsPropertySetValues(
 
 	if ((inline.errorCount ?? 0) > 0) {
 		const firstError = inline.errors?.[0]?.message;
-		throw new Error(firstError || "Property set write failed for some items.");
+		throw new Error(
+			withPsetTroubleshootingHint(
+				firstError || "Property set write failed for some items.",
+			),
+		);
 	}
 }
