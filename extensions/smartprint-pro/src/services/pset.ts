@@ -15,7 +15,11 @@ const FORCE_EU_PSET_API_FOR_TESTING = true;
 const DEFAULT_PSET_SERVICE_URI =
 	"https://pset-api.us-east-1.connect.trimble.com/v1/";
 const DEFAULT_LIBRARY_ID = "WBS";
-const DEFAULT_DEFINITION_ID = "Pset_IMASD_WBS";
+/**
+ * Property set **definition** title in Connect (the block name), *not* the schema field name.
+ * The field written in `props` is `DEFAULT_PROPERTY_NAME` (`Pset_IMASD_WBS`).
+ */
+const DEFAULT_DEFINITION_NAME = "IMASD_WBS";
 const DEFAULT_PROPERTY_NAME = "Pset_IMASD_WBS";
 
 const REGIONS_JSON_URL = "https://app.connect.trimble.com/tc/api/2.0/regions";
@@ -213,10 +217,67 @@ function withPsetTroubleshootingHint(apiMessage: string): string {
 			`${m} ` +
 			"Common causes: (1) Wrong Property Set **region** — EU projects need the EU `pset-api` host. Set **`VITE_TRIMBLE_CONNECT_REGION=eu`** at build, or **`TRIMBLE_CONNECT_REGION=eu`** for Docker/runtime `env.js`, or **`VITE_PSET_SERVICE_URI`** to the `pset-api` URL from `GET .../tc/api/2.0/regions`. " +
 			"(2) Library permissions — in Property Set Libraries → your library → Manage access control: use the new permissions model if prompted, Save, then **Publish** the library. " +
-			"(3) Confirm library id **WBS** and definition **Pset_IMASD_WBS** match the extension defaults (or your env vars)."
+			"(3) **Library id** must be the API id (`getLibrary`), and **defId** must be the **definition** id (block *IMASD_WBS*), not the property field *Pset_IMASD_WBS*. The extension resolves definitions via `listDefinitions` when `VITE_PSET_DEF_ID` is unset."
 		);
 	}
 	return m;
+}
+
+/**
+ * `defId` in changesets is the **definition** id (node id), not a property name inside the schema.
+ * Connect UI shows definition title *IMASD_WBS* and a property *Pset_IMASD_WBS* — those are different.
+ */
+async function resolveCanonicalLibAndDefIds(
+	pset: InstanceType<typeof PSet>,
+	configuredLibId: string,
+	definitionName: string,
+	explicitDefId: string | undefined,
+): Promise<{ libId: string; defId: string }> {
+	let gl: Awaited<ReturnType<PSet["getLibrary"]>>;
+	try {
+		gl = await pset.getLibrary(configuredLibId);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(
+			`${msg} Could not load library "${configuredLibId}". Set VITE_PSET_LIB_ID to the library id returned by the PSet API (LibraryResponse.id — often a UUID, not only the folder label "WBS").`,
+		);
+	}
+
+	const lib = gl.data as { id?: string; name?: string };
+	const libId = lib?.id ?? configuredLibId;
+
+	if (explicitDefId) {
+		return { libId, defId: explicitDefId };
+	}
+
+	let ld: Awaited<ReturnType<PSet["listDefinitions"]>>;
+	try {
+		ld = await pset.listDefinitions(libId, { top: 500 });
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		throw new Error(
+			`${msg} Could not list definitions in library "${lib.name ?? libId}".`,
+		);
+	}
+
+	const page = ld.data as { items?: Array<{ id: string; name: string }> };
+	const defs = page?.items ?? [];
+	const lower = definitionName.toLowerCase();
+	const match = defs.find(
+		(d) =>
+			d.name?.toLowerCase() === lower ||
+			d.id?.toLowerCase() === lower ||
+			d.id === definitionName,
+	);
+	if (match?.id) {
+		return { libId, defId: match.id };
+	}
+
+	throw new Error(
+		`No property set definition matching "${definitionName}" in library "${lib.name ?? libId}". ` +
+			`Found: ${defs.map((d) => `${d.name} (${d.id})`).join("; ") || "(none)"}. ` +
+			`Set VITE_PSET_DEF_ID to the definition id, or VITE_PSET_DEFINITION_NAME to match the definition title in Connect.`,
+	);
 }
 
 export async function writeWbsPropertySetValues(
@@ -238,14 +299,26 @@ export async function writeWbsPropertySetValues(
 	}
 
 	const serviceUri = await resolvePsetServiceUri();
-	const libId = import.meta.env.VITE_PSET_LIB_ID || DEFAULT_LIBRARY_ID;
-	const defId = import.meta.env.VITE_PSET_DEF_ID || DEFAULT_DEFINITION_ID;
-	const propertyName = import.meta.env.VITE_PSET_PROPERTY_NAME || DEFAULT_PROPERTY_NAME;
+	const configuredLibId =
+		import.meta.env.VITE_PSET_LIB_ID || DEFAULT_LIBRARY_ID;
+	const definitionName =
+		import.meta.env.VITE_PSET_DEFINITION_NAME || DEFAULT_DEFINITION_NAME;
+	const explicitDefId =
+		import.meta.env.VITE_PSET_DEF_ID?.trim() || undefined;
+	const propertyName =
+		import.meta.env.VITE_PSET_PROPERTY_NAME || DEFAULT_PROPERTY_NAME;
 
 	const pset = new PSet({
 		serviceUri,
 		credentials: new ServiceCredentials(undefined, token),
 	});
+
+	const { libId, defId } = await resolveCanonicalLibAndDefIds(
+		pset,
+		configuredLibId,
+		definitionName,
+		explicitDefId,
+	);
 
 	const changesetItems = items.map((item) => ({
 		link: item.link || buildEntityLink(project.id, item.modelId, item.partId),
