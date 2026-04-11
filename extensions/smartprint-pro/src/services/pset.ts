@@ -32,6 +32,8 @@ type TrimbleRegionRow = {
 	origin?: string;
 	/** Regional Property Set service base URL */
 	"pset-api"?: string;
+	/** Regional Connect Core API base (e.g. `https://app21.connect.trimble.com/tc/api/2.0/`) */
+	"tc-api"?: string;
 };
 
 function hostnameKey(raw: string | undefined): string {
@@ -118,6 +120,31 @@ function psetUrlFromRow(row: TrimbleRegionRow | undefined): string | null {
 	const u = row?.["pset-api"];
 	if (typeof u === "string" && u.startsWith("http")) {
 		return ensureTrailingSlash(u);
+	}
+	return null;
+}
+
+function tcApiUrlFromRow(row: TrimbleRegionRow | undefined): string | null {
+	const u = row?.["tc-api"];
+	if (typeof u === "string" && u.startsWith("http")) {
+		return ensureTrailingSlash(u);
+	}
+	return null;
+}
+
+/** Map the chosen Property Set API host to the matching regional Connect Core `tc-api` base (for project JSON). */
+async function resolveTcApiBaseForPsetServiceUri(
+	psetServiceUri: string,
+): Promise<string | null> {
+	const rows = await loadTrimbleRegions();
+	if (!rows?.length) return null;
+	const want = hostnameKey(ensureTrailingSlash(psetServiceUri));
+	for (const row of rows) {
+		const pset = psetUrlFromRow(row);
+		if (!pset) continue;
+		if (hostnameKey(pset) === want) {
+			return tcApiUrlFromRow(row);
+		}
 	}
 	return null;
 }
@@ -224,88 +251,122 @@ function withPsetTroubleshootingHint(apiMessage: string): string {
 	return m;
 }
 
-type PsetLibraryRow = { id: string; name?: string };
+const UUID_RE =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function normalizeLibraryRows(data: unknown): PsetLibraryRow[] {
-	if (Array.isArray(data)) {
-		return data as PsetLibraryRow[];
+/**
+ * Deep-search Connect Core project JSON for objects that look like a named library
+ * (`name` + UUID `id`). Verified later with `getLibrary(id)`.
+ */
+function collectNamedLibraryIdCandidates(
+	data: unknown,
+	names: string[],
+): string[] {
+	const want = new Set(
+		names.map((c) => c.trim().toLowerCase()).filter((c) => c.length > 0),
+	);
+	if (want.size === 0) return [];
+
+	const out: string[] = [];
+
+	function walk(node: unknown, depth: number): void {
+		if (depth > 32) return;
+		if (!node || typeof node !== "object") return;
+		if (Array.isArray(node)) {
+			for (const x of node) walk(x, depth + 1);
+			return;
+		}
+		const o = node as Record<string, unknown>;
+		const nm = o.name;
+		const id = o.id;
+		if (
+			typeof nm === "string" &&
+			want.has(nm.toLowerCase()) &&
+			typeof id === "string" &&
+			UUID_RE.test(id)
+		) {
+			out.push(id);
+		}
+		for (const v of Object.values(o)) {
+			walk(v, depth + 1);
+		}
 	}
-	if (
-		data &&
-		typeof data === "object" &&
-		Array.isArray((data as { items?: unknown }).items)
-	) {
-		return (data as { items: PsetLibraryRow[] }).items;
+
+	walk(data, 0);
+	return [...new Set(out)];
+}
+
+async function fetchConnectProjectDocument(
+	tcBase: string,
+	projectId: string,
+	token: string,
+): Promise<unknown | null> {
+	const id = encodeURIComponent(projectId);
+	const urls: string[] = [];
+	if (tcBase.includes("/2.0/")) {
+		urls.push(tcBase.replace("/2.0/", "/2.1/") + `projects/${id}`);
 	}
-	return [];
+	urls.push(`${tcBase}projects/${id}?fullyLoaded=true`);
+
+	for (const url of urls) {
+		try {
+			const res = await fetch(url, {
+				headers: {
+					Accept: "application/json",
+					Authorization: `Bearer ${token}`,
+				},
+			});
+			if (res.ok) {
+				return res.json();
+			}
+		} catch {
+			/* try next */
+		}
+	}
+	return null;
 }
 
 /**
- * `GET libs` lists libraries the token can see; breadcrumb labels like "WBS" match `name`, not `libs/WBS`.
+ * Property Set Service has no `GET .../libs` list endpoint; library ids sometimes appear in
+ * Connect Core project JSON (`tc-api` for the same region as `pset-api`).
  */
-async function discoverLibraryIdByDisplayName(
-	serviceUri: string,
+async function tryResolveLibraryIdFromConnectProject(
+	projectId: string,
 	token: string,
-	candidates: string[],
+	psetServiceUri: string,
+	displayNames: string[],
+	pset: InstanceType<typeof PSet>,
 ): Promise<string | null> {
-	const want = new Set(
-		candidates
-			.map((c) => c.trim().toLowerCase())
-			.filter((c) => c.length > 0),
+	const tcBase = await resolveTcApiBaseForPsetServiceUri(psetServiceUri);
+	if (!tcBase) return null;
+
+	const projectJson = await fetchConnectProjectDocument(
+		tcBase,
+		projectId,
+		token,
 	);
-	if (want.size === 0) {
-		return null;
-	}
+	if (projectJson === null) return null;
 
-	const base = ensureTrailingSlash(serviceUri);
-	const headersBase: Record<string, string> = {
-		Accept: "application/json",
-		Authorization: `Bearer ${token}`,
-	};
-
-	async function tryFetch(
-		init: RequestInit & { headers: Record<string, string> },
-	): Promise<PsetLibraryRow[] | null> {
+	const candidates = collectNamedLibraryIdCandidates(projectJson, displayNames);
+	for (const id of candidates) {
 		try {
-			const res = await fetch(`${base}libs`, init);
-			if (!res.ok) {
-				return null;
-			}
-			const data = (await res.json()) as unknown;
-			return normalizeLibraryRows(data);
+			await pset.getLibrary(id);
+			return id;
 		} catch {
-			return null;
+			/* not a PSet library id — try next candidate */
 		}
 	}
+	return null;
+}
 
-	/** Prefer ranged listing (SDK-style); fall back to a single unbounded request. */
-	let rows =
-		(await tryFetch({
-			method: "GET",
-			headers: { ...headersBase, Range: "items=0-499" },
-		})) ??
-		(await tryFetch({ method: "GET", headers: { ...headersBase } }));
-
-	if (!rows?.length) {
-		return null;
-	}
-
-	for (let start = 500; start < 5000; start += 500) {
-		const page = await tryFetch({
-			method: "GET",
-			headers: { ...headersBase, Range: `items=${start}-${start + 499}` },
-		});
-		if (!page?.length) {
-			break;
-		}
-		rows = rows.concat(page);
-		if (page.length < 500) {
-			break;
-		}
-	}
-
-	const hit = rows.find((r) => r.name && want.has(r.name.toLowerCase()));
-	return hit?.id ?? null;
+function formatMissingLibraryIdHint(): string {
+	return (
+		"The folder label (e.g. WBS) is not the PSet library id. " +
+		"Set VITE_PSET_LIB_ID to LibraryResponse.id (UUID) from getLibrary. " +
+		"To find it: open your project’s Property Set Libraries in Connect (same page as …/property-set-libraries), " +
+		"open DevTools → Network, filter by \"pset-api\", click the WBS library, and copy the id from a request URL like …/v1/libs/{uuid}/… . " +
+		"See also: https://developer.trimble.com/docs/connect/tools/api/property-set/"
+	);
 }
 
 /**
@@ -314,6 +375,7 @@ async function discoverLibraryIdByDisplayName(
  */
 async function resolveCanonicalLibAndDefIds(
 	pset: InstanceType<typeof PSet>,
+	projectId: string,
 	serviceUri: string,
 	token: string,
 	configuredLibId: string,
@@ -325,19 +387,18 @@ async function resolveCanonicalLibAndDefIds(
 	try {
 		gl = await pset.getLibrary(configuredLibId);
 	} catch (firstErr) {
-		const discovered = await discoverLibraryIdByDisplayName(
-			serviceUri,
+		const discovered = await tryResolveLibraryIdFromConnectProject(
+			projectId,
 			token,
+			serviceUri,
 			libraryNameCandidates,
+			pset,
 		);
 		if (!discovered) {
 			const msg =
 				firstErr instanceof Error ? firstErr.message : String(firstErr);
 			throw new Error(
-				`${msg} Could not load library "${configuredLibId}". ` +
-					`The PSet API expects LibraryResponse.id from getLibrary (often a UUID), not the folder label "WBS". ` +
-					`Set VITE_PSET_LIB_ID to that id, or VITE_PSET_LIBRARY_NAME (e.g. WBS) so the extension can resolve it via GET libs. ` +
-					`You can copy the id from the browser Network tab when opening the library in Trimble Connect.`,
+				`${msg} Could not load library "${configuredLibId}". ${formatMissingLibraryIdHint()}`,
 			);
 		}
 		try {
@@ -345,7 +406,7 @@ async function resolveCanonicalLibAndDefIds(
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			throw new Error(
-				`${msg} Resolved library id "${discovered}" from name match but getLibrary failed.`,
+				`${msg} Resolved library id "${discovered}" from Connect project data but getLibrary failed.`,
 			);
 		}
 	}
@@ -436,6 +497,7 @@ export async function writeWbsPropertySetValues(
 
 	const { libId, defId } = await resolveCanonicalLibAndDefIds(
 		pset,
+		project.id,
 		serviceUri,
 		token,
 		configuredLibId,
