@@ -1,7 +1,17 @@
 import { PSet, ServiceCredentials } from "trimble-connect-sdk";
 import type { WorkspaceApi } from "@imasd/shared/trimble";
 
-/** NA default from `GET https://app.connect.trimble.com/tc/api/2.0/regions` → `pset-api` (legacy `pset-api.connect.trimble.com` is not listed). */
+/** EU — from `GET .../tc/api/2.0/regions` (`serviceRegion: eu`, origin `app21.connect.trimble.com`). */
+const EU_PSET_SERVICE_URI =
+	"https://pset-api.eu-west-1.connect.trimble.com/v1/";
+
+/**
+ * Temporary: always use the EU Property Set API (for testing). Set to `false` to restore
+ * region discovery (`/regions`, `VITE_TRIMBLE_CONNECT_REGION`, etc.).
+ */
+const FORCE_EU_PSET_API_FOR_TESTING = true;
+
+/** Fallback when region discovery fails (NA shard). */
 const DEFAULT_PSET_SERVICE_URI =
 	"https://pset-api.us-east-1.connect.trimble.com/v1/";
 const DEFAULT_LIBRARY_ID = "WBS";
@@ -131,6 +141,10 @@ export async function resolvePsetServiceUri(): Promise<string> {
 	).env?.VITE_PSET_SERVICE_URI;
 	if (env?.trim()) {
 		return ensureTrailingSlash(env.trim());
+	}
+
+	if (FORCE_EU_PSET_API_FOR_TESTING) {
+		return ensureTrailingSlash(EU_PSET_SERVICE_URI);
 	}
 
 	const rows = await loadTrimbleRegions();
