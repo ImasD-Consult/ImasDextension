@@ -16,10 +16,11 @@ const DEFAULT_PSET_SERVICE_URI =
 	"https://pset-api.us-east-1.connect.trimble.com/v1/";
 const DEFAULT_LIBRARY_ID = "WBS";
 /**
- * Property set **definition** title in Connect (the block name), *not* the schema field name.
- * The field written in `props` is `DEFAULT_PROPERTY_NAME` (`Pset_IMASD_WBS`).
+ * Property set **definition** title in Connect (the block name in the library editor).
+ * Your library uses the same label for the block and the schema field: *Pset_IMASD_WBS*.
+ * The value written in `props` uses `DEFAULT_PROPERTY_NAME` (also `Pset_IMASD_WBS` by default).
  */
-const DEFAULT_DEFINITION_NAME = "IMASD_WBS";
+const DEFAULT_DEFINITION_NAME = "Pset_IMASD_WBS";
 const DEFAULT_PROPERTY_NAME = "Pset_IMASD_WBS";
 
 const REGIONS_JSON_URL = "https://app.connect.trimble.com/tc/api/2.0/regions";
@@ -217,30 +218,136 @@ function withPsetTroubleshootingHint(apiMessage: string): string {
 			`${m} ` +
 			"Common causes: (1) Wrong Property Set **region** — EU projects need the EU `pset-api` host. Set **`VITE_TRIMBLE_CONNECT_REGION=eu`** at build, or **`TRIMBLE_CONNECT_REGION=eu`** for Docker/runtime `env.js`, or **`VITE_PSET_SERVICE_URI`** to the `pset-api` URL from `GET .../tc/api/2.0/regions`. " +
 			"(2) Library permissions — in Property Set Libraries → your library → Manage access control: use the new permissions model if prompted, Save, then **Publish** the library. " +
-			"(3) **Library id** must be the API id (`getLibrary`), and **defId** must be the **definition** id (block *IMASD_WBS*), not the property field *Pset_IMASD_WBS*. The extension resolves definitions via `listDefinitions` when `VITE_PSET_DEF_ID` is unset."
+			"(3) **Library id** must be the API id (`getLibrary` / `LibraryResponse.id`), not only the folder label. **defId** must be the **definition** id; the extension matches the definition by name (`VITE_PSET_DEFINITION_NAME`, default *Pset_IMASD_WBS*) via `listDefinitions` when `VITE_PSET_DEF_ID` is unset."
 		);
 	}
 	return m;
 }
 
+type PsetLibraryRow = { id: string; name?: string };
+
+function normalizeLibraryRows(data: unknown): PsetLibraryRow[] {
+	if (Array.isArray(data)) {
+		return data as PsetLibraryRow[];
+	}
+	if (
+		data &&
+		typeof data === "object" &&
+		Array.isArray((data as { items?: unknown }).items)
+	) {
+		return (data as { items: PsetLibraryRow[] }).items;
+	}
+	return [];
+}
+
+/**
+ * `GET libs` lists libraries the token can see; breadcrumb labels like "WBS" match `name`, not `libs/WBS`.
+ */
+async function discoverLibraryIdByDisplayName(
+	serviceUri: string,
+	token: string,
+	candidates: string[],
+): Promise<string | null> {
+	const want = new Set(
+		candidates
+			.map((c) => c.trim().toLowerCase())
+			.filter((c) => c.length > 0),
+	);
+	if (want.size === 0) {
+		return null;
+	}
+
+	const base = ensureTrailingSlash(serviceUri);
+	const headersBase: Record<string, string> = {
+		Accept: "application/json",
+		Authorization: `Bearer ${token}`,
+	};
+
+	async function tryFetch(
+		init: RequestInit & { headers: Record<string, string> },
+	): Promise<PsetLibraryRow[] | null> {
+		try {
+			const res = await fetch(`${base}libs`, init);
+			if (!res.ok) {
+				return null;
+			}
+			const data = (await res.json()) as unknown;
+			return normalizeLibraryRows(data);
+		} catch {
+			return null;
+		}
+	}
+
+	/** Prefer ranged listing (SDK-style); fall back to a single unbounded request. */
+	let rows =
+		(await tryFetch({
+			method: "GET",
+			headers: { ...headersBase, Range: "items=0-499" },
+		})) ??
+		(await tryFetch({ method: "GET", headers: { ...headersBase } }));
+
+	if (!rows?.length) {
+		return null;
+	}
+
+	for (let start = 500; start < 5000; start += 500) {
+		const page = await tryFetch({
+			method: "GET",
+			headers: { ...headersBase, Range: `items=${start}-${start + 499}` },
+		});
+		if (!page?.length) {
+			break;
+		}
+		rows = rows.concat(page);
+		if (page.length < 500) {
+			break;
+		}
+	}
+
+	const hit = rows.find((r) => r.name && want.has(r.name.toLowerCase()));
+	return hit?.id ?? null;
+}
+
 /**
  * `defId` in changesets is the **definition** id (node id), not a property name inside the schema.
- * Connect UI shows definition title *IMASD_WBS* and a property *Pset_IMASD_WBS* — those are different.
+ * Connect may show the same label for the definition block and the property (e.g. *Pset_IMASD_WBS*).
  */
 async function resolveCanonicalLibAndDefIds(
 	pset: InstanceType<typeof PSet>,
+	serviceUri: string,
+	token: string,
 	configuredLibId: string,
+	libraryNameCandidates: string[],
 	definitionName: string,
 	explicitDefId: string | undefined,
 ): Promise<{ libId: string; defId: string }> {
 	let gl: Awaited<ReturnType<PSet["getLibrary"]>>;
 	try {
 		gl = await pset.getLibrary(configuredLibId);
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		throw new Error(
-			`${msg} Could not load library "${configuredLibId}". Set VITE_PSET_LIB_ID to the library id returned by the PSet API (LibraryResponse.id — often a UUID, not only the folder label "WBS").`,
+	} catch (firstErr) {
+		const discovered = await discoverLibraryIdByDisplayName(
+			serviceUri,
+			token,
+			libraryNameCandidates,
 		);
+		if (!discovered) {
+			const msg =
+				firstErr instanceof Error ? firstErr.message : String(firstErr);
+			throw new Error(
+				`${msg} Could not load library "${configuredLibId}". ` +
+					`The PSet API expects LibraryResponse.id from getLibrary (often a UUID), not the folder label "WBS". ` +
+					`Set VITE_PSET_LIB_ID to that id, or VITE_PSET_LIBRARY_NAME (e.g. WBS) so the extension can resolve it via GET libs. ` +
+					`You can copy the id from the browser Network tab when opening the library in Trimble Connect.`,
+			);
+		}
+		try {
+			gl = await pset.getLibrary(discovered);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			throw new Error(
+				`${msg} Resolved library id "${discovered}" from name match but getLibrary failed.`,
+			);
+		}
 	}
 
 	const lib = gl.data as { id?: string; name?: string };
@@ -299,14 +406,28 @@ export async function writeWbsPropertySetValues(
 	}
 
 	const serviceUri = await resolvePsetServiceUri();
-	const configuredLibId =
-		import.meta.env.VITE_PSET_LIB_ID || DEFAULT_LIBRARY_ID;
+	const env = (
+		import.meta as ImportMeta & {
+			env?: {
+				VITE_PSET_LIB_ID?: string;
+				VITE_PSET_LIBRARY_NAME?: string;
+				VITE_PSET_DEFINITION_NAME?: string;
+				VITE_PSET_DEF_ID?: string;
+				VITE_PSET_PROPERTY_NAME?: string;
+			};
+		}
+	).env;
+	const configuredLibId = env?.VITE_PSET_LIB_ID || DEFAULT_LIBRARY_ID;
 	const definitionName =
-		import.meta.env.VITE_PSET_DEFINITION_NAME || DEFAULT_DEFINITION_NAME;
-	const explicitDefId =
-		import.meta.env.VITE_PSET_DEF_ID?.trim() || undefined;
-	const propertyName =
-		import.meta.env.VITE_PSET_PROPERTY_NAME || DEFAULT_PROPERTY_NAME;
+		env?.VITE_PSET_DEFINITION_NAME || DEFAULT_DEFINITION_NAME;
+	const explicitDefId = env?.VITE_PSET_DEF_ID?.trim() || undefined;
+	const propertyName = env?.VITE_PSET_PROPERTY_NAME || DEFAULT_PROPERTY_NAME;
+
+	const libraryNameCandidates = [
+		env?.VITE_PSET_LIBRARY_NAME,
+		configuredLibId,
+		DEFAULT_LIBRARY_ID,
+	].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
 
 	const pset = new PSet({
 		serviceUri,
@@ -315,7 +436,10 @@ export async function writeWbsPropertySetValues(
 
 	const { libId, defId } = await resolveCanonicalLibAndDefIds(
 		pset,
+		serviceUri,
+		token,
 		configuredLibId,
+		libraryNameCandidates,
 		definitionName,
 		explicitDefId,
 	);
