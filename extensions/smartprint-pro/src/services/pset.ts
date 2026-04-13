@@ -370,6 +370,92 @@ function formatMissingLibraryIdHint(): string {
 	);
 }
 
+function collectSchemaPropertyKeys(
+	schemaNode: unknown,
+	out: Set<string>,
+	depth = 0,
+): void {
+	if (!schemaNode || typeof schemaNode !== "object" || depth > 12) return;
+	const o = schemaNode as Record<string, unknown>;
+
+	const props = o.properties;
+	if (props && typeof props === "object" && !Array.isArray(props)) {
+		for (const key of Object.keys(props as Record<string, unknown>)) {
+			out.add(key);
+		}
+	}
+
+	for (const k of ["allOf", "anyOf", "oneOf"]) {
+		const seq = o[k];
+		if (Array.isArray(seq)) {
+			for (const item of seq) {
+				collectSchemaPropertyKeys(item, out, depth + 1);
+			}
+		}
+	}
+	if (o.items) {
+		collectSchemaPropertyKeys(o.items, out, depth + 1);
+	}
+}
+
+function extractDefinitionSchemaPropertyKeys(definitionData: unknown): string[] {
+	const keys = new Set<string>();
+	if (!definitionData || typeof definitionData !== "object") return [];
+	const d = definitionData as Record<string, unknown>;
+
+	const directSchema = d.schema;
+	if (directSchema) {
+		collectSchemaPropertyKeys(directSchema, keys);
+	}
+	const latestVersion = d.latestVersion;
+	if (latestVersion && typeof latestVersion === "object") {
+		collectSchemaPropertyKeys(
+			(latestVersion as { schema?: unknown }).schema,
+			keys,
+		);
+	}
+	const versions = d.versions;
+	if (Array.isArray(versions)) {
+		for (const ver of versions) {
+			if (ver && typeof ver === "object") {
+				collectSchemaPropertyKeys((ver as { schema?: unknown }).schema, keys);
+			}
+		}
+	}
+
+	return [...keys];
+}
+
+async function resolveSchemaPropertyName(
+	pset: InstanceType<typeof PSet>,
+	libId: string,
+	defId: string,
+	preferred: string,
+): Promise<string> {
+	let gd: Awaited<ReturnType<PSet["getDefinition"]>>;
+	try {
+		gd = await pset.getDefinition(libId, defId);
+	} catch {
+		// If definition schema cannot be loaded, keep configured behavior.
+		return preferred;
+	}
+
+	const keys = extractDefinitionSchemaPropertyKeys(gd.data);
+	if (!keys.length) return preferred;
+	if (keys.includes(preferred)) return preferred;
+
+	const caseInsensitive = keys.find(
+		(k) => k.toLowerCase() === preferred.toLowerCase(),
+	);
+	if (caseInsensitive) return caseInsensitive;
+	if (keys.length === 1) return keys[0];
+
+	throw new Error(
+		`Configured property "${preferred}" is not in definition schema (${defId}). ` +
+			`Available properties: ${keys.join(", ")}. Set VITE_PSET_PROPERTY_NAME to one of these keys.`,
+	);
+}
+
 /**
  * `defId` in changesets is the **definition** id (node id), not a property name inside the schema.
  * Connect may show the same label for the definition block and the property (e.g. *Pset_IMASD_WBS*).
@@ -484,7 +570,8 @@ export async function writeWbsPropertySetValues(
 		env?.VITE_PSET_DEFINITION_NAME || DEFAULT_DEFINITION_NAME;
 	const explicitDefId =
 		env?.VITE_PSET_DEF_ID?.trim() || DEFAULT_DEFINITION_ID;
-	const propertyName = env?.VITE_PSET_PROPERTY_NAME || DEFAULT_PROPERTY_NAME;
+	const configuredPropertyName =
+		env?.VITE_PSET_PROPERTY_NAME || DEFAULT_PROPERTY_NAME;
 
 	const libraryNameCandidates = [
 		env?.VITE_PSET_LIBRARY_NAME,
@@ -506,6 +593,12 @@ export async function writeWbsPropertySetValues(
 		libraryNameCandidates,
 		definitionName,
 		explicitDefId,
+	);
+	const propertyName = await resolveSchemaPropertyName(
+		pset,
+		libId,
+		defId,
+		configuredPropertyName,
 	);
 
 	const changesetItems = items.map((item) => ({
