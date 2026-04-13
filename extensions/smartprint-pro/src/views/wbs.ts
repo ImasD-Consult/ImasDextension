@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 2.4)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 2.5)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -402,7 +402,7 @@ export async function renderWbs(
               Use current 3D selection
             </button>
           </div>
-          <div class="flex-1 min-h-0 overflow-auto px-2 pb-2 space-y-2" data-parts-list>
+          <div class="flex-1 min-h-0 overflow-auto px-2 pb-2 space-y-2 select-none" data-parts-list>
             <p class="text-sm text-gray-400 italic">Loading parts...</p>
           </div>
           <div class="px-2 pb-2 shrink-0 border-t border-gray-100">
@@ -427,7 +427,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 2.4)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 2.5)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -535,7 +535,7 @@ export async function renderWbs(
           `
 					}
 
-          <div class="max-h-[52vh] overflow-auto space-y-2" data-parts-list>
+          <div class="max-h-[52vh] overflow-auto space-y-2 select-none" data-parts-list>
             <p class="text-sm text-gray-400 italic">Loading parts...</p>
           </div>
 
@@ -656,6 +656,8 @@ export async function renderWbs(
 			.filter((p) => selectedPartIds.has(p.id))
 			.map((p) => Number(p.id))
 			.filter((n) => !Number.isNaN(n));
+		// Avoid setSelection with an empty list — some hosts treat it like "all" or reset badly.
+		if (runtimeIds.length === 0) return;
 		try {
 			await v.setSelection(
 				{
@@ -723,53 +725,32 @@ export async function renderWbs(
 		if (!activeModelId) return;
 
 		const runtimeIds = new Set<number>();
+		const currentOpenModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelMatchesActive = (mid: string | undefined): boolean => {
+			if (!currentOpenModel) return !mid || mid === activeModelId;
+			// Omitting modelId is only unambiguous when a single IFC is available.
+			if (!mid) return allIfcModels.length <= 1;
+			return (
+				mid === currentOpenModel.id || mid === currentOpenModel.versionId
+			);
+		};
 		try {
 			if (typeof viewer?.getSelection === "function") {
 				const sel = await viewer.getSelection();
 				for (const row of sel?.modelObjectIds ?? []) {
-					if (row?.modelId && row.modelId !== activeModelId) continue;
+					if (!modelMatchesActive(row?.modelId)) continue;
 					for (const rid of row?.objectRuntimeIds ?? []) {
 						if (typeof rid === "number" && !Number.isNaN(rid)) runtimeIds.add(rid);
 					}
 				}
 			}
 		} catch {
-			/* fallback below */
+			/* selection API unavailable */
 		}
 
-		if (runtimeIds.size === 0 && typeof viewer?.getObjects === "function") {
-			try {
-				const rows = await viewer.getObjects(undefined, {
-					selected: true,
-				} as Record<string, unknown>);
-				for (const row of rows ?? []) {
-					if (!row || typeof row !== "object") continue;
-					const ro = row as Record<string, unknown>;
-					const mid = typeof ro.modelId === "string" ? ro.modelId : "";
-					if (mid && mid !== activeModelId) continue;
-					const objects = ro.objects;
-					if (Array.isArray(objects)) {
-						for (const obj of objects) {
-							if (typeof obj === "number") runtimeIds.add(obj);
-							else if (obj && typeof obj === "object") {
-								const oo = obj as Record<string, unknown>;
-								const rid =
-									typeof oo.objectRuntimeId === "number"
-										? oo.objectRuntimeId
-										: typeof oo.id === "number"
-											? oo.id
-											: typeof oo.runtimeId === "number"
-												? oo.runtimeId
-												: null;
-								if (rid != null) runtimeIds.add(rid);
-							}
-						}
-					}
-				}
-			} catch {
-				/* leave empty selection */
-			}
-		}
+		// Do NOT use getObjects(undefined, …): omitted selector = all visible objects (not selection).
 
 		selectedPartIds.clear();
 		for (const p of getAssignableParts()) {
@@ -777,7 +758,16 @@ export async function renderWbs(
 			if (!Number.isNaN(rid) && runtimeIds.has(rid)) selectedPartIds.add(p.id);
 		}
 		refreshPartsList();
-		await syncViewerSelection();
+		if (runtimeIds.size === 0) {
+			setStatus(
+				"No 3D selection returned (or host does not expose getSelection). Select in the model, then try again.",
+				"error",
+			);
+		} else {
+			setStatus(
+				`Matched ${selectedPartIds.size} of ${runtimeIds.size} selected object(s) to this list.`,
+			);
+		}
 	}
 
 	function refreshPartsList(): void {
@@ -1187,7 +1177,6 @@ export async function renderWbs(
 	});
 
 	assignButtonEl.addEventListener("click", async () => {
-		await syncSelectedPartsFromViewerNative();
 		if (selectedWbsRowIndex === null) return;
 		const assignedRowIndex = selectedWbsRowIndex;
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
