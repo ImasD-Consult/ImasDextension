@@ -864,6 +864,8 @@ export async function fetchIfcAssembliesFromFile(
 		runtimeId: number;
 		name?: string;
 		classHint?: string;
+		link?: string;
+		entityKey?: string;
 	};
 
 	function collectObjectsFromModelObjectsEntry(
@@ -901,7 +903,32 @@ export async function fetchIfcAssembliesFromFile(
 							: typeof it.type === "string"
 								? it.type
 								: undefined;
-					out.push({ runtimeId: rid, name, classHint });
+					const frnLink =
+						typeof it.frn === "string" && it.frn.trim()
+							? it.frn.trim()
+							: typeof it.link === "string" && it.link.trim()
+								? it.link.trim()
+								: undefined;
+					const entityCandidate =
+						typeof it.fileId === "string" && it.fileId.trim()
+							? it.fileId.trim()
+							: typeof it.guid === "string" && it.guid.trim()
+								? it.guid.trim()
+								: typeof it.globalId === "string" && it.globalId.trim()
+									? it.globalId.trim()
+									: undefined;
+					out.push({
+						runtimeId: rid,
+						name,
+						classHint,
+						link: frnLink,
+						entityKey:
+							entityCandidate &&
+							!/^\d+$/.test(entityCandidate) &&
+							entityCandidate.length >= 10
+								? entityCandidate
+								: undefined,
+					});
 				}
 			}
 			return out;
@@ -1175,6 +1202,9 @@ export async function fetchIfcAssembliesFromFile(
 			name: r.name?.trim() || `Object ${r.runtimeId}`,
 			type: (r.classHint ?? "UNKNOWN").toUpperCase(),
 			material: "Unknown",
+			link:
+				r.link ??
+				(r.entityKey ? `frn:entity:${r.entityKey}` : undefined),
 		}));
 
 		const modelIdForProps = mids[0] ?? primary.id;
