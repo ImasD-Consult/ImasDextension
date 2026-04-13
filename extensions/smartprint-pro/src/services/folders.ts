@@ -926,18 +926,34 @@ export async function fetchIfcAssembliesFromFile(
 	 */
 	function extractDisplayNameAndMaterialFromProps(
 		root: unknown,
-	): { displayName?: string; material?: string } {
+	): { displayName?: string; material?: string; entityKey?: string } {
 		let productName: string | undefined;
 		let objectName: string | undefined;
 		let genericName: string | undefined;
 		let tag: string | undefined;
 		let material: string | undefined;
+		let entityKey: string | undefined;
 
 		function considerPair(keyRaw: string, value: unknown): void {
 			if (typeof value !== "string") return;
 			const v = value.trim();
 			if (!v) return;
 			const k = keyRaw.trim().toLowerCase().replace(/\s+/g, " ");
+			if (!entityKey) {
+				const entityKeyNames = new Set([
+					"guid",
+					"globalid",
+					"global id",
+					"fileid",
+					"file id",
+					"entity guid",
+					"entityguid",
+					"entity id",
+				]);
+				if (entityKeyNames.has(k) && !/^\d+$/.test(v) && v.length >= 10) {
+					entityKey = v;
+				}
+			}
 			if (k === "product name" || k === "productname") {
 				if (!productName) productName = v;
 				return;
@@ -1003,7 +1019,7 @@ export async function fetchIfcAssembliesFromFile(
 		walk(root, 0);
 		const displayName =
 			productName ?? objectName ?? genericName ?? tag;
-		return { displayName, material };
+		return { displayName, material, entityKey };
 	}
 
 	async function enrichPartsFromObjectProperties(
@@ -1022,6 +1038,7 @@ export async function fetchIfcAssembliesFromFile(
 		const classByRuntime = new Map<number, string>();
 		const displayNameByRuntime = new Map<number, string>();
 		const materialByRuntime = new Map<number, string>();
+		const linkByRuntime = new Map<number, string>();
 
 		for (let i = 0; i < runtimeIds.length; i += BATCH) {
 			const chunk = runtimeIds.slice(i, i + BATCH);
@@ -1037,6 +1054,30 @@ export async function fetchIfcAssembliesFromFile(
 						typeof ridRaw === "number" && !Number.isNaN(ridRaw)
 							? ridRaw
 							: chunk[j];
+					const topLink =
+						typeof po.frn === "string" && po.frn.trim()
+							? po.frn.trim()
+							: typeof po.link === "string" && po.link.trim()
+								? po.link.trim()
+								: undefined;
+					if (topLink) {
+						linkByRuntime.set(rid, topLink);
+					}
+					const topEntityCandidate =
+						typeof po.fileId === "string" && po.fileId.trim()
+							? po.fileId.trim()
+							: typeof po.guid === "string" && po.guid.trim()
+								? po.guid.trim()
+								: typeof po.globalId === "string" && po.globalId.trim()
+									? po.globalId.trim()
+									: undefined;
+					if (
+						topEntityCandidate &&
+						!/^\d+$/.test(topEntityCandidate) &&
+						topEntityCandidate.length >= 10
+					) {
+						linkByRuntime.set(rid, `frn:entity:${topEntityCandidate}`);
+					}
 					if (typeof po.class === "string" && po.class.trim()) {
 						classByRuntime.set(rid, po.class);
 					}
@@ -1048,11 +1089,18 @@ export async function fetchIfcAssembliesFromFile(
 					} else if (typeof po.label === "string" && po.label.trim()) {
 						topLevelName = po.label.trim();
 					}
-					const { displayName: fromTree, material } =
+					const { displayName: fromTree, material, entityKey } =
 						extractDisplayNameAndMaterialFromProps(pr);
 					const displayName = topLevelName ?? fromTree;
 					if (displayName) displayNameByRuntime.set(rid, displayName);
 					if (material) materialByRuntime.set(rid, material);
+					if (
+						entityKey &&
+						!/^\d+$/.test(entityKey) &&
+						entityKey.length >= 10
+					) {
+						linkByRuntime.set(rid, `frn:entity:${entityKey}`);
+					}
 				}
 			} catch {
 				/* next batch */
@@ -1065,6 +1113,7 @@ export async function fetchIfcAssembliesFromFile(
 			const cls = classByRuntime.get(rid);
 			const dn = displayNameByRuntime.get(rid);
 			const mat = materialByRuntime.get(rid);
+			const lnk = linkByRuntime.get(rid);
 			const baseName = p.name?.trim() ?? "";
 			const isPlaceholder =
 				baseName.length === 0 || /^object\s+\d+$/i.test(baseName);
@@ -1075,9 +1124,15 @@ export async function fetchIfcAssembliesFromFile(
 			let material = p.material;
 			if (mat) material = mat;
 			if (cls) {
-				return { ...p, name, type: cls.toUpperCase(), material };
+				return {
+					...p,
+					name,
+					type: cls.toUpperCase(),
+					material,
+					link: lnk ?? p.link,
+				};
 			}
-			return { ...p, name, material };
+			return { ...p, name, material, link: lnk ?? p.link };
 		});
 	}
 
