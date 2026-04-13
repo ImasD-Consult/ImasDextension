@@ -657,19 +657,43 @@ export async function writeWbsPropertySetValues(
 		definitionName,
 	);
 
-	const changesetItems = items.map((item) => ({
-		link: item.link || buildEntityLink(project.id, item.modelId, item.partId),
-		libId,
-		defId,
-		props: { [propertyName]: item.value },
-	}));
+	const buildChangesetItems = (propKey: string) =>
+		items.map((item) => ({
+			link: item.link || buildEntityLink(project.id, item.modelId, item.partId),
+			libId,
+			defId,
+			props: { [propKey]: item.value },
+		}));
 
 	let response: Awaited<ReturnType<PSet["changeset"]>>;
 	try {
-		response = await pset.changeset({ items: changesetItems });
+		response = await pset.changeset({ items: buildChangesetItems(propertyName) });
 	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		throw new Error(withPsetTroubleshootingHint(msg));
+		const firstMsg = err instanceof Error ? err.message : String(err);
+		const retryKey =
+			propertyName.startsWith("Pset_") && propertyName.length > 5
+				? propertyName.slice("Pset_".length)
+				: undefined;
+		if (
+			retryKey &&
+			firstMsg.includes(`Property '${propertyName}' has not been defined`)
+		) {
+			try {
+				response = await pset.changeset({
+					items: buildChangesetItems(retryKey),
+				});
+			} catch (retryErr) {
+				const retryMsg =
+					retryErr instanceof Error ? retryErr.message : String(retryErr);
+				throw new Error(
+					withPsetTroubleshootingHint(
+						`${retryMsg} (Tried property keys: ${propertyName}, ${retryKey})`,
+					),
+				);
+			}
+		} else {
+			throw new Error(withPsetTroubleshootingHint(firstMsg));
+		}
 	}
 
 	const inline = response.data as {
