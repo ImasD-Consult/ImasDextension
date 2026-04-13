@@ -267,15 +267,22 @@ function renderPartsList(
 
 	return filtered
 		.map((part) => {
+			const hasStableLink = Boolean(part.link?.trim().startsWith("frn:entity:"));
+			const disabled = hasStableLink ? "" : "disabled";
 			const checked = selectedPartIds.has(part.id) ? "checked" : "";
 			const metaRight =
 				listStyle === "nameMaterial"
 					? `<span class="ml-auto text-xs text-gray-600 truncate max-w-[45%] text-right" title="${escapeHtml(part.material)}">${escapeHtml(part.material)}</span>`
 					: `<span class="ml-auto text-xs text-gray-500">${escapeHtml(part.type)} | ${escapeHtml(part.material)}</span>`;
 			return `
-        <label class="flex items-center gap-2 rounded border border-gray-200 px-2 py-2 hover:bg-gray-50">
-          <input type="checkbox" data-part-id="${escapeHtml(part.id)}" ${checked} />
+        <label class="flex items-center gap-2 rounded border border-gray-200 px-2 py-2 ${hasStableLink ? "hover:bg-gray-50" : "opacity-60 bg-gray-50"}">
+          <input type="checkbox" data-part-id="${escapeHtml(part.id)}" ${checked} ${disabled} />
           <span class="text-sm text-gray-800 min-w-0 flex-1 truncate" title="${escapeHtml(part.name)}">${escapeHtml(part.name)}</span>
+          ${
+						hasStableLink
+							? ""
+							: '<span class="text-[10px] uppercase tracking-wide text-red-600">No stable link</span>'
+					}
           ${metaRight}
         </label>
       `;
@@ -343,7 +350,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 2.2)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 2.3)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -430,7 +437,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 2.2)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 2.3)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -700,8 +707,13 @@ export async function renderWbs(
 	}
 
 	function refreshAssignButton(): void {
+		const selectedValidCount = getAssignableParts().filter(
+			(p) => selectedPartIds.has(p.id) && p.link?.trim().startsWith("frn:entity:"),
+		).length;
 		assignButtonEl.disabled =
-			selectedWbsRowIndex === null || selectedPartIds.size === 0 || !tableData.rows.length;
+			selectedWbsRowIndex === null ||
+			selectedValidCount === 0 ||
+			!tableData.rows.length;
 	}
 
 	function refreshPartsList(): void {
@@ -883,6 +895,11 @@ export async function renderWbs(
 		const assignableIds = new Set(getAssignableParts().map((p) => p.id));
 		for (const id of [...selectedPartIds]) {
 			if (!assignableIds.has(id)) selectedPartIds.delete(id);
+		}
+		for (const p of getAssignableParts()) {
+			if (!p.link?.trim().startsWith("frn:entity:")) {
+				selectedPartIds.delete(p.id);
+			}
 		}
 		refreshPartFilters();
 		refreshPartsList();
@@ -1130,9 +1147,19 @@ export async function renderWbs(
 		const selectedParts = getAssignableParts().filter((part) =>
 			selectedPartIds.has(part.id),
 		);
+		const selectedPartsWithStableLinks = selectedParts.filter((part) =>
+			part.link?.trim().startsWith("frn:entity:"),
+		);
+		if (!selectedPartsWithStableLinks.length) {
+			setStatus(
+				"No selected assemblies/parts have stable entity links. Select entries without the 'No stable link' warning.",
+				"error",
+			);
+			return;
+		}
 		const now = new Date().toISOString();
 
-		selectedParts.forEach((part) => {
+		selectedPartsWithStableLinks.forEach((part) => {
 			assignments = assignments.filter((item) => item.partId !== part.id);
 			const columnB = (selectedRow[1] ?? "").trim();
 			const columnD = (selectedRow[3] ?? "").trim();
@@ -1151,7 +1178,7 @@ export async function renderWbs(
 			});
 		});
 
-		const psetWriteItems = selectedParts.map((part) => {
+		const psetWriteItems = selectedPartsWithStableLinks.map((part) => {
 			const columnB = (selectedRow[1] ?? "").trim();
 			const columnD = (selectedRow[3] ?? "").trim();
 			const propertySetValue = `${columnB} - ${columnD}`;
@@ -1168,7 +1195,7 @@ export async function renderWbs(
 				saveAssignmentsToLocalStorage(assignments);
 				refreshAssignments();
 				setStatus(
-					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedParts.length} part(s) and updated Pset_IMASD_WBS.`,
+					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsWithStableLinks.length} part(s) and updated Pset_IMASD_WBS.`,
 				);
 			})
 			.catch((error) => {
