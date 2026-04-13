@@ -1276,9 +1276,6 @@ export async function fetchIfcAssembliesFromFile(
 		const modelIdForProps =
 			viewerModelIdCandidates(primary)[0] ?? primary.id;
 
-		const fromObjects = await tryFetchViaGetObjects(primary);
-		if (fromObjects?.length) return fromObjects;
-
 		const fromHierarchy = await tryFetchViaHierarchyChildren(primary);
 		if (fromHierarchy?.length) {
 			return enrichPartsFromObjectProperties(
@@ -1286,6 +1283,10 @@ export async function fetchIfcAssembliesFromFile(
 				fromHierarchy,
 			);
 		}
+
+		// Fallback only when hierarchy cannot provide entities (often returns runtime ids only).
+		const fromObjects = await tryFetchViaGetObjects(primary);
+		if (fromObjects?.length) return fromObjects;
 
 		return null;
 	}
