@@ -426,33 +426,76 @@ function extractDefinitionSchemaPropertyKeys(definitionData: unknown): string[] 
 	return [...keys];
 }
 
+function normalizePropertyKeyCandidates(
+	preferred: string,
+	definitionName: string,
+): string[] {
+	const out = new Set<string>();
+	if (preferred.trim()) out.add(preferred.trim());
+	if (definitionName.trim()) out.add(definitionName.trim());
+	if (preferred.startsWith("Pset_")) {
+		out.add(preferred.slice("Pset_".length));
+	}
+	if (definitionName.startsWith("Pset_")) {
+		out.add(definitionName.slice("Pset_".length));
+	}
+	return [...out];
+}
+
 async function resolveSchemaPropertyName(
 	pset: InstanceType<typeof PSet>,
 	libId: string,
 	defId: string,
 	preferred: string,
+	definitionName: string,
 ): Promise<string> {
-	let gd: Awaited<ReturnType<PSet["getDefinition"]>>;
+	let gd: Awaited<ReturnType<PSet["getDefinition"]>> | null = null;
 	try {
 		gd = await pset.getDefinition(libId, defId);
 	} catch {
-		// If definition schema cannot be loaded, keep configured behavior.
-		return preferred;
+		// Continue with version-based schema fallback.
 	}
 
-	const keys = extractDefinitionSchemaPropertyKeys(gd.data);
-	if (!keys.length) return preferred;
-	if (keys.includes(preferred)) return preferred;
+	const keys = new Set<string>();
+	if (gd?.data) {
+		for (const k of extractDefinitionSchemaPropertyKeys(gd.data)) {
+			keys.add(k);
+		}
+	}
 
-	const caseInsensitive = keys.find(
-		(k) => k.toLowerCase() === preferred.toLowerCase(),
-	);
-	if (caseInsensitive) return caseInsensitive;
-	if (keys.length === 1) return keys[0];
+	// Fallback: explicitly load latest schema version and parse its properties.
+	if (keys.size === 0) {
+		try {
+			const versions = await pset.listDefinitionVersions(libId, defId, { top: 1 });
+			const rows = (versions.data as { items?: Array<{ v?: number }> })?.items ?? [];
+			const latest = rows[0]?.v;
+			if (typeof latest === "number") {
+				const schemaRes = await pset.getDefinitionVersionBySchema(libId, defId, latest);
+				for (const k of extractDefinitionSchemaPropertyKeys({
+					schema: schemaRes.data,
+				})) {
+					keys.add(k);
+				}
+			}
+		} catch {
+			/* keep fallback behavior below */
+		}
+	}
+
+	const keyList = [...keys];
+	const candidates = normalizePropertyKeyCandidates(preferred, definitionName);
+	for (const c of candidates) {
+		if (keyList.includes(c)) return c;
+		const ci = keyList.find((k) => k.toLowerCase() === c.toLowerCase());
+		if (ci) return ci;
+	}
+
+	if (keyList.length === 1) return keyList[0];
+	if (keyList.length === 0) return preferred;
 
 	throw new Error(
 		`Configured property "${preferred}" is not in definition schema (${defId}). ` +
-			`Available properties: ${keys.join(", ")}. Set VITE_PSET_PROPERTY_NAME to one of these keys.`,
+			`Available properties: ${keyList.join(", ")}. Set VITE_PSET_PROPERTY_NAME to one of these keys.`,
 	);
 }
 
@@ -599,6 +642,7 @@ export async function writeWbsPropertySetValues(
 		libId,
 		defId,
 		configuredPropertyName,
+		definitionName,
 	);
 
 	const changesetItems = items.map((item) => ({
