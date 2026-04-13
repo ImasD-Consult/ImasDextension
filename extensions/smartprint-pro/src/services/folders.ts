@@ -1081,6 +1081,19 @@ export async function fetchIfcAssembliesFromFile(
 						typeof ridRaw === "number" && !Number.isNaN(ridRaw)
 							? ridRaw
 							: chunk[j];
+					const stableIdFromTopLevel =
+						typeof po.id === "string" && po.id.trim()
+							? po.id.trim()
+							: typeof po.entityId === "string" && po.entityId.trim()
+								? po.entityId.trim()
+								: undefined;
+					if (
+						stableIdFromTopLevel &&
+						!/^\d+$/.test(stableIdFromTopLevel) &&
+						stableIdFromTopLevel.length >= 10
+					) {
+						linkByRuntime.set(rid, `frn:entity:${stableIdFromTopLevel}`);
+					}
 					const topLink =
 						typeof po.frn === "string" && po.frn.trim()
 							? po.frn.trim()

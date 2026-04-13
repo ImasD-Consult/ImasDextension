@@ -254,20 +254,6 @@ function ensureTrailingSlash(uri: string): string {
 	return uri.endsWith("/") ? uri : `${uri}/`;
 }
 
-function buildEntityLink(projectId: string, modelId: string, partId: string): string {
-	// Prefer direct entity FRN only when `partId` looks like an entity identifier
-	// (manual Connect records use e.g. `frn:entity:3y9bpF0LD3JxEj41BFUrT3`).
-	const candidate = partId?.trim();
-	if (
-		candidate &&
-		!/^\d+$/.test(candidate) &&
-		/^[A-Za-z0-9._-]{10,}$/.test(candidate)
-	) {
-		return `frn:entity:${partId.trim()}`;
-	}
-	return `frn:tc:project:${projectId}:model:${modelId}:entity:${partId}`;
-}
-
 /** Turn raw PSet API errors into something actionable in Connect Browser. */
 function withPsetTroubleshootingHint(apiMessage: string): string {
 	const m = apiMessage.trim();
@@ -685,12 +671,32 @@ export async function writeWbsPropertySetValues(
 	);
 
 	const buildChangesetItems = (propKey: string) =>
-		items.map((item) => ({
-			link: item.link || buildEntityLink(project.id, item.modelId, item.partId),
-			libId,
-			defId,
-			props: { [propKey]: item.value },
-		}));
+		items.map((item) => {
+			const explicitLink = item.link?.trim();
+			if (explicitLink) {
+				return {
+					link: explicitLink,
+					libId,
+					defId,
+					props: { [propKey]: item.value },
+				};
+			}
+
+			const candidate = item.partId?.trim();
+			if (candidate && !/^\d+$/.test(candidate) && candidate.length >= 10) {
+				return {
+					link: `frn:entity:${candidate}`,
+					libId,
+					defId,
+					props: { [propKey]: item.value },
+				};
+			}
+
+			throw new Error(
+				`Could not resolve stable entity link for selected object "${item.partId}". ` +
+					`Write aborted to avoid creating PSet on runtime id link. Select an assembly/object with a stable entity id.`,
+			);
+		});
 
 	const triedKeys: string[] = [];
 	const keysToTry = propertyRetryKeys(propertyName);
