@@ -10,46 +10,6 @@ function getAppMode(): "project" | "3d" {
 	return m === "3d" ? "3d" : "project";
 }
 
-/**
- * Runtime fallback: `extension.configure({ type: "properties", height })` for a bottom strip.
- * Prefer registering the 3D manifest with `extensionPoints[].point: "trimble.connect.ui.viewer.data-tab"`
- * (see `manifest-3d.json`) in Trimble Connect Integrations — that targets the same area as the Table of Elements.
- */
-async function tryConfigureViewerPanel(api: WorkspaceApi): Promise<void> {
-	const ext = api.extension as WorkspaceApi["extension"] & {
-		configure?: (c: Record<string, unknown>) => Promise<boolean>;
-	};
-	if (typeof ext.configure !== "function") return;
-	const url =
-		(typeof window !== "undefined" &&
-			(
-				window as Window & {
-					__SMARTPRINT_PRO__?: { EXTENSION_URL?: string };
-				}
-			).__SMARTPRINT_PRO__?.EXTENSION_URL?.trim()) ||
-		`${window.location.origin}${window.location.pathname}`;
-
-	const attempts: Record<string, unknown>[] = [
-		{ url, title: "smartprintPRO", type: "properties", height: "360px" },
-		{ url, title: "smartprintPRO", type: "properties", height: "42vh" },
-		{
-			url,
-			title: "smartprintPRO",
-			type: "properties",
-			height: "320px",
-			extensionType: ["3dviewer"],
-		},
-	];
-
-	for (const cfg of attempts) {
-		try {
-			await ext.configure(cfg);
-		} catch {
-			/* try next variant */
-		}
-	}
-}
-
 export async function initApp(): Promise<void> {
 	const container = document.getElementById("app");
 	if (!container) return;
@@ -95,7 +55,6 @@ export async function initApp(): Promise<void> {
 		if (mode === "3d") {
 			container.className =
 				"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
-			await tryConfigureViewerPanel(api);
 			await api.ui.setMenu({
 				title: "smartprintPRO",
 				icon: SMARTPRINT_LOGO,
@@ -106,10 +65,6 @@ export async function initApp(): Promise<void> {
 				useViewerModelOnly: true,
 				horizontalDockLayout: true,
 			});
-			// Second pass after iframe paints — some Connect builds apply `properties` placement only here.
-			window.setTimeout(() => {
-				if (api) void tryConfigureViewerPanel(api);
-			}, 500);
 			return;
 		}
 

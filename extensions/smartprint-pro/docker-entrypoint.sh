@@ -12,11 +12,35 @@ const connectOrigin = trim(
 const connectRegion = trim(
 	process.env.VITE_TRIMBLE_CONNECT_REGION || process.env.TRIMBLE_CONNECT_REGION || "",
 );
+const psetServiceUri = trim(
+	process.env.VITE_PSET_SERVICE_URI || process.env.PSET_SERVICE_URI || "",
+);
+const psetLibId = trim(
+	process.env.VITE_PSET_LIB_ID || process.env.PSET_LIB_ID || "",
+);
+const psetLibraryName = trim(
+	process.env.VITE_PSET_LIBRARY_NAME || process.env.PSET_LIBRARY_NAME || "",
+);
+const psetDefinitionName = trim(
+	process.env.VITE_PSET_DEFINITION_NAME || process.env.PSET_DEFINITION_NAME || "",
+);
+const psetDefId = trim(
+	process.env.VITE_PSET_DEF_ID || process.env.PSET_DEF_ID || "",
+);
+const psetPropertyName = trim(
+	process.env.VITE_PSET_PROPERTY_NAME || process.env.PSET_PROPERTY_NAME || "",
+);
 const body = [
 	"window.__SMARTPRINT_PRO__ = window.__SMARTPRINT_PRO__ || {};",
 	`window.__SMARTPRINT_PRO__.EXTENSION_URL = ${JSON.stringify(ext)};`,
 	`window.__SMARTPRINT_PRO__.TRIMBLE_CONNECT_ORIGIN = ${JSON.stringify(connectOrigin)};`,
 	`window.__SMARTPRINT_PRO__.TRIMBLE_CONNECT_REGION = ${JSON.stringify(connectRegion)};`,
+	`window.__SMARTPRINT_PRO__.PSET_SERVICE_URI = ${JSON.stringify(psetServiceUri)};`,
+	`window.__SMARTPRINT_PRO__.PSET_LIB_ID = ${JSON.stringify(psetLibId)};`,
+	`window.__SMARTPRINT_PRO__.PSET_LIBRARY_NAME = ${JSON.stringify(psetLibraryName)};`,
+	`window.__SMARTPRINT_PRO__.PSET_DEFINITION_NAME = ${JSON.stringify(psetDefinitionName)};`,
+	`window.__SMARTPRINT_PRO__.PSET_DEF_ID = ${JSON.stringify(psetDefId)};`,
+	`window.__SMARTPRINT_PRO__.PSET_PROPERTY_NAME = ${JSON.stringify(psetPropertyName)};`,
 	"",
 ].join("\n");
 fs.writeFileSync("/app/env.js", body, "utf8");

@@ -26,6 +26,34 @@ const DEFAULT_PROPERTY_NAME = "Pset_IMASD_WBS";
 
 const REGIONS_JSON_URL = "https://app.connect.trimble.com/tc/api/2.0/regions";
 
+type SmartprintRuntimeEnv = {
+	PSET_SERVICE_URI?: string;
+	PSET_LIB_ID?: string;
+	PSET_LIBRARY_NAME?: string;
+	PSET_DEFINITION_NAME?: string;
+	PSET_DEF_ID?: string;
+	PSET_PROPERTY_NAME?: string;
+};
+
+function runtimeEnv(): SmartprintRuntimeEnv {
+	if (typeof window === "undefined") return {};
+	const w = window as Window & { __SMARTPRINT_PRO__?: SmartprintRuntimeEnv };
+	return w.__SMARTPRINT_PRO__ ?? {};
+}
+
+function readPsetEnv(name: keyof SmartprintRuntimeEnv): string | undefined {
+	const viteName = `VITE_${name}` as const;
+	const vite = (
+		import.meta as ImportMeta & {
+			env?: Record<string, string | undefined>;
+		}
+	).env?.[viteName];
+	if (typeof vite === "string" && vite.trim()) return vite.trim();
+	const rt = runtimeEnv()[name];
+	if (typeof rt === "string" && rt.trim()) return rt.trim();
+	return undefined;
+}
+
 type TrimbleRegionRow = {
 	isMaster?: boolean;
 	/** e.g. `na`, `eu`, `ap`, `ap2` — matches `VITE_TRIMBLE_CONNECT_REGION` */
@@ -167,13 +195,9 @@ function resolveConnectRegionHint(): string | undefined {
 }
 
 export async function resolvePsetServiceUri(): Promise<string> {
-	const env = (
-		import.meta as ImportMeta & {
-			env?: { VITE_PSET_SERVICE_URI?: string };
-		}
-	).env?.VITE_PSET_SERVICE_URI;
-	if (env?.trim()) {
-		return ensureTrailingSlash(env.trim());
+	const configured = readPsetEnv("PSET_SERVICE_URI");
+	if (configured) {
+		return ensureTrailingSlash(configured);
 	}
 
 	if (FORCE_EU_PSET_API_FOR_TESTING) {
@@ -597,27 +621,15 @@ export async function writeWbsPropertySetValues(
 	}
 
 	const serviceUri = await resolvePsetServiceUri();
-	const env = (
-		import.meta as ImportMeta & {
-			env?: {
-				VITE_PSET_LIB_ID?: string;
-				VITE_PSET_LIBRARY_NAME?: string;
-				VITE_PSET_DEFINITION_NAME?: string;
-				VITE_PSET_DEF_ID?: string;
-				VITE_PSET_PROPERTY_NAME?: string;
-			};
-		}
-	).env;
-	const configuredLibId = env?.VITE_PSET_LIB_ID || DEFAULT_LIBRARY_ID;
+	const configuredLibId = readPsetEnv("PSET_LIB_ID") || DEFAULT_LIBRARY_ID;
 	const definitionName =
-		env?.VITE_PSET_DEFINITION_NAME || DEFAULT_DEFINITION_NAME;
-	const explicitDefId =
-		env?.VITE_PSET_DEF_ID?.trim() || DEFAULT_DEFINITION_ID;
+		readPsetEnv("PSET_DEFINITION_NAME") || DEFAULT_DEFINITION_NAME;
+	const explicitDefId = readPsetEnv("PSET_DEF_ID") || DEFAULT_DEFINITION_ID;
 	const configuredPropertyName =
-		env?.VITE_PSET_PROPERTY_NAME || DEFAULT_PROPERTY_NAME;
+		readPsetEnv("PSET_PROPERTY_NAME") || DEFAULT_PROPERTY_NAME;
 
 	const libraryNameCandidates = [
-		env?.VITE_PSET_LIBRARY_NAME,
+		readPsetEnv("PSET_LIBRARY_NAME"),
 		configuredLibId,
 		DEFAULT_LIBRARY_ID,
 	].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
