@@ -466,6 +466,17 @@ function normalizePropertyKeyCandidates(
 	return [...out];
 }
 
+function propertyRetryKeys(primary: string): string[] {
+	const out = new Set<string>();
+	if (primary.trim()) out.add(primary.trim());
+	if (primary.startsWith("Pset_") && primary.length > 5) {
+		out.add(primary.slice("Pset_".length));
+	}
+	// Common schema key used in WBS libraries where the visible field is "Group".
+	out.add("Group");
+	return [...out];
+}
+
 async function resolveSchemaPropertyName(
 	pset: InstanceType<typeof PSet>,
 	libId: string,
@@ -665,88 +676,47 @@ export async function writeWbsPropertySetValues(
 			props: { [propKey]: item.value },
 		}));
 
-	let response: Awaited<ReturnType<PSet["changeset"]>>;
-	try {
-		response = await pset.changeset({ items: buildChangesetItems(propertyName) });
-	} catch (err) {
-		const firstMsg = err instanceof Error ? err.message : String(err);
-		const retryKey =
-			propertyName.startsWith("Pset_") && propertyName.length > 5
-				? propertyName.slice("Pset_".length)
-				: undefined;
-		if (
-			retryKey &&
-			firstMsg.includes(`Property '${propertyName}' has not been defined`)
-		) {
-			try {
-				response = await pset.changeset({
-					items: buildChangesetItems(retryKey),
-				});
-			} catch (retryErr) {
-				const retryMsg =
-					retryErr instanceof Error ? retryErr.message : String(retryErr);
-				throw new Error(
-					withPsetTroubleshootingHint(
-						`${retryMsg} (Tried property keys: ${propertyName}, ${retryKey})`,
-					),
-				);
+	const triedKeys: string[] = [];
+	const keysToTry = propertyRetryKeys(propertyName);
+	let lastErrorMessage = "Property set write failed for some items.";
+
+	for (const key of keysToTry) {
+		triedKeys.push(key);
+		let response: Awaited<ReturnType<PSet["changeset"]>>;
+		try {
+			response = await pset.changeset({ items: buildChangesetItems(key) });
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			lastErrorMessage = msg;
+			if (msg.includes(`Property '${key}' has not been defined`)) {
+				continue;
 			}
-		} else {
-			throw new Error(withPsetTroubleshootingHint(firstMsg));
+			throw new Error(withPsetTroubleshootingHint(msg));
 		}
-	}
 
-	const inline = response.data as {
-		errorCount?: number;
-		errors?: Array<{ message?: string }>;
-	};
+		const inline = response.data as {
+			errorCount?: number;
+			errors?: Array<{ message?: string }>;
+		};
+		if ((inline.errorCount ?? 0) === 0) {
+			return;
+		}
 
-	if ((inline.errorCount ?? 0) > 0) {
 		const firstError = inline.errors?.[0]?.message;
-		const retryKey =
-			propertyName.startsWith("Pset_") && propertyName.length > 5
-				? propertyName.slice("Pset_".length)
-				: undefined;
-		if (
-			retryKey &&
-			(firstError ?? "").includes(
-				`Property '${propertyName}' has not been defined`,
-			)
-		) {
-			let retryResponse: Awaited<ReturnType<PSet["changeset"]>>;
-			try {
-				retryResponse = await pset.changeset({
-					items: buildChangesetItems(retryKey),
-				});
-			} catch (retryErr) {
-				const retryMsg =
-					retryErr instanceof Error ? retryErr.message : String(retryErr);
-				throw new Error(
-					withPsetTroubleshootingHint(
-						`${retryMsg} (Tried property keys: ${propertyName}, ${retryKey})`,
-					),
-				);
-			}
-
-			const retryInline = retryResponse.data as {
-				errorCount?: number;
-				errors?: Array<{ message?: string }>;
-			};
-			if ((retryInline.errorCount ?? 0) === 0) {
-				return;
-			}
-			const retryFirst = retryInline.errors?.[0]?.message;
-			throw new Error(
-				withPsetTroubleshootingHint(
-					`${retryFirst || "Property set write failed for some items."} (Tried property keys: ${propertyName}, ${retryKey})`,
-				),
-			);
+		lastErrorMessage = firstError || lastErrorMessage;
+		if ((firstError ?? "").includes(`Property '${key}' has not been defined`)) {
+			continue;
 		}
-
 		throw new Error(
 			withPsetTroubleshootingHint(
 				firstError || "Property set write failed for some items.",
 			),
 		);
 	}
+
+	throw new Error(
+		withPsetTroubleshootingHint(
+			`${lastErrorMessage} (Tried property keys: ${triedKeys.join(", ")})`,
+		),
+	);
 }
