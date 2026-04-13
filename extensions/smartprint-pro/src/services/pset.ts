@@ -14,7 +14,8 @@ const FORCE_EU_PSET_API_FOR_TESTING = true;
 /** Fallback when region discovery fails (NA shard). */
 const DEFAULT_PSET_SERVICE_URI =
 	"https://pset-api.us-east-1.connect.trimble.com/v1/";
-const DEFAULT_LIBRARY_ID = "WBS";
+const DEFAULT_LIBRARY_ID = "jeefijc4n54851u4blob2sscmjk2mzln";
+const DEFAULT_DEFINITION_ID = "6o98vt3l0deyxaz6trzb1bjaflv5qzb9";
 /**
  * Property set **definition** title in Connect (the block name in the library editor).
  * Your library uses the same label for the block and the schema field: *Pset_IMASD_WBS*.
@@ -481,7 +482,8 @@ export async function writeWbsPropertySetValues(
 	const configuredLibId = env?.VITE_PSET_LIB_ID || DEFAULT_LIBRARY_ID;
 	const definitionName =
 		env?.VITE_PSET_DEFINITION_NAME || DEFAULT_DEFINITION_NAME;
-	const explicitDefId = env?.VITE_PSET_DEF_ID?.trim() || undefined;
+	const explicitDefId =
+		env?.VITE_PSET_DEF_ID?.trim() || DEFAULT_DEFINITION_ID;
 	const propertyName = env?.VITE_PSET_PROPERTY_NAME || DEFAULT_PROPERTY_NAME;
 
 	const libraryNameCandidates = [
