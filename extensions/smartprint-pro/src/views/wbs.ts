@@ -250,41 +250,24 @@ function renderTable(
 function renderPartsList(
 	parts: IfcPart[],
 	selectedPartIds: Set<string>,
-	typeFilter: string,
-	materialFilter: string,
-	listStyle: "nameTypeMaterial" | "nameMaterial" = "nameTypeMaterial",
 ): string {
-	const filtered = parts.filter((part) => {
-		const typeMatches = typeFilter === "ALL" || part.type === typeFilter;
-		const materialMatches =
-			materialFilter === "ALL" || part.material === materialFilter;
-		return typeMatches && materialMatches;
-	});
-
-	if (!filtered.length) {
-		return '<p class="text-sm text-gray-500 italic">No parts found with current filters.</p>';
+	const selected = parts.filter((p) => selectedPartIds.has(p.id));
+	if (!selected.length) {
+		return '<p class="text-sm text-gray-500 italic">No 3D objects selected. Use native selection in the viewer, then click "Use current 3D selection".</p>';
 	}
-
-	return filtered
+	return selected
 		.map((part) => {
 			const hasStableLink = Boolean(part.link?.trim().startsWith("frn:entity:"));
-			const disabled = hasStableLink ? "" : "disabled";
-			const checked = selectedPartIds.has(part.id) ? "checked" : "";
-			const metaRight =
-				listStyle === "nameMaterial"
-					? `<span class="ml-auto text-xs text-gray-600 truncate max-w-[45%] text-right" title="${escapeHtml(part.material)}">${escapeHtml(part.material)}</span>`
-					: `<span class="ml-auto text-xs text-gray-500">${escapeHtml(part.type)} | ${escapeHtml(part.material)}</span>`;
 			return `
-        <label class="flex items-center gap-2 rounded border border-gray-200 px-2 py-2 ${hasStableLink ? "hover:bg-gray-50" : "opacity-60 bg-gray-50"}">
-          <input type="checkbox" data-part-id="${escapeHtml(part.id)}" ${checked} ${disabled} />
+        <div class="flex items-center gap-2 rounded border border-gray-200 px-2 py-2 ${hasStableLink ? "" : "opacity-70 bg-gray-50"}">
           <span class="text-sm text-gray-800 min-w-0 flex-1 truncate" title="${escapeHtml(part.name)}">${escapeHtml(part.name)}</span>
           ${
 						hasStableLink
-							? ""
+							? '<span class="text-[10px] uppercase tracking-wide text-emerald-700">Ready</span>'
 							: '<span class="text-[10px] uppercase tracking-wide text-red-600">No stable link</span>'
 					}
-          ${metaRight}
-        </label>
+          <span class="ml-auto text-xs text-gray-500">${escapeHtml(part.type)} | ${escapeHtml(part.material)}</span>
+        </div>
       `;
 		})
 		.join("");
@@ -350,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 2.3)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 2.4)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -411,6 +394,13 @@ export async function renderWbs(
           </div>
           <div class="px-2 pt-1 flex items-center justify-between gap-2 shrink-0">
             <p class="text-xs text-gray-500" data-assembly-last-checked>Last checked: -</p>
+            <button
+              type="button"
+              class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              data-use-viewer-selection
+            >
+              Use current 3D selection
+            </button>
           </div>
           <div class="flex-1 min-h-0 overflow-auto px-2 pb-2 space-y-2" data-parts-list>
             <p class="text-sm text-gray-400 italic">Loading parts...</p>
@@ -437,7 +427,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 2.3)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 2.4)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -591,6 +581,9 @@ export async function renderWbs(
 	const retryAssembliesButton = container.querySelector<HTMLButtonElement>(
 		"[data-retry-assemblies]",
 	);
+	const useViewerSelectionButton = container.querySelector<HTMLButtonElement>(
+		"[data-use-viewer-selection]",
+	);
 	const lastCheckedLabel = container.querySelector<HTMLElement>(
 		"[data-assembly-last-checked]",
 	);
@@ -626,6 +619,7 @@ export async function renderWbs(
 	const modelSearchEl = modelSearch as HTMLInputElement | null;
 	const viewerModelLabelEl = viewerModelLabel;
 	const retryAssembliesButtonEl = retryAssembliesButton;
+	const useViewerSelectionButtonEl = useViewerSelectionButton;
 	const lastCheckedLabelEl = lastCheckedLabel;
 	const partsListEl = partsList;
 	const assignButtonEl = assignButton;
@@ -716,6 +710,76 @@ export async function renderWbs(
 			!tableData.rows.length;
 	}
 
+	async function syncSelectedPartsFromViewerNative(): Promise<void> {
+		const viewer = api.viewer as WorkspaceApi["viewer"] & {
+			getSelection?: () => Promise<{
+				modelObjectIds?: Array<{
+					modelId?: string;
+					objectRuntimeIds?: number[];
+				}>;
+			}>;
+		};
+		const activeModelId = getActiveModelId();
+		if (!activeModelId) return;
+
+		const runtimeIds = new Set<number>();
+		try {
+			if (typeof viewer?.getSelection === "function") {
+				const sel = await viewer.getSelection();
+				for (const row of sel?.modelObjectIds ?? []) {
+					if (row?.modelId && row.modelId !== activeModelId) continue;
+					for (const rid of row?.objectRuntimeIds ?? []) {
+						if (typeof rid === "number" && !Number.isNaN(rid)) runtimeIds.add(rid);
+					}
+				}
+			}
+		} catch {
+			/* fallback below */
+		}
+
+		if (runtimeIds.size === 0 && typeof viewer?.getObjects === "function") {
+			try {
+				const rows = await viewer.getObjects(undefined, {
+					selected: true,
+				} as Record<string, unknown>);
+				for (const row of rows ?? []) {
+					if (!row || typeof row !== "object") continue;
+					const ro = row as Record<string, unknown>;
+					const mid = typeof ro.modelId === "string" ? ro.modelId : "";
+					if (mid && mid !== activeModelId) continue;
+					const objects = ro.objects;
+					if (Array.isArray(objects)) {
+						for (const obj of objects) {
+							if (typeof obj === "number") runtimeIds.add(obj);
+							else if (obj && typeof obj === "object") {
+								const oo = obj as Record<string, unknown>;
+								const rid =
+									typeof oo.objectRuntimeId === "number"
+										? oo.objectRuntimeId
+										: typeof oo.id === "number"
+											? oo.id
+											: typeof oo.runtimeId === "number"
+												? oo.runtimeId
+												: null;
+								if (rid != null) runtimeIds.add(rid);
+							}
+						}
+					}
+				}
+			} catch {
+				/* leave empty selection */
+			}
+		}
+
+		selectedPartIds.clear();
+		for (const p of getAssignableParts()) {
+			const rid = Number(p.id);
+			if (!Number.isNaN(rid) && runtimeIds.has(rid)) selectedPartIds.add(p.id);
+		}
+		refreshPartsList();
+		await syncViewerSelection();
+	}
+
 	function refreshPartsList(): void {
 		if (!getActiveModelId()) {
 			partsListEl.innerHTML =
@@ -724,13 +788,9 @@ export async function renderWbs(
 			return;
 		}
 
-		const typeVal = typeFilterEl?.value ?? "ALL";
 		partsListEl.innerHTML = renderPartsList(
 			getAssignableParts(),
 			selectedPartIds,
-			typeVal,
-			materialFilterEl.value,
-			"nameTypeMaterial",
 		);
 		refreshAssignButton();
 	}
@@ -1079,24 +1139,12 @@ export async function renderWbs(
 	retryAssembliesButtonEl.addEventListener("click", async () => {
 		await loadAssembliesForSelectedModel(true);
 	});
+	useViewerSelectionButtonEl?.addEventListener("click", async () => {
+		await syncSelectedPartsFromViewerNative();
+	});
 
 	typeFilterEl?.addEventListener("change", refreshPartsList);
 	materialFilterEl.addEventListener("change", refreshPartsList);
-
-	container.addEventListener("change", (event) => {
-		const target = event.target as HTMLElement;
-		const partCheckbox = target.closest<HTMLInputElement>("[data-part-id]");
-		if (!partCheckbox) return;
-		const partId = partCheckbox.dataset.partId;
-		if (!partId) return;
-		if (partCheckbox.checked) {
-			selectedPartIds.add(partId);
-		} else {
-			selectedPartIds.delete(partId);
-		}
-		refreshAssignButton();
-		void syncViewerSelection();
-	});
 
 	container.addEventListener("click", (event) => {
 		const target = event.target as HTMLElement;
@@ -1138,7 +1186,8 @@ export async function renderWbs(
 		}
 	});
 
-	assignButtonEl.addEventListener("click", () => {
+	assignButtonEl.addEventListener("click", async () => {
+		await syncSelectedPartsFromViewerNative();
 		if (selectedWbsRowIndex === null) return;
 		const assignedRowIndex = selectedWbsRowIndex;
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
