@@ -720,6 +720,10 @@ export async function renderWbs(
 					objectRuntimeIds?: number[];
 				}>;
 			}>;
+			getObjects?: (
+				selector?: { selected?: boolean },
+				objectState?: Record<string, unknown>,
+			) => Promise<Array<{ modelId?: string; objects?: unknown }>>;
 		};
 		const activeModelId = getActiveModelId();
 		if (!activeModelId) return;
@@ -750,7 +754,70 @@ export async function renderWbs(
 			/* selection API unavailable */
 		}
 
-		// Do NOT use getObjects(undefined, …): omitted selector = all visible objects (not selection).
+		if (runtimeIds.size === 0) {
+			try {
+				// Compatibility fallback for hosts without getSelection:
+				// ObjectSelector.selected=true is documented to filter current selection.
+				const rows = await viewer?.getObjects?.({ selected: true });
+				for (const row of rows ?? []) {
+					if (!modelMatchesActive(row?.modelId)) continue;
+					const objects = row?.objects;
+					if (!Array.isArray(objects)) continue;
+					for (const item of objects) {
+						if (typeof item === "number" && !Number.isNaN(item)) {
+							runtimeIds.add(item);
+							continue;
+						}
+						if (!item || typeof item !== "object") continue;
+						const o = item as Record<string, unknown>;
+						const rid =
+							typeof o.objectRuntimeId === "number"
+								? o.objectRuntimeId
+								: typeof o.id === "number"
+									? o.id
+									: typeof o.runtimeId === "number"
+										? o.runtimeId
+										: null;
+						if (typeof rid === "number" && !Number.isNaN(rid)) runtimeIds.add(rid);
+					}
+				}
+			} catch {
+				/* fallback unavailable */
+			}
+		}
+		if (runtimeIds.size === 0) {
+			try {
+				// Additional compatibility path: some hosts expose selection only via entity state.
+				// ViewEntityStates.Selected = 1
+				const rows = await viewer?.getObjects?.(undefined, {
+					entityState: 1,
+				});
+				for (const row of rows ?? []) {
+					if (!modelMatchesActive(row?.modelId)) continue;
+					const objects = row?.objects;
+					if (!Array.isArray(objects)) continue;
+					for (const item of objects) {
+						if (typeof item === "number" && !Number.isNaN(item)) {
+							runtimeIds.add(item);
+							continue;
+						}
+						if (!item || typeof item !== "object") continue;
+						const o = item as Record<string, unknown>;
+						const rid =
+							typeof o.objectRuntimeId === "number"
+								? o.objectRuntimeId
+								: typeof o.id === "number"
+									? o.id
+									: typeof o.runtimeId === "number"
+										? o.runtimeId
+										: null;
+						if (typeof rid === "number" && !Number.isNaN(rid)) runtimeIds.add(rid);
+					}
+				}
+			} catch {
+				/* entity state fallback unavailable */
+			}
+		}
 
 		selectedPartIds.clear();
 		for (const p of getAssignableParts()) {
