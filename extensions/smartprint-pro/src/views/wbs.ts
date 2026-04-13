@@ -343,7 +343,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 1.8)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 1.9)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -430,7 +430,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 1.8)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 1.9)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -651,7 +651,7 @@ export async function renderWbs(
 		if (!viewerOnly || !v?.setSelection) return;
 		const modelId = getActiveModelId();
 		if (!modelId) return;
-		const runtimeIds = parts
+		const runtimeIds = getAssignableParts()
 			.filter((p) => selectedPartIds.has(p.id))
 			.map((p) => Number(p.id))
 			.filter((n) => !Number.isNaN(n));
@@ -686,6 +686,15 @@ export async function renderWbs(
 	const selectedPartIds = new Set<string>();
 	let assignments = loadAssignmentsFromLocalStorage();
 
+	function getAssemblyCandidates(source: IfcPart[]): IfcPart[] {
+		return source.filter((p) => p.type.toUpperCase().includes("ASSEMBLY"));
+	}
+
+	function getAssignableParts(): IfcPart[] {
+		const assemblies = getAssemblyCandidates(parts);
+		return assemblies.length > 0 ? assemblies : parts;
+	}
+
 	function refreshAssignments(): void {
 		assignmentsListEl.innerHTML = renderAssignmentsList(assignments);
 	}
@@ -705,7 +714,7 @@ export async function renderWbs(
 
 		const typeVal = typeFilterEl?.value ?? "ALL";
 		partsListEl.innerHTML = renderPartsList(
-			parts,
+			getAssignableParts(),
 			selectedPartIds,
 			typeVal,
 			materialFilterEl.value,
@@ -715,8 +724,9 @@ export async function renderWbs(
 	}
 
 	function refreshPartFilters(): void {
+		const assignable = getAssignableParts();
 		if (typeFilterEl) {
-			const types = [...new Set(parts.map((part) => part.type))].sort();
+			const types = [...new Set(assignable.map((part) => part.type))].sort();
 			typeFilterEl.innerHTML =
 				'<option value="ALL">All Types</option>' +
 				types
@@ -726,7 +736,7 @@ export async function renderWbs(
 					)
 					.join("");
 		}
-		const materials = [...new Set(parts.map((part) => part.material))].sort();
+		const materials = [...new Set(assignable.map((part) => part.material))].sort();
 		materialFilterEl.innerHTML =
 			'<option value="ALL">All Materials</option>' +
 			materials
@@ -870,6 +880,10 @@ export async function renderWbs(
 		}
 
 		parts = partsByModelId.get(selectedModelId) ?? [];
+		const assignableIds = new Set(getAssignableParts().map((p) => p.id));
+		for (const id of [...selectedPartIds]) {
+			if (!assignableIds.has(id)) selectedPartIds.delete(id);
+		}
 		refreshPartFilters();
 		refreshPartsList();
 		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
@@ -886,9 +900,17 @@ export async function renderWbs(
 			return;
 		}
 
-		setStatus(
-			`Loaded ${parts.length} IFC object(s) for ${selectedModel?.name ?? "selected IFC model"}. Use filters to narrow by type or material.`,
-		);
+		const assemblyCount = getAssemblyCandidates(parts).length;
+		if (assemblyCount > 0) {
+			setStatus(
+				`Loaded ${assemblyCount} assembly object(s) for ${selectedModel?.name ?? "selected IFC model"}. Assignments target assemblies.`,
+			);
+		} else {
+			setStatus(
+				`No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Falling back to ${parts.length} IFC part/object(s).`,
+				"error",
+			);
+		}
 	}
 
 	function refreshModelOptions(): void {
@@ -1105,7 +1127,9 @@ export async function renderWbs(
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
 		if (!selectedRow) return;
 
-		const selectedParts = parts.filter((part) => selectedPartIds.has(part.id));
+		const selectedParts = getAssignableParts().filter((part) =>
+			selectedPartIds.has(part.id),
+		);
 		const now = new Date().toISOString();
 
 		selectedParts.forEach((part) => {
