@@ -703,6 +703,46 @@ export async function writeWbsPropertySetValues(
 
 	if ((inline.errorCount ?? 0) > 0) {
 		const firstError = inline.errors?.[0]?.message;
+		const retryKey =
+			propertyName.startsWith("Pset_") && propertyName.length > 5
+				? propertyName.slice("Pset_".length)
+				: undefined;
+		if (
+			retryKey &&
+			(firstError ?? "").includes(
+				`Property '${propertyName}' has not been defined`,
+			)
+		) {
+			let retryResponse: Awaited<ReturnType<PSet["changeset"]>>;
+			try {
+				retryResponse = await pset.changeset({
+					items: buildChangesetItems(retryKey),
+				});
+			} catch (retryErr) {
+				const retryMsg =
+					retryErr instanceof Error ? retryErr.message : String(retryErr);
+				throw new Error(
+					withPsetTroubleshootingHint(
+						`${retryMsg} (Tried property keys: ${propertyName}, ${retryKey})`,
+					),
+				);
+			}
+
+			const retryInline = retryResponse.data as {
+				errorCount?: number;
+				errors?: Array<{ message?: string }>;
+			};
+			if ((retryInline.errorCount ?? 0) === 0) {
+				return;
+			}
+			const retryFirst = retryInline.errors?.[0]?.message;
+			throw new Error(
+				withPsetTroubleshootingHint(
+					`${retryFirst || "Property set write failed for some items."} (Tried property keys: ${propertyName}, ${retryKey})`,
+				),
+			);
+		}
+
 		throw new Error(
 			withPsetTroubleshootingHint(
 				firstError || "Property set write failed for some items.",
