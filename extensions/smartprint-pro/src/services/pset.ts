@@ -408,6 +408,13 @@ function collectSchemaPropertyKeys(
 			out.add(key);
 		}
 	}
+	// PSet definition schemas commonly use `schema.props` (not JSON Schema `properties`).
+	const psetProps = o.props;
+	if (psetProps && typeof psetProps === "object" && !Array.isArray(psetProps)) {
+		for (const key of Object.keys(psetProps as Record<string, unknown>)) {
+			out.add(key);
+		}
+	}
 
 	for (const k of ["allOf", "anyOf", "oneOf"]) {
 		const seq = o[k];
