@@ -255,7 +255,11 @@ function ensureTrailingSlash(uri: string): string {
 }
 
 function buildEntityLink(projectId: string, modelId: string, partId: string): string {
-	// FRN-style link convention for external resources.
+	// Prefer direct entity FRN (matches Connect Property Set UI records) when possible.
+	// Fallback to project/model/entity FRN for backward compatibility.
+	if (partId?.trim()) {
+		return `frn:entity:${partId.trim()}`;
+	}
 	return `frn:tc:project:${projectId}:model:${modelId}:entity:${partId}`;
 }
 
