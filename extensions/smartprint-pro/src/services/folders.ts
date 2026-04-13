@@ -785,7 +785,7 @@ export async function fetchIfcAssembliesFromFile(
 	}
 
 	function mapHierarchyEntitiesToParts(
-		entities: Array<{ id: number; name: string }>,
+		entities: Array<{ id: number; name: string; fileId?: string }>,
 		partType: string,
 	): IfcAssemblyItem[] {
 		const seen = new Set<string>();
@@ -799,6 +799,10 @@ export async function fetchIfcAssembliesFromFile(
 				name: e.name?.trim() || `Object ${key}`,
 				type: partType,
 				material: "Unknown",
+				link:
+					typeof e.fileId === "string" && e.fileId.trim()
+						? `frn:entity:${e.fileId.trim()}`
+						: undefined,
 			});
 		}
 		return out;

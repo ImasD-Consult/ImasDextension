@@ -255,9 +255,14 @@ function ensureTrailingSlash(uri: string): string {
 }
 
 function buildEntityLink(projectId: string, modelId: string, partId: string): string {
-	// Prefer direct entity FRN (matches Connect Property Set UI records) when possible.
-	// Fallback to project/model/entity FRN for backward compatibility.
-	if (partId?.trim()) {
+	// Prefer direct entity FRN only when `partId` looks like an entity identifier
+	// (manual Connect records use e.g. `frn:entity:3y9bpF0LD3JxEj41BFUrT3`).
+	const candidate = partId?.trim();
+	if (
+		candidate &&
+		!/^\d+$/.test(candidate) &&
+		/^[A-Za-z0-9._-]{10,}$/.test(candidate)
+	) {
 		return `frn:entity:${partId.trim()}`;
 	}
 	return `frn:tc:project:${projectId}:model:${modelId}:entity:${partId}`;
