@@ -338,7 +338,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 3.9)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 4.0)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -452,7 +452,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 3.9)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 4.0)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1001,7 +1001,17 @@ export async function renderWbs(
 	async function resolveStableLinksForParts(input: IfcPart[]): Promise<IfcPart[]> {
 		if (input.length === 0) return input;
 
-		const viewer = api.viewer;
+		const viewer = api.viewer as WorkspaceApi["viewer"] & {
+			getObjects?: (
+				selector?: {
+					modelObjectIds?: Array<{
+						modelId: string;
+						objectRuntimeIds?: number[];
+					}>;
+				},
+				objectState?: Record<string, unknown>,
+			) => Promise<Array<{ modelId?: string; objects?: unknown }>>;
+		};
 		if (!viewer?.getObjectProperties) return input;
 
 		const activeModelId = getActiveModelId();
@@ -1105,6 +1115,62 @@ export async function renderWbs(
 			}
 		}
 
+		if (stableByRuntime.size === 0) return input;
+		const unresolvedRuntimeIds = runtimeIds.filter((rid) => !stableByRuntime.has(rid));
+		if (unresolvedRuntimeIds.length > 0 && typeof viewer?.getObjects === "function") {
+			for (const modelId of modelCandidates) {
+				try {
+					const rows = await viewer.getObjects({
+						modelObjectIds: [
+							{
+								modelId,
+								objectRuntimeIds: unresolvedRuntimeIds,
+							},
+						],
+					});
+					for (const row of rows ?? []) {
+						const objects = row?.objects;
+						if (!Array.isArray(objects)) continue;
+						for (const item of objects) {
+							if (!item || typeof item !== "object") continue;
+							const o = item as Record<string, unknown>;
+							const rid =
+								typeof o.objectRuntimeId === "number"
+									? o.objectRuntimeId
+									: typeof o.id === "number"
+										? o.id
+										: typeof o.runtimeId === "number"
+											? o.runtimeId
+											: null;
+							if (rid == null || stableByRuntime.has(rid)) continue;
+							const frn =
+								typeof o.frn === "string" && o.frn.trim().startsWith("frn:entity:")
+									? o.frn.trim()
+									: typeof o.link === "string" && o.link.trim().startsWith("frn:entity:")
+										? o.link.trim()
+										: undefined;
+							const stableId =
+								typeof o.fileId === "string" && o.fileId.trim()
+									? o.fileId.trim()
+									: typeof o.entityId === "string" && o.entityId.trim()
+										? o.entityId.trim()
+										: typeof o.guid === "string" && o.guid.trim()
+											? o.guid.trim()
+											: typeof o.globalId === "string" && o.globalId.trim()
+												? o.globalId.trim()
+												: undefined;
+							if (frn) {
+								stableByRuntime.set(rid, frn);
+							} else if (stableId && UUID_RE.test(stableId)) {
+								stableByRuntime.set(rid, `frn:entity:${stableId}`);
+							}
+						}
+					}
+				} catch {
+					/* try next model candidate */
+				}
+			}
+		}
 		if (stableByRuntime.size === 0) return input;
 		return input.map((part) => {
 			const rid = Number(part.id);
