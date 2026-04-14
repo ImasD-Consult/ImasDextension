@@ -6,7 +6,7 @@ import {
 	fetchProjectIfcModels,
 } from "../services/folders";
 import { resolveViewerModelsForWbs } from "../services/viewer-model";
-import { writeWbsPropertySetValues } from "../services/pset";
+import { inspectWbsPsetConfig, writeWbsPropertySetValues } from "../services/pset";
 
 type WbsTableData = {
 	headers: string[];
@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 2.6)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 2.7)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -362,6 +362,16 @@ export async function renderWbs(
         </div>
       </div>
       <p class="shrink-0 text-xs text-gray-600" data-wbs-status>No file uploaded yet. Expected: Excel template (.xlsx / .xls).</p>
+      <div class="shrink-0 flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+          data-pset-debug-check
+        >
+          Check PSet config
+        </button>
+        <p class="text-[11px] text-gray-500 truncate" data-pset-debug>PSet debug: not checked yet.</p>
+      </div>
 
       <div class="flex-1 flex flex-col min-h-0 gap-2 overflow-hidden">
         <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden shrink-0 max-h-[min(44vh,520px)]">
@@ -427,7 +437,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 2.6)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 2.7)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -449,6 +459,16 @@ export async function renderWbs(
         </div>
       </div>
       <p class="mt-2 text-sm text-gray-600" data-wbs-status>No file uploaded yet. Expected file type: Excel template (.xlsx).</p>
+      <div class="mt-1 flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+          data-pset-debug-check
+        >
+          Check PSet config
+        </button>
+        <p class="text-[11px] text-gray-500 truncate" data-pset-debug>PSet debug: not checked yet.</p>
+      </div>
     </div>
 
     <div class="mt-3 space-y-3">
@@ -581,6 +601,10 @@ export async function renderWbs(
 	const retryAssembliesButton = container.querySelector<HTMLButtonElement>(
 		"[data-retry-assemblies]",
 	);
+	const psetDebugCheckButton = container.querySelector<HTMLButtonElement>(
+		"[data-pset-debug-check]",
+	);
+	const psetDebugLabel = container.querySelector<HTMLElement>("[data-pset-debug]");
 	const useViewerSelectionButton = container.querySelector<HTMLButtonElement>(
 		"[data-use-viewer-selection]",
 	);
@@ -619,6 +643,8 @@ export async function renderWbs(
 	const modelSearchEl = modelSearch as HTMLInputElement | null;
 	const viewerModelLabelEl = viewerModelLabel;
 	const retryAssembliesButtonEl = retryAssembliesButton;
+	const psetDebugCheckButtonEl = psetDebugCheckButton;
+	const psetDebugLabelEl = psetDebugLabel;
 	const useViewerSelectionButtonEl = useViewerSelectionButton;
 	const lastCheckedLabelEl = lastCheckedLabel;
 	const partsListEl = partsList;
@@ -677,6 +703,32 @@ export async function renderWbs(
 		statusEl.textContent = message;
 		statusEl.classList.remove("text-gray-600", "text-red-600");
 		statusEl.classList.add(tone === "error" ? "text-red-600" : "text-gray-600");
+	}
+
+	async function refreshPsetDebugInfo(): Promise<void> {
+		if (!psetDebugLabelEl) return;
+		psetDebugLabelEl.textContent = "PSet debug: checking...";
+		psetDebugLabelEl.classList.remove("text-red-600", "text-emerald-700", "text-gray-500");
+		psetDebugLabelEl.classList.add("text-gray-500");
+		try {
+			const diag = await inspectWbsPsetConfig(api);
+			if (diag.ok) {
+				psetDebugLabelEl.textContent =
+					`PSet OK | lib ${diag.resolvedLibId} | def ${diag.resolvedDefId} | prop ${diag.resolvedPropertyName}`;
+				psetDebugLabelEl.classList.remove("text-gray-500", "text-red-600");
+				psetDebugLabelEl.classList.add("text-emerald-700");
+			} else {
+				psetDebugLabelEl.textContent =
+					`PSet ERR | ${diag.message} | service ${diag.serviceUri || "(n/a)"} | lib ${diag.configuredLibId || "(n/a)"} | def ${diag.configuredDefinitionName || "(n/a)"} | prop ${diag.configuredPropertyName || "(n/a)"}`;
+				psetDebugLabelEl.classList.remove("text-gray-500", "text-emerald-700");
+				psetDebugLabelEl.classList.add("text-red-600");
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			psetDebugLabelEl.textContent = `PSet ERR | ${message}`;
+			psetDebugLabelEl.classList.remove("text-gray-500", "text-emerald-700");
+			psetDebugLabelEl.classList.add("text-red-600");
+		}
 	}
 
 	let tableData: WbsTableData = { headers: [], rows: [] };
@@ -1281,6 +1333,9 @@ export async function renderWbs(
 	retryAssembliesButtonEl.addEventListener("click", async () => {
 		await loadAssembliesForSelectedModel(true);
 	});
+	psetDebugCheckButtonEl?.addEventListener("click", async () => {
+		await refreshPsetDebugInfo();
+	});
 	useViewerSelectionButtonEl?.addEventListener("click", async () => {
 		await syncSelectedPartsFromViewerNative();
 	});
@@ -1433,4 +1488,6 @@ export async function renderWbs(
 			tableContainerEl.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
 		}
 	});
+
+	void refreshPsetDebugInfo();
 }

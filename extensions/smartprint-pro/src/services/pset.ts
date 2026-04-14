@@ -250,6 +250,18 @@ export interface WbsPsetWriteItem {
 	link?: string;
 }
 
+export interface WbsPsetDebugInfo {
+	ok: boolean;
+	serviceUri: string;
+	configuredLibId: string;
+	configuredDefinitionName: string;
+	configuredPropertyName: string;
+	resolvedLibId?: string;
+	resolvedDefId?: string;
+	resolvedPropertyName?: string;
+	message: string;
+}
+
 function ensureTrailingSlash(uri: string): string {
 	return uri.endsWith("/") ? uri : `${uri}/`;
 }
@@ -741,4 +753,92 @@ export async function writeWbsPropertySetValues(
 			`${lastErrorMessage} (Tried property keys: ${triedKeys.join(", ")})`,
 		),
 	);
+}
+
+export async function inspectWbsPsetConfig(
+	api: WorkspaceApi,
+): Promise<WbsPsetDebugInfo> {
+	const project = await api.project.getProject();
+	if (!project?.id) {
+		return {
+			ok: false,
+			serviceUri: "",
+			configuredLibId: "",
+			configuredDefinitionName: "",
+			configuredPropertyName: "",
+			message: "No project selected.",
+		};
+	}
+
+	const token = await api.extension.requestPermission("accesstoken");
+	if (token === "denied" || token === "pending") {
+		return {
+			ok: false,
+			serviceUri: "",
+			configuredLibId: "",
+			configuredDefinitionName: "",
+			configuredPropertyName: "",
+			message: `Access token ${token}.`,
+		};
+	}
+
+	const serviceUri = await resolvePsetServiceUri();
+	const configuredLibId = readPsetEnv("PSET_LIB_ID") || DEFAULT_LIBRARY_ID;
+	const configuredDefinitionName =
+		readPsetEnv("PSET_DEFINITION_NAME") || DEFAULT_DEFINITION_NAME;
+	const configuredPropertyName =
+		readPsetEnv("PSET_PROPERTY_NAME") || DEFAULT_PROPERTY_NAME;
+	const explicitDefId = readPsetEnv("PSET_DEF_ID") || DEFAULT_DEFINITION_ID;
+
+	const libraryNameCandidates = [
+		readPsetEnv("PSET_LIBRARY_NAME"),
+		configuredLibId,
+		DEFAULT_LIBRARY_ID,
+	].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
+
+	const pset = new PSet({
+		serviceUri,
+		credentials: new ServiceCredentials(undefined, token),
+	});
+
+	try {
+		const { libId, defId } = await resolveCanonicalLibAndDefIds(
+			pset,
+			project.id,
+			serviceUri,
+			token,
+			configuredLibId,
+			libraryNameCandidates,
+			configuredDefinitionName,
+			explicitDefId,
+		);
+		const prop = await resolveSchemaPropertyName(
+			pset,
+			libId,
+			defId,
+			configuredPropertyName,
+			configuredDefinitionName,
+		);
+		return {
+			ok: true,
+			serviceUri,
+			configuredLibId,
+			configuredDefinitionName,
+			configuredPropertyName,
+			resolvedLibId: libId,
+			resolvedDefId: defId,
+			resolvedPropertyName: prop,
+			message: "PSet config resolved successfully.",
+		};
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return {
+			ok: false,
+			serviceUri,
+			configuredLibId,
+			configuredDefinitionName,
+			configuredPropertyName,
+			message: withPsetTroubleshootingHint(msg),
+		};
+	}
 }
