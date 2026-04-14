@@ -712,6 +712,83 @@ export async function renderWbs(
 			!tableData.rows.length;
 	}
 
+	async function resolveStableLinksForParts(input: IfcPart[]): Promise<IfcPart[]> {
+		const unresolved = input.filter(
+			(part) => !part.link?.trim().startsWith("frn:entity:"),
+		);
+		if (unresolved.length === 0) return input;
+
+		const viewer = api.viewer;
+		if (!viewer?.getObjectProperties) return input;
+
+		const activeModelId = getActiveModelId();
+		const openModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelCandidates = [openModel?.id, openModel?.versionId, activeModelId].filter(
+			(v): v is string => typeof v === "string" && v.trim().length > 0,
+		);
+		if (modelCandidates.length === 0) return input;
+
+		const runtimeIds = unresolved
+			.map((part) => Number(part.id))
+			.filter((n) => !Number.isNaN(n));
+		if (runtimeIds.length === 0) return input;
+
+		const stableByRuntime = new Map<number, string>();
+		for (const modelId of modelCandidates) {
+			try {
+				const props = await viewer.getObjectProperties(modelId, runtimeIds);
+				if (!Array.isArray(props)) continue;
+				for (let i = 0; i < runtimeIds.length; i++) {
+					if (stableByRuntime.has(runtimeIds[i])) continue;
+					const p = props[i];
+					if (!p || typeof p !== "object") continue;
+					const po = p as Record<string, unknown>;
+					const ridRaw = po.id;
+					const rid =
+						typeof ridRaw === "number" && !Number.isNaN(ridRaw)
+							? ridRaw
+							: runtimeIds[i];
+					const frn =
+						typeof po.frn === "string" && po.frn.trim().startsWith("frn:entity:")
+							? po.frn.trim()
+							: undefined;
+					const stableId =
+						typeof po.fileId === "string" && po.fileId.trim()
+							? po.fileId.trim()
+							: typeof po.guid === "string" && po.guid.trim()
+								? po.guid.trim()
+								: typeof po.globalId === "string" && po.globalId.trim()
+									? po.globalId.trim()
+									: typeof po.entityId === "string" && po.entityId.trim()
+										? po.entityId.trim()
+										: undefined;
+					if (frn) {
+						stableByRuntime.set(rid, frn);
+					} else if (
+						stableId &&
+						!/^\d+$/.test(stableId) &&
+						stableId.length >= 10
+					) {
+						stableByRuntime.set(rid, `frn:entity:${stableId}`);
+					}
+				}
+			} catch {
+				/* try next model candidate */
+			}
+		}
+
+		if (stableByRuntime.size === 0) return input;
+		return input.map((part) => {
+			if (part.link?.trim().startsWith("frn:entity:")) return part;
+			const rid = Number(part.id);
+			if (Number.isNaN(rid)) return part;
+			const stable = stableByRuntime.get(rid);
+			return stable ? { ...part, link: stable } : part;
+		});
+	}
+
 	async function syncSelectedPartsFromViewerNative(): Promise<void> {
 		const viewer = api.viewer as WorkspaceApi["viewer"] & {
 			getSelection?: () => Promise<{
@@ -1249,15 +1326,21 @@ export async function renderWbs(
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
 		if (!selectedRow) return;
 
-		const selectedParts = getAssignableParts().filter((part) =>
+		const selectedPartsRaw = getAssignableParts().filter((part) =>
 			selectedPartIds.has(part.id),
 		);
+		const selectedParts = await resolveStableLinksForParts(selectedPartsRaw);
+		for (const resolved of selectedParts) {
+			const idx = parts.findIndex((p) => p.id === resolved.id);
+			if (idx >= 0) parts[idx] = resolved;
+		}
+		refreshPartsList();
 		const selectedPartsWithStableLinks = selectedParts.filter((part) =>
 			part.link?.trim().startsWith("frn:entity:"),
 		);
 		if (!selectedPartsWithStableLinks.length) {
 			setStatus(
-				"No selected assemblies/parts have stable entity links. Select entries without the 'No stable link' warning.",
+				`No stable entity links found for ${selectedParts.length} selected object(s). Try selecting objects with IFC GUIDs (not temporary runtime-only rows), then click "Use current 3D selection" again.`,
 				"error",
 			);
 			return;
