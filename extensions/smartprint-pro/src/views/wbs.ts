@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 3.4)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 3.5)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -382,6 +382,24 @@ export async function renderWbs(
         </button>
         <p class="text-[11px] text-gray-500 truncate" data-model-pset-debug>Model Psets: not checked yet.</p>
       </div>
+      <div class="shrink-0 flex flex-wrap items-center gap-2 rounded border border-gray-200 bg-gray-50 p-2">
+        <button
+          type="button"
+          class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          data-use-viewer-selection
+        >
+          Use current 3D selection
+        </button>
+        <button
+          type="button"
+          class="rounded px-3 py-1 text-xs font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          data-assign
+          disabled
+        >
+          Assign selected objects to selected WBS row
+        </button>
+        <p class="text-[11px] text-gray-500">Writes Pset_IMASD_WBS on the open IFC.</p>
+      </div>
 
       <div class="flex-1 flex flex-col min-h-0 gap-2 overflow-hidden">
         <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden shrink-0 max-h-[min(44vh,520px)]">
@@ -414,27 +432,9 @@ export async function renderWbs(
           </div>
           <div class="px-2 pt-1 flex items-center justify-between gap-2 shrink-0">
             <p class="text-xs text-gray-500" data-assembly-last-checked>Last checked: -</p>
-            <button
-              type="button"
-              class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-              data-use-viewer-selection
-            >
-              Use current 3D selection
-            </button>
           </div>
           <div class="flex-1 min-h-0 overflow-auto px-2 pb-2 space-y-2 select-none" data-parts-list>
             <p class="text-sm text-gray-400 italic">Loading parts...</p>
-          </div>
-          <div class="px-2 pb-2 shrink-0 border-t border-gray-100">
-            <button
-              type="button"
-              class="w-full rounded px-3 py-2 text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
-              data-assign
-              disabled
-            >
-              Assign selected objects to selected WBS row
-            </button>
-            <p class="text-xs text-gray-500 mt-1">Writes Pset_IMASD_WBS on the open IFC.</p>
           </div>
         </div>
       </div>
@@ -447,7 +447,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 3.4)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 3.5)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
