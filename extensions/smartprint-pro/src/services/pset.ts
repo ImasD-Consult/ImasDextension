@@ -261,6 +261,7 @@ export interface WbsPsetDebugInfo {
 	resolvedDefId?: string;
 	resolvedDefName?: string;
 	resolvedPropertyName?: string;
+	resolvedPropertyLabel?: string;
 	availableDefinitions?: string[];
 	message: string;
 }
@@ -465,6 +466,44 @@ function extractDefinitionSchemaPropertyKeys(definitionData: unknown): string[] 
 	}
 
 	return [...keys];
+}
+
+function extractPropertyDisplayLabel(
+	definitionData: unknown,
+	propertyKey: string,
+): string | undefined {
+	if (!definitionData || typeof definitionData !== "object" || !propertyKey.trim()) {
+		return undefined;
+	}
+	let found: string | undefined;
+	function walk(node: unknown, depth: number): void {
+		if (found || depth > 14 || !node || typeof node !== "object") return;
+		if (Array.isArray(node)) {
+			for (const item of node) walk(item, depth + 1);
+			return;
+		}
+		const o = node as Record<string, unknown>;
+		for (const containerKey of ["props", "properties"]) {
+			const props = o[containerKey];
+			if (props && typeof props === "object" && !Array.isArray(props)) {
+				const rec = props as Record<string, unknown>;
+				const target = rec[propertyKey];
+				if (target && typeof target === "object") {
+					const t = target as Record<string, unknown>;
+					for (const k of ["name", "title", "label", "displayName"]) {
+						const v = t[k];
+						if (typeof v === "string" && v.trim()) {
+							found = v.trim();
+							return;
+						}
+					}
+				}
+			}
+		}
+		for (const v of Object.values(o)) walk(v, depth + 1);
+	}
+	walk(definitionData, 0);
+	return found;
 }
 
 function normalizePropertyKeyCandidates(
@@ -826,6 +865,7 @@ export async function inspectWbsPsetConfig(
 		);
 		let resolvedLibName: string | undefined;
 		let resolvedDefName: string | undefined;
+		let resolvedPropertyLabel: string | undefined;
 		let availableDefinitions: string[] | undefined;
 		try {
 			const gl = await pset.getLibrary(libId);
@@ -847,16 +887,15 @@ export async function inspectWbsPsetConfig(
 					? found.name.trim()
 					: undefined;
 			availableDefinitions = defs
-				.map((d) => {
-					const id = typeof d.id === "string" ? d.id.trim() : "";
-					const name = typeof d.name === "string" ? d.name.trim() : "";
-					if (!id && !name) return "";
-					if (!id) return name;
-					if (!name) return id;
-					return `${name} (${id})`;
-				})
+				.map((d) => (typeof d.name === "string" ? d.name.trim() : ""))
 				.filter((s) => s.length > 0)
 				.slice(0, 30);
+		} catch {
+			/* best-effort only */
+		}
+		try {
+			const gd = await pset.getDefinition(libId, defId);
+			resolvedPropertyLabel = extractPropertyDisplayLabel(gd.data, prop);
 		} catch {
 			/* best-effort only */
 		}
@@ -871,6 +910,7 @@ export async function inspectWbsPsetConfig(
 			resolvedDefId: defId,
 			resolvedDefName,
 			resolvedPropertyName: prop,
+			resolvedPropertyLabel,
 			availableDefinitions,
 			message: "PSet config resolved successfully.",
 		};
@@ -890,14 +930,7 @@ export async function inspectWbsPsetConfig(
 			const defs =
 				(ld.data as { items?: Array<{ id?: string; name?: string }> }).items ?? [];
 			availableDefinitions = defs
-				.map((d) => {
-					const id = typeof d.id === "string" ? d.id.trim() : "";
-					const name = typeof d.name === "string" ? d.name.trim() : "";
-					if (!id && !name) return "";
-					if (!id) return name;
-					if (!name) return id;
-					return `${name} (${id})`;
-				})
+				.map((d) => (typeof d.name === "string" ? d.name.trim() : ""))
 				.filter((s) => s.length > 0)
 				.slice(0, 30);
 		} catch {
