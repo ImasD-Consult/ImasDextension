@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 2.5)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 2.6)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -427,7 +427,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 2.5)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 2.6)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -787,6 +787,14 @@ export async function renderWbs(
 			const stable = stableByRuntime.get(rid);
 			return stable ? { ...part, link: stable } : part;
 		});
+	}
+
+	function buildWbsPropertyValue(row: string[]): string {
+		const groupOrArticle = (row[2] ?? "").trim();
+		if (groupOrArticle) return groupOrArticle;
+		const wbs = (row[1] ?? "").trim();
+		const description = (row[3] ?? "").trim();
+		return `${wbs} - ${description}`.trim();
 	}
 
 	async function syncSelectedPartsFromViewerNative(): Promise<void> {
@@ -1349,9 +1357,7 @@ export async function renderWbs(
 
 		selectedPartsWithStableLinks.forEach((part) => {
 			assignments = assignments.filter((item) => item.partId !== part.id);
-			const columnB = (selectedRow[1] ?? "").trim();
-			const columnD = (selectedRow[3] ?? "").trim();
-			const propertySetValue = `${columnB} - ${columnD}`;
+			const propertySetValue = buildWbsPropertyValue(selectedRow);
 			assignments.push({
 				partId: part.id,
 				partName: part.name,
@@ -1367,9 +1373,7 @@ export async function renderWbs(
 		});
 
 		const psetWriteItems = selectedPartsWithStableLinks.map((part) => {
-			const columnB = (selectedRow[1] ?? "").trim();
-			const columnD = (selectedRow[3] ?? "").trim();
-			const propertySetValue = `${columnB} - ${columnD}`;
+			const propertySetValue = buildWbsPropertyValue(selectedRow);
 			return {
 				modelId: part.modelId ?? getActiveModelId(),
 				partId: part.id,
