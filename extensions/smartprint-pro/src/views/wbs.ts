@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 2.8)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 2.9)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -437,7 +437,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 2.8)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 2.9)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -814,24 +814,8 @@ export async function renderWbs(
 						typeof po.frn === "string" && po.frn.trim().startsWith("frn:entity:")
 							? po.frn.trim()
 							: undefined;
-					const stableId =
-						typeof po.fileId === "string" && po.fileId.trim()
-							? po.fileId.trim()
-							: typeof po.guid === "string" && po.guid.trim()
-								? po.guid.trim()
-								: typeof po.globalId === "string" && po.globalId.trim()
-									? po.globalId.trim()
-									: typeof po.entityId === "string" && po.entityId.trim()
-										? po.entityId.trim()
-										: undefined;
 					if (frn) {
 						stableByRuntime.set(rid, frn);
-					} else if (
-						stableId &&
-						!/^\d+$/.test(stableId) &&
-						stableId.length >= 10
-					) {
-						stableByRuntime.set(rid, `frn:entity:${stableId}`);
 					}
 				}
 			} catch {
@@ -1449,15 +1433,17 @@ export async function renderWbs(
 			.then(() => {
 				saveAssignmentsToLocalStorage(assignments);
 				refreshAssignments();
+				const firstLink = psetWriteItems[0]?.link ?? "(no link)";
 				setStatus(
-					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsWithStableLinks.length} part(s) and updated Pset_IMASD_WBS.`,
+					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsWithStableLinks.length} part(s) and updated Pset_IMASD_WBS. First target: ${firstLink}`,
 				);
 			})
 			.catch((error) => {
 				const message =
 					error instanceof Error ? error.message : "Failed to write property set.";
+				const firstLink = psetWriteItems[0]?.link ?? "(no link)";
 				setStatus(
-					`Assignment saved locally, but Pset write failed: ${message}`,
+					`Assignment saved locally, but Pset write failed: ${message}. First target: ${firstLink}`,
 					"error",
 				);
 				saveAssignmentsToLocalStorage(assignments);
