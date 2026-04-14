@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 3.7)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 3.8)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -447,7 +447,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 3.7)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 3.8)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1016,6 +1016,47 @@ export async function renderWbs(
 		const stableByRuntime = new Map<number, string>();
 		const UUID_RE =
 			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+		const extractStableEntityLinkFromPayload = (
+			root: unknown,
+		): string | undefined => {
+			let foundFrnEntity: string | undefined;
+			let foundUuid: string | undefined;
+			const walk = (node: unknown, depth: number): void => {
+				if (depth > 18 || node == null) return;
+				if (Array.isArray(node)) {
+					for (const item of node) walk(item, depth + 1);
+					return;
+				}
+				if (typeof node !== "object") return;
+				const o = node as Record<string, unknown>;
+				for (const [k, v] of Object.entries(o)) {
+					if (typeof v === "string") {
+						const sv = v.trim();
+						if (!sv) continue;
+						if (
+							(k.toLowerCase() === "frn" || k.toLowerCase() === "link") &&
+							sv.startsWith("frn:entity:")
+						) {
+							foundFrnEntity = sv;
+						}
+						if (
+							["guid", "globalid", "fileid", "entityid"].includes(
+								k.toLowerCase(),
+							) &&
+							UUID_RE.test(sv)
+						) {
+							foundUuid = sv;
+						}
+					} else if (v && typeof v === "object") {
+						walk(v, depth + 1);
+					}
+				}
+			};
+			walk(root, 0);
+			if (foundFrnEntity) return foundFrnEntity;
+			if (foundUuid) return `frn:entity:${foundUuid}`;
+			return undefined;
+		};
 		for (const modelId of modelCandidates) {
 			try {
 				const props = await viewer.getObjectProperties(modelId, runtimeIds);
@@ -1049,6 +1090,9 @@ export async function renderWbs(
 					} else if (candidateStableId && UUID_RE.test(candidateStableId)) {
 						// Safe fallback: only accept UUID-like stable ids (avoid runtime numeric ids).
 						stableByRuntime.set(rid, `frn:entity:${candidateStableId}`);
+					} else {
+						const deep = extractStableEntityLinkFromPayload(p);
+						if (deep) stableByRuntime.set(rid, deep);
 					}
 				}
 			} catch {
@@ -1687,8 +1731,10 @@ export async function renderWbs(
 			part.link?.trim().startsWith("frn:entity:"),
 		);
 		if (!selectedPartsWithStableLinks.length) {
+			const firstSelected = selectedParts[0];
+			const rawLink = firstSelected?.link?.trim() || "(none)";
 			setStatus(
-				`No stable entity links found for ${selectedParts.length} selected object(s). Try selecting objects with IFC GUIDs (not temporary runtime-only rows), then click "Use current 3D selection" again.`,
+				`No stable entity links found for ${selectedParts.length} selected object(s). First selected link: ${rawLink}. Try selecting IFC objects/elements that expose GUID/FRN in viewer properties.`,
 				"error",
 			);
 			return;
