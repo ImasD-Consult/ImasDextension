@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 3.3)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 3.4)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -447,7 +447,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 3.3)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 3.4)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -994,10 +994,7 @@ export async function renderWbs(
 	}
 
 	async function resolveStableLinksForParts(input: IfcPart[]): Promise<IfcPart[]> {
-		const unresolved = input.filter(
-			(part) => !part.link?.trim().startsWith("frn:entity:"),
-		);
-		if (unresolved.length === 0) return input;
+		if (input.length === 0) return input;
 
 		const viewer = api.viewer;
 		if (!viewer?.getObjectProperties) return input;
@@ -1011,7 +1008,7 @@ export async function renderWbs(
 		);
 		if (modelCandidates.length === 0) return input;
 
-		const runtimeIds = unresolved
+		const runtimeIds = input
 			.map((part) => Number(part.id))
 			.filter((n) => !Number.isNaN(n));
 		if (runtimeIds.length === 0) return input;
@@ -1046,12 +1043,69 @@ export async function renderWbs(
 
 		if (stableByRuntime.size === 0) return input;
 		return input.map((part) => {
-			if (part.link?.trim().startsWith("frn:entity:")) return part;
 			const rid = Number(part.id);
 			if (Number.isNaN(rid)) return part;
 			const stable = stableByRuntime.get(rid);
 			return stable ? { ...part, link: stable } : part;
 		});
+	}
+
+	function payloadContainsExpectedValue(root: unknown, expected: string): boolean {
+		const needle = expected.trim().toLowerCase();
+		if (!needle) return false;
+		let found = false;
+		const walk = (node: unknown, depth: number): void => {
+			if (found || depth > 16 || node == null) return;
+			if (typeof node === "string") {
+				if (node.trim().toLowerCase() === needle) found = true;
+				return;
+			}
+			if (typeof node === "number" || typeof node === "boolean") {
+				if (String(node).trim().toLowerCase() === needle) found = true;
+				return;
+			}
+			if (Array.isArray(node)) {
+				for (const item of node) walk(item, depth + 1);
+				return;
+			}
+			if (typeof node === "object") {
+				for (const v of Object.values(node as Record<string, unknown>)) {
+					walk(v, depth + 1);
+				}
+			}
+		};
+		walk(root, 0);
+		return found;
+	}
+
+	async function verifyValueOnSelectedObject(
+		part: IfcPart | undefined,
+		expectedValue: string,
+	): Promise<boolean | "unknown"> {
+		if (!part) return "unknown";
+		const viewer = api.viewer;
+		if (!viewer?.getObjectProperties) return "unknown";
+		const rid = Number(part.id);
+		if (Number.isNaN(rid)) return "unknown";
+		const activeModelId = getActiveModelId();
+		const openModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelCandidates = [openModel?.id, openModel?.versionId, activeModelId].filter(
+			(v): v is string => typeof v === "string" && v.trim().length > 0,
+		);
+		for (const modelId of modelCandidates) {
+			try {
+				const payload = await viewer.getObjectProperties(modelId, [rid]);
+				const firstPayload = Array.isArray(payload) ? payload[0] : undefined;
+				if (payloadContainsExpectedValue(firstPayload, expectedValue)) {
+					return true;
+				}
+			} catch {
+				/* try next model id */
+			}
+		}
+		return false;
 	}
 
 	function buildWbsPropertyValue(row: string[]): string {
@@ -1654,13 +1708,29 @@ export async function renderWbs(
 		});
 
 		writeWbsPropertySetValues(api, psetWriteItems)
-			.then(() => {
+			.then(async () => {
 				saveAssignmentsToLocalStorage(assignments);
 				refreshAssignments();
 				const firstLink = psetWriteItems[0]?.link ?? "(no link)";
-				setStatus(
-					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsWithStableLinks.length} part(s) and updated Pset_IMASD_WBS. First target: ${firstLink}`,
+				const expectedValue = psetWriteItems[0]?.value ?? "";
+				const verified = await verifyValueOnSelectedObject(
+					selectedPartsWithStableLinks[0],
+					expectedValue,
 				);
+				if (verified === true) {
+					setStatus(
+						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsWithStableLinks.length} part(s) and verified value on selected object. First target: ${firstLink}`,
+					);
+				} else if (verified === false) {
+					setStatus(
+						`Write API returned success, but value was not found on selected object properties. Likely target link mismatch. First target: ${firstLink}`,
+						"error",
+					);
+				} else {
+					setStatus(
+						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsWithStableLinks.length} part(s). Could not verify object payload after write. First target: ${firstLink}`,
+					);
+				}
 			})
 			.catch((error) => {
 				const message =
