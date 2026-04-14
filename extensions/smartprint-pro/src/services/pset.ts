@@ -14,8 +14,8 @@ const FORCE_EU_PSET_API_FOR_TESTING = true;
 /** Fallback when region discovery fails (NA shard). */
 const DEFAULT_PSET_SERVICE_URI =
 	"https://pset-api.us-east-1.connect.trimble.com/v1/";
+const DEFAULT_LIBRARY_NAME = "WBS";
 const DEFAULT_LIBRARY_ID = "jeefijc4n54851u4blob2sscmjk2mzln";
-const DEFAULT_DEFINITION_ID = "6o98vt3l0deyxaz6trzb1bjaflv5qzb9";
 /**
  * Property set **definition** title in Connect (the block name in the library editor).
  * Your library uses the same label for the block and the schema field: *Pset_IMASD_WBS*.
@@ -652,12 +652,13 @@ export async function writeWbsPropertySetValues(
 	const configuredLibId = readPsetEnv("PSET_LIB_ID") || DEFAULT_LIBRARY_ID;
 	const definitionName =
 		readPsetEnv("PSET_DEFINITION_NAME") || DEFAULT_DEFINITION_NAME;
-	const explicitDefId = readPsetEnv("PSET_DEF_ID") || DEFAULT_DEFINITION_ID;
+	const explicitDefId = readPsetEnv("PSET_DEF_ID");
 	const configuredPropertyName =
 		readPsetEnv("PSET_PROPERTY_NAME") || DEFAULT_PROPERTY_NAME;
 
 	const libraryNameCandidates = [
 		readPsetEnv("PSET_LIBRARY_NAME"),
+		DEFAULT_LIBRARY_NAME,
 		configuredLibId,
 		DEFAULT_LIBRARY_ID,
 	].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
@@ -791,10 +792,11 @@ export async function inspectWbsPsetConfig(
 		readPsetEnv("PSET_DEFINITION_NAME") || DEFAULT_DEFINITION_NAME;
 	const configuredPropertyName =
 		readPsetEnv("PSET_PROPERTY_NAME") || DEFAULT_PROPERTY_NAME;
-	const explicitDefId = readPsetEnv("PSET_DEF_ID") || DEFAULT_DEFINITION_ID;
+	const explicitDefId = readPsetEnv("PSET_DEF_ID");
 
 	const libraryNameCandidates = [
 		readPsetEnv("PSET_LIBRARY_NAME"),
+		DEFAULT_LIBRARY_NAME,
 		configuredLibId,
 		DEFAULT_LIBRARY_ID,
 	].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
