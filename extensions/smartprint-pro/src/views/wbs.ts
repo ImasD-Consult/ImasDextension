@@ -251,15 +251,20 @@ function renderPartsList(
 	parts: IfcPart[],
 	selectedPartIds: Set<string>,
 ): string {
-	const selected = parts.filter((p) => selectedPartIds.has(p.id));
-	if (!selected.length) {
-		return '<p class="text-sm text-gray-500 italic">No 3D objects selected. Use native selection in the viewer, then click "Use current 3D selection".</p>';
+	if (!parts.length) {
+		return '<p class="text-sm text-gray-500 italic">No IFC objects available for this model.</p>';
 	}
-	return selected
+	return parts
 		.map((part) => {
 			const hasStableLink = Boolean(part.link?.trim().startsWith("frn:entity:"));
+			const isSelected = selectedPartIds.has(part.id);
 			return `
-        <div class="flex items-center gap-2 rounded border border-gray-200 px-2 py-2 ${hasStableLink ? "" : "opacity-70 bg-gray-50"}">
+        <button
+          type="button"
+          data-part-id="${escapeHtml(part.id)}"
+          class="w-full text-left flex items-center gap-2 rounded border px-2 py-2 ${isSelected ? "border-brand-500 bg-brand-50" : "border-gray-200"} ${hasStableLink ? "" : "opacity-70 bg-gray-50"}"
+        >
+          <span class="text-[10px] uppercase tracking-wide ${isSelected ? "text-brand-700" : "text-gray-500"}">${isSelected ? "Selected" : "Select"}</span>
           <span class="text-sm text-gray-800 min-w-0 flex-1 truncate" title="${escapeHtml(part.name)}">${escapeHtml(part.name)}</span>
           ${
 						hasStableLink
@@ -267,7 +272,7 @@ function renderPartsList(
 							: '<span class="text-[10px] uppercase tracking-wide text-red-600">No stable link</span>'
 					}
           <span class="ml-auto text-xs text-gray-500">${escapeHtml(part.type)} | ${escapeHtml(part.material)}</span>
-        </div>
+        </button>
       `;
 		})
 		.join("");
@@ -333,7 +338,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 3.8)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 3.9)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -447,7 +452,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 3.8)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 3.9)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1295,7 +1300,7 @@ export async function renderWbs(
 			);
 		} else {
 			setStatus(
-				`Matched ${selectedPartIds.size} of ${runtimeIds.size} selected object(s) to this list.`,
+				`Matched ${selectedPartIds.size} of ${runtimeIds.size} selected object(s) to this list. You can also click IFC rows below to select manually.`,
 			);
 		}
 	}
@@ -1674,6 +1679,15 @@ export async function renderWbs(
 
 	container.addEventListener("click", (event) => {
 		const target = event.target as HTMLElement;
+		const partButton = target.closest<HTMLElement>("[data-part-id]");
+		if (partButton) {
+			const partId = partButton.dataset.partId;
+			if (!partId) return;
+			if (selectedPartIds.has(partId)) selectedPartIds.delete(partId);
+			else selectedPartIds.add(partId);
+			refreshPartsList();
+			return;
+		}
 		const row = target.closest<HTMLTableRowElement>("[data-wbs-row]");
 		if (!row) return;
 		const indexRaw = row.dataset.wbsRow;
