@@ -338,7 +338,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 4.0)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 4.1)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -388,6 +388,13 @@ export async function renderWbs(
         <p class="text-[11px] text-gray-500 truncate" data-model-pset-debug>Model Psets: not checked yet.</p>
       </div>
       <div class="shrink-0 flex flex-wrap items-center gap-2 rounded border border-gray-200 bg-gray-50 p-2">
+        <button
+          type="button"
+          class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          data-resolve-links
+        >
+          Resolve writable links
+        </button>
         <button
           type="button"
           class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
@@ -452,7 +459,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 4.0)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 4.1)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -629,6 +636,9 @@ export async function renderWbs(
 	const psetDebugCheckButton = container.querySelector<HTMLButtonElement>(
 		"[data-pset-debug-check]",
 	);
+	const resolveLinksButton = container.querySelector<HTMLButtonElement>(
+		"[data-resolve-links]",
+	);
 	const psetDebugLabel = container.querySelector<HTMLElement>("[data-pset-debug]");
 	const modelPsetCheckButton = container.querySelector<HTMLButtonElement>(
 		"[data-model-pset-check]",
@@ -675,6 +685,7 @@ export async function renderWbs(
 	const viewerModelLabelEl = viewerModelLabel;
 	const retryAssembliesButtonEl = retryAssembliesButton;
 	const psetDebugCheckButtonEl = psetDebugCheckButton;
+	const resolveLinksButtonEl = resolveLinksButton;
 	const psetDebugLabelEl = psetDebugLabel;
 	const modelPsetCheckButtonEl = modelPsetCheckButton;
 	const modelPsetDebugLabelEl = modelPsetDebugLabel;
@@ -996,6 +1007,10 @@ export async function renderWbs(
 			selectedWbsRowIndex === null ||
 			selectedCount === 0 ||
 			!tableData.rows.length;
+	}
+
+	function countReadyParts(source: IfcPart[]): number {
+		return source.filter((p) => p.link?.trim().startsWith("frn:entity:")).length;
 	}
 
 	async function resolveStableLinksForParts(input: IfcPart[]): Promise<IfcPart[]> {
@@ -1569,13 +1584,14 @@ export async function renderWbs(
 		}
 
 		const assemblyCount = getAssemblyCandidates(parts).length;
+		const readyCount = countReadyParts(getAssignableParts());
 		if (assemblyCount > 0) {
 			setStatus(
-				`Loaded ${assemblyCount} assembly object(s) for ${selectedModel?.name ?? "selected IFC model"}. Assignments target assemblies.`,
+				`Loaded ${assemblyCount} assembly object(s) for ${selectedModel?.name ?? "selected IFC model"}. Writable links ready: ${readyCount}/${getAssignableParts().length}.`,
 			);
 		} else {
 			setStatus(
-				`No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Falling back to ${parts.length} IFC part/object(s).`,
+				`No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Falling back to ${parts.length} IFC part/object(s). Writable links ready: ${readyCount}/${getAssignableParts().length}.`,
 				"error",
 			);
 		}
@@ -1729,6 +1745,32 @@ export async function renderWbs(
 
 	retryAssembliesButtonEl.addEventListener("click", async () => {
 		await loadAssembliesForSelectedModel(true);
+	});
+	resolveLinksButtonEl?.addEventListener("click", async () => {
+		const assignable = getAssignableParts();
+		if (!assignable.length) {
+			setStatus("No IFC objects loaded to resolve stable links.", "error");
+			return;
+		}
+		const before = countReadyParts(assignable);
+		setStatus(
+			`Resolving stable links for ${assignable.length} IFC object(s)...`,
+		);
+		const resolved = await resolveStableLinksForParts(assignable);
+		const byId = new Map(resolved.map((p) => [p.id, p]));
+		parts = parts.map((p) => byId.get(p.id) ?? p);
+		const after = countReadyParts(getAssignableParts());
+		refreshPartsList();
+		if (after > before) {
+			setStatus(
+				`Resolved writable links for ${after - before} additional object(s). Ready: ${after}/${getAssignableParts().length}.`,
+			);
+		} else {
+			setStatus(
+				`No additional stable links found. Ready: ${after}/${getAssignableParts().length}.`,
+				"error",
+			);
+		}
 	});
 	psetDebugCheckButtonEl?.addEventListener("click", async () => {
 		await refreshPsetDebugInfo();
