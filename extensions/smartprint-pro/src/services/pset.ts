@@ -257,8 +257,11 @@ export interface WbsPsetDebugInfo {
 	configuredDefinitionName: string;
 	configuredPropertyName: string;
 	resolvedLibId?: string;
+	resolvedLibName?: string;
 	resolvedDefId?: string;
+	resolvedDefName?: string;
 	resolvedPropertyName?: string;
+	availableDefinitions?: string[];
 	message: string;
 }
 
@@ -819,6 +822,42 @@ export async function inspectWbsPsetConfig(
 			configuredPropertyName,
 			configuredDefinitionName,
 		);
+		let resolvedLibName: string | undefined;
+		let resolvedDefName: string | undefined;
+		let availableDefinitions: string[] | undefined;
+		try {
+			const gl = await pset.getLibrary(libId);
+			const lib = gl.data as { name?: string };
+			resolvedLibName =
+				typeof lib?.name === "string" && lib.name.trim()
+					? lib.name.trim()
+					: undefined;
+		} catch {
+			/* best-effort only */
+		}
+		try {
+			const ld = await pset.listDefinitions(libId, { top: 500 });
+			const defs =
+				(ld.data as { items?: Array<{ id?: string; name?: string }> }).items ?? [];
+			const found = defs.find((d) => d.id === defId);
+			resolvedDefName =
+				typeof found?.name === "string" && found.name.trim()
+					? found.name.trim()
+					: undefined;
+			availableDefinitions = defs
+				.map((d) => {
+					const id = typeof d.id === "string" ? d.id.trim() : "";
+					const name = typeof d.name === "string" ? d.name.trim() : "";
+					if (!id && !name) return "";
+					if (!id) return name;
+					if (!name) return id;
+					return `${name} (${id})`;
+				})
+				.filter((s) => s.length > 0)
+				.slice(0, 30);
+		} catch {
+			/* best-effort only */
+		}
 		return {
 			ok: true,
 			serviceUri,
@@ -826,18 +865,50 @@ export async function inspectWbsPsetConfig(
 			configuredDefinitionName,
 			configuredPropertyName,
 			resolvedLibId: libId,
+			resolvedLibName,
 			resolvedDefId: defId,
+			resolvedDefName,
 			resolvedPropertyName: prop,
+			availableDefinitions,
 			message: "PSet config resolved successfully.",
 		};
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
+		let resolvedLibName: string | undefined;
+		let availableDefinitions: string[] | undefined;
+		try {
+			const gl = await pset.getLibrary(configuredLibId);
+			const lib = gl.data as { id?: string; name?: string };
+			if (typeof lib?.name === "string" && lib.name.trim()) {
+				resolvedLibName = lib.name.trim();
+			}
+			const effectiveLibId =
+				typeof lib?.id === "string" && lib.id.trim() ? lib.id.trim() : configuredLibId;
+			const ld = await pset.listDefinitions(effectiveLibId, { top: 500 });
+			const defs =
+				(ld.data as { items?: Array<{ id?: string; name?: string }> }).items ?? [];
+			availableDefinitions = defs
+				.map((d) => {
+					const id = typeof d.id === "string" ? d.id.trim() : "";
+					const name = typeof d.name === "string" ? d.name.trim() : "";
+					if (!id && !name) return "";
+					if (!id) return name;
+					if (!name) return id;
+					return `${name} (${id})`;
+				})
+				.filter((s) => s.length > 0)
+				.slice(0, 30);
+		} catch {
+			/* keep base error */
+		}
 		return {
 			ok: false,
 			serviceUri,
 			configuredLibId,
 			configuredDefinitionName,
 			configuredPropertyName,
+			resolvedLibName,
+			availableDefinitions,
 			message: withPsetTroubleshootingHint(msg),
 		};
 	}
