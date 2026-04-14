@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 3.1)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 3.2)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -371,6 +371,16 @@ export async function renderWbs(
           Check PSet config
         </button>
         <p class="text-[11px] text-gray-500 truncate" data-pset-debug>PSet debug: not checked yet.</p>
+      </div>
+      <div class="shrink-0 flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+          data-model-pset-check
+        >
+          Inspect model Psets
+        </button>
+        <p class="text-[11px] text-gray-500 truncate" data-model-pset-debug>Model Psets: not checked yet.</p>
       </div>
 
       <div class="flex-1 flex flex-col min-h-0 gap-2 overflow-hidden">
@@ -437,7 +447,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 3.1)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 3.2)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -468,6 +478,16 @@ export async function renderWbs(
           Check PSet config
         </button>
         <p class="text-[11px] text-gray-500 truncate" data-pset-debug>PSet debug: not checked yet.</p>
+      </div>
+      <div class="mt-1 flex items-center gap-2">
+        <button
+          type="button"
+          class="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
+          data-model-pset-check
+        >
+          Inspect model Psets
+        </button>
+        <p class="text-[11px] text-gray-500 truncate" data-model-pset-debug>Model Psets: not checked yet.</p>
       </div>
     </div>
 
@@ -605,6 +625,12 @@ export async function renderWbs(
 		"[data-pset-debug-check]",
 	);
 	const psetDebugLabel = container.querySelector<HTMLElement>("[data-pset-debug]");
+	const modelPsetCheckButton = container.querySelector<HTMLButtonElement>(
+		"[data-model-pset-check]",
+	);
+	const modelPsetDebugLabel = container.querySelector<HTMLElement>(
+		"[data-model-pset-debug]",
+	);
 	const useViewerSelectionButton = container.querySelector<HTMLButtonElement>(
 		"[data-use-viewer-selection]",
 	);
@@ -645,6 +671,8 @@ export async function renderWbs(
 	const retryAssembliesButtonEl = retryAssembliesButton;
 	const psetDebugCheckButtonEl = psetDebugCheckButton;
 	const psetDebugLabelEl = psetDebugLabel;
+	const modelPsetCheckButtonEl = modelPsetCheckButton;
+	const modelPsetDebugLabelEl = modelPsetDebugLabel;
 	const useViewerSelectionButtonEl = useViewerSelectionButton;
 	const lastCheckedLabelEl = lastCheckedLabel;
 	const partsListEl = partsList;
@@ -738,6 +766,135 @@ export async function renderWbs(
 			psetDebugLabelEl.classList.remove("text-gray-500", "text-emerald-700");
 			psetDebugLabelEl.classList.add("text-red-600");
 		}
+	}
+
+	function summarizeModelPropertySets(
+		root: unknown,
+	): Array<{ psetName: string; props: Array<{ key: string; value: string }> }> {
+		const out = new Map<string, Map<string, string>>();
+		const scalar = (v: unknown): string | null => {
+			if (typeof v === "string") return v.trim();
+			if (typeof v === "number" || typeof v === "boolean") return String(v);
+			return null;
+		};
+		const add = (psetName: string, key: string, value: string): void => {
+			const p = psetName.trim();
+			const k = key.trim();
+			const v = value.trim();
+			if (!p || !k || !v) return;
+			if (!out.has(p)) out.set(p, new Map<string, string>());
+			const props = out.get(p)!;
+			if (!props.has(k)) props.set(k, v);
+		};
+		const isLikelyPsetName = (name: string): boolean =>
+			/^pset[_\s]/i.test(name) || /wbs/i.test(name) || /property set/i.test(name);
+		const walk = (node: unknown, depth: number, activePset?: string): void => {
+			if (depth > 16 || node == null) return;
+			if (Array.isArray(node)) {
+				for (const item of node) walk(item, depth + 1, activePset);
+				return;
+			}
+			if (typeof node !== "object") return;
+			const o = node as Record<string, unknown>;
+			const ownName =
+				(typeof o.name === "string" && o.name.trim()) ||
+				(typeof o.displayName === "string" && o.displayName.trim()) ||
+				(typeof o.propertySetName === "string" && o.propertySetName.trim()) ||
+				(typeof o.groupName === "string" && o.groupName.trim()) ||
+				undefined;
+			const nextPset =
+				ownName && isLikelyPsetName(ownName) ? ownName : activePset;
+
+			const keyCandidate =
+				(typeof o.name === "string" && o.name.trim()) ||
+				(typeof o.displayName === "string" && o.displayName.trim()) ||
+				(typeof o.propertyName === "string" && o.propertyName.trim()) ||
+				(typeof o.key === "string" && o.key.trim()) ||
+				undefined;
+			const valCandidate =
+				scalar(o.value) ??
+				scalar(o.stringValue) ??
+				scalar(o.displayValue) ??
+				scalar(o.nominalValue);
+			if (nextPset && keyCandidate && valCandidate) {
+				add(nextPset, keyCandidate, valCandidate);
+			}
+
+			for (const [k, v] of Object.entries(o)) {
+				const sv = scalar(v);
+				if (nextPset && sv && !["name", "displayName"].includes(k)) {
+					add(nextPset, k, sv);
+				}
+				if (v && typeof v === "object") walk(v, depth + 1, nextPset);
+			}
+		};
+		walk(root, 0, undefined);
+		return [...out.entries()].map(([psetName, propsMap]) => ({
+			psetName,
+			props: [...propsMap.entries()].map(([key, value]) => ({ key, value })),
+		}));
+	}
+
+	async function refreshModelPsetDebugInfo(): Promise<void> {
+		if (!modelPsetDebugLabelEl) return;
+		modelPsetDebugLabelEl.textContent = "Model Psets: checking...";
+		modelPsetDebugLabelEl.classList.remove("text-red-600", "text-emerald-700", "text-gray-500");
+		modelPsetDebugLabelEl.classList.add("text-gray-500");
+		const viewer = api.viewer;
+		const selected = getAssignableParts().filter((p) => selectedPartIds.has(p.id));
+		const first = selected[0];
+		if (!first) {
+			modelPsetDebugLabelEl.textContent = "Model Psets: select one object first.";
+			return;
+		}
+		if (!viewer?.getObjectProperties) {
+			modelPsetDebugLabelEl.textContent = "Model Psets: getObjectProperties API unavailable.";
+			modelPsetDebugLabelEl.classList.remove("text-gray-500");
+			modelPsetDebugLabelEl.classList.add("text-red-600");
+			return;
+		}
+		const rid = Number(first.id);
+		if (Number.isNaN(rid)) {
+			modelPsetDebugLabelEl.textContent = "Model Psets: selected object has non-numeric runtime id.";
+			modelPsetDebugLabelEl.classList.remove("text-gray-500");
+			modelPsetDebugLabelEl.classList.add("text-red-600");
+			return;
+		}
+		const activeModelId = getActiveModelId();
+		const openModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelCandidates = [openModel?.id, openModel?.versionId, activeModelId].filter(
+			(v): v is string => typeof v === "string" && v.trim().length > 0,
+		);
+		for (const modelId of modelCandidates) {
+			try {
+				const props = await viewer.getObjectProperties(modelId, [rid]);
+				const firstPayload = Array.isArray(props) ? props[0] : undefined;
+				const psets = summarizeModelPropertySets(firstPayload);
+				if (psets.length === 0) continue;
+				const text = psets
+					.slice(0, 6)
+					.map((p) => {
+						const inner = p.props
+							.slice(0, 6)
+							.map((kv) => `${kv.key}=${kv.value}`)
+							.join(", ");
+						return `${p.psetName}[${inner}]`;
+					})
+					.join(" | ");
+				modelPsetDebugLabelEl.textContent = `Model Psets OK: ${text}`;
+				modelPsetDebugLabelEl.classList.remove("text-gray-500", "text-red-600");
+				modelPsetDebugLabelEl.classList.add("text-emerald-700");
+				return;
+			} catch {
+				/* try next model candidate */
+			}
+		}
+		modelPsetDebugLabelEl.textContent =
+			"Model Psets: no property sets were parsed from selected object payload.";
+		modelPsetDebugLabelEl.classList.remove("text-gray-500", "text-emerald-700");
+		modelPsetDebugLabelEl.classList.add("text-red-600");
 	}
 
 	let tableData: WbsTableData = { headers: [], rows: [] };
@@ -1328,6 +1485,9 @@ export async function renderWbs(
 	});
 	psetDebugCheckButtonEl?.addEventListener("click", async () => {
 		await refreshPsetDebugInfo();
+	});
+	modelPsetCheckButtonEl?.addEventListener("click", async () => {
+		await refreshModelPsetDebugInfo();
 	});
 	useViewerSelectionButtonEl?.addEventListener("click", async () => {
 		await syncSelectedPartsFromViewerNative();
