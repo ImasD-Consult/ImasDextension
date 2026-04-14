@@ -333,7 +333,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 3.2)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 3.3)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -447,7 +447,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 3.2)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 3.3)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -786,8 +786,19 @@ export async function renderWbs(
 			const props = out.get(p)!;
 			if (!props.has(k)) props.set(k, v);
 		};
-		const isLikelyPsetName = (name: string): boolean =>
-			/^pset[_\s]/i.test(name) || /wbs/i.test(name) || /property set/i.test(name);
+		const maybeGroupName = (
+			node: Record<string, unknown>,
+			activePset?: string,
+		): string | undefined => {
+			const ownName =
+				(typeof node.name === "string" && node.name.trim()) ||
+				(typeof node.displayName === "string" && node.displayName.trim()) ||
+				(typeof node.propertySetName === "string" && node.propertySetName.trim()) ||
+				(typeof node.groupName === "string" && node.groupName.trim()) ||
+				undefined;
+			if (ownName) return ownName;
+			return activePset;
+		};
 		const walk = (node: unknown, depth: number, activePset?: string): void => {
 			if (depth > 16 || node == null) return;
 			if (Array.isArray(node)) {
@@ -796,14 +807,7 @@ export async function renderWbs(
 			}
 			if (typeof node !== "object") return;
 			const o = node as Record<string, unknown>;
-			const ownName =
-				(typeof o.name === "string" && o.name.trim()) ||
-				(typeof o.displayName === "string" && o.displayName.trim()) ||
-				(typeof o.propertySetName === "string" && o.propertySetName.trim()) ||
-				(typeof o.groupName === "string" && o.groupName.trim()) ||
-				undefined;
-			const nextPset =
-				ownName && isLikelyPsetName(ownName) ? ownName : activePset;
+			const nextPset = maybeGroupName(o, activePset);
 
 			const keyCandidate =
 				(typeof o.name === "string" && o.name.trim()) ||
@@ -820,6 +824,35 @@ export async function renderWbs(
 				add(nextPset, keyCandidate, valCandidate);
 			}
 
+			// Common TC structure: { name: "Pset...", properties: [{ name, value }, ...] }
+			const nestedProps = o.properties;
+			if (Array.isArray(nestedProps) && nextPset) {
+				for (const item of nestedProps) {
+					if (!item || typeof item !== "object") continue;
+					const ip = item as Record<string, unknown>;
+					const nk =
+						(typeof ip.name === "string" && ip.name.trim()) ||
+						(typeof ip.displayName === "string" && ip.displayName.trim()) ||
+						(typeof ip.propertyName === "string" && ip.propertyName.trim()) ||
+						(typeof ip.key === "string" && ip.key.trim()) ||
+						undefined;
+					const nv =
+						scalar(ip.value) ??
+						scalar(ip.stringValue) ??
+						scalar(ip.displayValue) ??
+						scalar(ip.nominalValue);
+					if (nk && nv) add(nextPset, nk, nv);
+				}
+			}
+			// Also support map/object style: { props: { key: value } }
+			const mapProps = o.props;
+			if (mapProps && typeof mapProps === "object" && !Array.isArray(mapProps) && nextPset) {
+				for (const [k, v] of Object.entries(mapProps as Record<string, unknown>)) {
+					const sv = scalar(v);
+					if (sv) add(nextPset, k, sv);
+				}
+			}
+
 			for (const [k, v] of Object.entries(o)) {
 				const sv = scalar(v);
 				if (nextPset && sv && !["name", "displayName"].includes(k)) {
@@ -829,6 +862,14 @@ export async function renderWbs(
 			}
 		};
 		walk(root, 0, undefined);
+		if (out.size === 0 && root && typeof root === "object") {
+			// Last-resort fallback to expose something debuggable from payload.
+			const flat = root as Record<string, unknown>;
+			for (const [k, v] of Object.entries(flat)) {
+				const sv = scalar(v);
+				if (sv) add("root", k, sv);
+			}
+		}
 		return [...out.entries()].map(([psetName, propsMap]) => ({
 			psetName,
 			props: [...propsMap.entries()].map(([key, value]) => ({ key, value })),
@@ -891,8 +932,30 @@ export async function renderWbs(
 				/* try next model candidate */
 			}
 		}
-		modelPsetDebugLabelEl.textContent =
+		let fallbackMessage:
+			| "Model Psets: no property sets were parsed from selected object payload."
+			| string =
 			"Model Psets: no property sets were parsed from selected object payload.";
+		try {
+			const probeModelId = modelCandidates[0];
+			if (probeModelId) {
+				const props = await viewer.getObjectProperties(probeModelId, [rid]);
+				const firstPayload = Array.isArray(props) ? props[0] : undefined;
+				const topKeys =
+					firstPayload && typeof firstPayload === "object"
+						? Object.keys(firstPayload as Record<string, unknown>).slice(0, 20)
+						: [];
+				if (topKeys.length > 0) {
+					fallbackMessage = `Model Psets: parsed none. Top-level payload keys: ${topKeys.join(", ")}`;
+				} else {
+					fallbackMessage =
+						"Model Psets: parsed none and payload shape is empty/unknown.";
+				}
+			}
+		} catch {
+			/* ignore probe */
+		}
+		modelPsetDebugLabelEl.textContent = fallbackMessage;
 		modelPsetDebugLabelEl.classList.remove("text-gray-500", "text-emerald-700");
 		modelPsetDebugLabelEl.classList.add("text-red-600");
 	}
