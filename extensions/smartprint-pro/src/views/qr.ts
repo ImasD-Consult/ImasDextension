@@ -7,6 +7,105 @@ import {
 } from "../services/qr";
 import { resolveViewerModelsForWbs } from "../services/viewer-model";
 
+type ViewerSelectionRow = {
+	modelId?: string;
+	objectRuntimeIds?: number[];
+};
+
+async function readViewerSelection(
+	api: WorkspaceApi,
+): Promise<{ modelId?: string; runtimeId?: number; source: string }> {
+	const viewer = api.viewer as WorkspaceApi["viewer"] & {
+		getSelection?: () => Promise<{ modelObjectIds?: ViewerSelectionRow[] }>;
+		getObjects?: (
+			selector?: { selected?: boolean },
+			objectState?: Record<string, unknown>,
+		) => Promise<Array<{ modelId?: string; objects?: unknown }>>;
+	};
+
+	// Primary path
+	try {
+		const selected = await viewer?.getSelection?.();
+		for (const row of selected?.modelObjectIds ?? []) {
+			for (const rid of row.objectRuntimeIds ?? []) {
+				if (typeof rid === "number" && !Number.isNaN(rid)) {
+					return { modelId: row.modelId, runtimeId: rid, source: "getSelection" };
+				}
+			}
+		}
+	} catch {
+		/* fallback below */
+	}
+
+	// Compatibility fallback: selected object selector
+	try {
+		const rows = await viewer?.getObjects?.({ selected: true });
+		for (const row of rows ?? []) {
+			const objects = row.objects;
+			if (!Array.isArray(objects)) continue;
+			for (const obj of objects) {
+				if (typeof obj === "number" && !Number.isNaN(obj)) {
+					return { modelId: row.modelId, runtimeId: obj, source: "getObjects:selected" };
+				}
+				if (!obj || typeof obj !== "object") continue;
+				const o = obj as Record<string, unknown>;
+				const rid =
+					typeof o.objectRuntimeId === "number"
+						? o.objectRuntimeId
+						: typeof o.id === "number"
+							? o.id
+							: typeof o.runtimeId === "number"
+								? o.runtimeId
+								: null;
+				if (typeof rid === "number" && !Number.isNaN(rid)) {
+					return { modelId: row.modelId, runtimeId: rid, source: "getObjects:selected" };
+				}
+			}
+		}
+	} catch {
+		/* fallback below */
+	}
+
+	// Additional fallback used by some hosts: entityState.Selected = 1
+	try {
+		const rows = await viewer?.getObjects?.(undefined, { entityState: 1 });
+		for (const row of rows ?? []) {
+			const objects = row.objects;
+			if (!Array.isArray(objects)) continue;
+			for (const obj of objects) {
+				if (typeof obj === "number" && !Number.isNaN(obj)) {
+					return {
+						modelId: row.modelId,
+						runtimeId: obj,
+						source: "getObjects:entityState",
+					};
+				}
+				if (!obj || typeof obj !== "object") continue;
+				const o = obj as Record<string, unknown>;
+				const rid =
+					typeof o.objectRuntimeId === "number"
+						? o.objectRuntimeId
+						: typeof o.id === "number"
+							? o.id
+							: typeof o.runtimeId === "number"
+								? o.runtimeId
+								: null;
+				if (typeof rid === "number" && !Number.isNaN(rid)) {
+					return {
+						modelId: row.modelId,
+						runtimeId: rid,
+						source: "getObjects:entityState",
+					};
+				}
+			}
+		}
+	} catch {
+		/* no further fallback */
+	}
+
+	return { source: "none" };
+}
+
 export async function renderQrPanel(
 	container: HTMLElement,
 	api: WorkspaceApi,
@@ -62,37 +161,36 @@ export async function renderQrPanel(
 	generateButton.addEventListener("click", async () => {
 		try {
 			status.textContent = "Reading current 3D selection...";
-			const viewer = api.viewer as WorkspaceApi["viewer"] & {
-				getSelection?: () => Promise<{
-					modelObjectIds?: Array<{
-						modelId?: string;
-						objectRuntimeIds?: number[];
-					}>;
-				}>;
-			};
-			const selected = await viewer?.getSelection?.();
-			const firstModel = selected?.modelObjectIds?.[0];
-			const firstRid = firstModel?.objectRuntimeIds?.[0];
-			if (!firstModel?.modelId || typeof firstRid !== "number") {
+			const selected = await readViewerSelection(api);
+			const firstRid = selected.runtimeId;
+			if (typeof firstRid !== "number") {
 				status.textContent =
-					"No valid selection found. Select one object in the 3D viewer.";
+					`No valid selection found (source: ${selected.source}). Select one object in the 3D viewer, then click Generate again.`;
 				return;
 			}
 
 			const viewerModels = await resolveViewerModelsForWbs(api);
-			const active = viewerModels.find(
-				(m) => m.id === firstModel.modelId || m.versionId === firstModel.modelId,
-			);
+			const active = selected.modelId
+				? viewerModels.find(
+						(m) => m.id === selected.modelId || m.versionId === selected.modelId,
+					)
+				: viewerModels[0];
+			const resolvedModelId = active?.id ?? selected.modelId;
+			if (!resolvedModelId) {
+				status.textContent =
+					"Selection read, but no active model id was resolved from viewer.";
+				return;
+			}
 
 			const payload: QrTargetPayload = {
 				v: 1,
-				modelId: active?.id ?? firstModel.modelId,
+				modelId: resolvedModelId,
 				modelVersionId: active?.versionId,
 				partId: String(firstRid),
 				partName: `Object ${firstRid}`,
 				partType: "IFCObject",
-				partLink: `frn:tc:project:${firstModel.modelId}/${firstRid}`,
-				targetUrl: `frn:tc:project:${firstModel.modelId}/${firstRid}`,
+				partLink: `frn:tc:project:${resolvedModelId}/${firstRid}`,
+				targetUrl: `frn:tc:project:${resolvedModelId}/${firstRid}`,
 				createdAt: new Date().toISOString(),
 			};
 			const deepLink = buildQrNavigationUrl(payload);
@@ -103,7 +201,7 @@ export async function renderQrPanel(
 			qrLink.classList.remove("hidden");
 			qrLink.href = deepLink;
 			qrPayload.value = JSON.stringify(payload, null, 2);
-			status.innerHTML = `QR generated for <strong>${escapeHtml(payload.partName)}</strong>. Scan it with your phone QR reader and open in Trimble Connect.`;
+			status.innerHTML = `QR generated for <strong>${escapeHtml(payload.partName)}</strong> (selection source: ${escapeHtml(selected.source)}). Scan it with your phone QR reader and open in Trimble Connect.`;
 		} catch (error) {
 			const message =
 				error instanceof Error ? error.message : "Failed to generate QR.";
