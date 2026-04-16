@@ -4,6 +4,7 @@ import { SMARTPRINT_LOGO } from "./assets/logo";
 import { renderInfo } from "./views/info";
 import { renderProcesses } from "./views/processes";
 import { renderQrPanel } from "./views/qr";
+import { renderBatchQrPanel } from "./views/batch-qr";
 import { renderWbs } from "./views/wbs";
 
 function getAppMode(): "project" | "3d" {
@@ -14,7 +15,7 @@ function getAppMode(): "project" | "3d" {
 async function render3dPanel(
 	container: HTMLElement,
 	api: WorkspaceApi,
-	panel: "wbs" | "qr",
+	panel: "qr" | "batch" | "wbs",
 ): Promise<void> {
 	container.className =
 		"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
@@ -22,17 +23,24 @@ async function render3dPanel(
     <div class="shrink-0 flex items-center gap-2 pb-2 border-b border-gray-200">
       <button
         type="button"
-        data-panel="wbs"
-        class="rounded px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
-      >
-        WBS
-      </button>
-      <button
-        type="button"
         data-panel="qr"
         class="rounded px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
       >
         QR Targets
+      </button>
+      <button
+        type="button"
+        data-panel="batch"
+        class="rounded px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
+      >
+        Batch QR
+      </button>
+      <button
+        type="button"
+        data-panel="wbs"
+        class="rounded px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
+      >
+        WBS
       </button>
     </div>
     <div class="flex-1 min-h-0 pt-2" data-panel-content></div>
@@ -42,7 +50,7 @@ async function render3dPanel(
 	const panelButtons = container.querySelectorAll<HTMLButtonElement>("[data-panel]");
 	if (!content) return;
 
-	const setActivePanel = (active: "wbs" | "qr"): void => {
+	const setActivePanel = (active: "qr" | "batch" | "wbs"): void => {
 		panelButtons.forEach((btn) => {
 			const isActive = btn.dataset.panel === active;
 			btn.classList.toggle("bg-brand-600", isActive);
@@ -54,7 +62,9 @@ async function render3dPanel(
 
 	panelButtons.forEach((btn) => {
 		btn.addEventListener("click", () => {
-			const target = btn.dataset.panel === "qr" ? "qr" : "wbs";
+			const p = btn.dataset.panel;
+			const target: "qr" | "batch" | "wbs" =
+				p === "qr" || p === "batch" ? (p as "qr" | "batch") : "wbs";
 			void render3dPanel(container, api, target);
 		});
 	});
@@ -63,6 +73,10 @@ async function render3dPanel(
 	content.innerHTML = "";
 	if (panel === "qr") {
 		await renderQrPanel(content, api);
+		return;
+	}
+	if (panel === "batch") {
+		await renderBatchQrPanel(content, api);
 		return;
 	}
 	await renderWbs(content, api, {
@@ -102,12 +116,14 @@ export async function initApp(): Promise<void> {
 			if (
 				command &&
 				command !== "qr" &&
+				command !== "batch_qr" &&
 				command !== "wbs" &&
 				command !== "smartprint_main"
 			) {
 				return;
 			}
-			const panel = command === "qr" ? "qr" : "wbs";
+			const panel: "qr" | "batch" | "wbs" =
+				command === "qr" ? "qr" : command === "batch_qr" ? "batch" : "wbs";
 			await render3dPanel(container, api, panel);
 		});
 
@@ -117,11 +133,12 @@ export async function initApp(): Promise<void> {
 				icon: SMARTPRINT_LOGO,
 				command: "wbs",
 				subMenus: [
-					{ title: "WBS", command: "wbs" },
 					{ title: "QR Targets", command: "qr" },
+					{ title: "Batch QR", command: "batch_qr" },
+					{ title: "WBS", command: "wbs" },
 				],
 			});
-			await render3dPanel(container, api, "wbs");
+			await render3dPanel(container, api, "qr");
 			return;
 		}
 
