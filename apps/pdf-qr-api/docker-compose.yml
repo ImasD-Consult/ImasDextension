@@ -1,0 +1,22 @@
+# Local development: Redis only. Run API and worker on the host (pnpm dev / pnpm dev:worker).
+#
+#   docker compose -f apps/pdf-qr-api/docker-compose.yml up -d
+#
+# Use REDIS_URL=redis://127.0.0.1:6379 in .env (see .env.dist).
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - pdf_qr_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pdf_qr_redis_data:
