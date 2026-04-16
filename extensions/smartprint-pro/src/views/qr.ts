@@ -26,7 +26,7 @@ export async function renderQrPanel(
           Generate model QR
         </button>
       </div>
-      <div class="rounded border border-gray-200 bg-white p-3 flex flex-col gap-3">
+      <div class="rounded border border-gray-200 bg-white p-3 flex flex-col gap-2">
         <div class="flex items-center justify-between gap-3">
           <a
             href="#"
@@ -37,11 +37,13 @@ export async function renderQrPanel(
           >
             Open generated link
           </a>
-          <p class="text-[11px] text-gray-500">Scan with Trimble Connect mobile QR scanner.</p>
         </div>
         <div class="flex items-center justify-center">
           <img class="hidden h-40 w-40 rounded border border-gray-200" data-qr-image alt="Generated QR" />
         </div>
+        <p class="mt-1 text-[11px] text-gray-500 text-center">
+          Scan the QR with the Trimble Connect mobile QR scanner.
+        </p>
       </div>
     </div>
   `;
