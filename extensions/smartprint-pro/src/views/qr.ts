@@ -181,19 +181,30 @@ export async function renderQrPanel(
 					"Selection read, but no active model id was resolved from viewer.";
 				return;
 			}
+			const project = await api.project.getProject();
+			const projectId = project?.id;
+			if (!projectId) {
+				status.textContent = "Could not resolve Trimble project id.";
+				return;
+			}
 
 			const payload: QrTargetPayload = {
 				v: 1,
+				projectId,
 				modelId: resolvedModelId,
 				modelVersionId: active?.versionId,
 				partId: String(firstRid),
 				partName: `Object ${firstRid}`,
 				partType: "IFCObject",
 				partLink: `frn:tc:project:${resolvedModelId}/${firstRid}`,
-				targetUrl: `frn:tc:project:${resolvedModelId}/${firstRid}`,
 				createdAt: new Date().toISOString(),
 			};
 			const deepLink = buildQrNavigationUrl(payload);
+			if (!deepLink) {
+				status.textContent =
+					"QR target URL could not be built. Set TRIMBLE_CONNECT_QR_URL_TEMPLATE to a working Trimble file/view link pattern.";
+				return;
+			}
 			const dataUrl = await toQrDataUrl(deepLink);
 
 			qrImage.classList.remove("hidden");

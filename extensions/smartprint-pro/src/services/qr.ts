@@ -17,11 +17,9 @@ export type QrTargetPayload = {
 	createdAt: string;
 };
 
-function toBase64Url(input: string): string {
-	return btoa(unescape(encodeURIComponent(input)))
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/g, "");
+function isHttpUrl(value: string | undefined): boolean {
+	if (!value) return false;
+	return /^https?:\/\//i.test(value.trim());
 }
 
 function applyTemplate(
@@ -40,7 +38,27 @@ function applyTemplate(
 		.replaceAll("{partLink}", encodeURIComponent(payload.partLink ?? ""));
 }
 
-export function buildQrNavigationUrl(payload: QrTargetPayload): string {
+function buildDefaultTrimbleViewerUrl(
+	payload: QrTargetPayload,
+	origin: string,
+): string | null {
+	if (!payload.projectId) return null;
+	const modelId = payload.modelVersionId ?? payload.modelId;
+	if (!modelId) return null;
+	const hostname = (() => {
+		try {
+			return new URL(origin).hostname;
+		} catch {
+			return "";
+		}
+	})();
+	const params = new URLSearchParams();
+	params.set("modelId", modelId);
+	if (hostname) params.set("origin", hostname);
+	return `https://web.connect.trimble.com/projects/${encodeURIComponent(payload.projectId)}/viewer/3d/?${params.toString()}`;
+}
+
+export function buildQrNavigationUrl(payload: QrTargetPayload): string | null {
 	const origin =
 		getRuntimeTrimbleConnectOrigin() ??
 		(import.meta as ImportMeta & { env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string } })
@@ -50,11 +68,13 @@ export function buildQrNavigationUrl(payload: QrTargetPayload): string {
 	if (template) {
 		return applyTemplate(template, payload, origin);
 	}
-	if (payload.partLink?.trim()) {
-		return payload.partLink.trim();
+	if (isHttpUrl(payload.targetUrl)) {
+		return payload.targetUrl!.trim();
 	}
-	const encoded = toBase64Url(JSON.stringify(payload));
-	return `${origin.replace(/\/+$/, "")}/?smartprint_target=${encoded}`;
+	if (isHttpUrl(payload.partLink)) {
+		return (payload.partLink ?? "").trim();
+	}
+	return buildDefaultTrimbleViewerUrl(payload, origin);
 }
 
 export async function toQrDataUrl(value: string): Promise<string> {
