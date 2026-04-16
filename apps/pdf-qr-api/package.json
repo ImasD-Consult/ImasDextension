@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "tsx watch src/index.ts",
 		"dev:worker": "tsx watch src/worker.ts",
-		"build": "tsc -p tsconfig.json",
+		"build": "tsup",
 		"start": "node dist/index.js",
 		"start:worker": "node dist/worker.js",
 		"check-types": "tsc --noEmit -p tsconfig.json",
@@ -31,6 +31,7 @@
 	"devDependencies": {
 		"@types/node": "^25.6.0",
 		"@types/qrcode": "^1.5.6",
+		"tsup": "^8.5.1",
 		"tsx": "^4.21.0",
 		"typescript": "^6.0.2"
 	}
