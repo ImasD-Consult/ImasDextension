@@ -3,6 +3,7 @@ import type { WorkspaceApi } from "@imasd/shared/trimble";
 import { SMARTPRINT_LOGO } from "./assets/logo";
 import { renderInfo } from "./views/info";
 import { renderProcesses } from "./views/processes";
+import { renderQrPanel } from "./views/qr";
 import { renderWbs } from "./views/wbs";
 
 function getAppMode(): "project" | "3d" {
@@ -40,12 +41,17 @@ export async function initApp(): Promise<void> {
 			}
 			if (
 				command &&
+				command !== "qr" &&
 				command !== "wbs" &&
 				command !== "smartprint_main"
 			) {
 				return;
 			}
 			container.innerHTML = "";
+			if (command === "qr") {
+				await renderQrPanel(container, api);
+				return;
+			}
 			await renderWbs(container, api, {
 				useViewerModelOnly: true,
 				horizontalDockLayout: true,
@@ -59,6 +65,10 @@ export async function initApp(): Promise<void> {
 				title: "smartprintPRO",
 				icon: SMARTPRINT_LOGO,
 				command: "wbs",
+				subMenus: [
+					{ title: "WBS", command: "wbs" },
+					{ title: "QR Targets", command: "qr" },
+				],
 			});
 			container.innerHTML = "";
 			await renderWbs(container, api, {

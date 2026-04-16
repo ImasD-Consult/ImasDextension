@@ -12,6 +12,7 @@
 	},
 	"dependencies": {
 		"@imasd/shared": "workspace:*",
+		"qrcode": "^1.5.4",
 		"trimble-connect-sdk": "^4.0.11",
 		"xlsx": "^0.18.5"
 	},
@@ -19,6 +20,7 @@
 		"@imasd/tailwind-config": "workspace:*",
 		"@tailwindcss/vite": "^4.2.1",
 		"@types/node": "^25.5.0",
+		"@types/qrcode": "^1.5.6",
 		"tailwindcss": "^4.2.1",
 		"typescript": "^5.9.3",
 		"vite": "^8.0.0"
