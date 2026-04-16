@@ -12,6 +12,19 @@ type BatchState = {
 	size: "small" | "medium" | "large";
 };
 
+type FileItem = {
+	id: string;
+	name: string;
+};
+
+type MatchRow = {
+	ifcId: string;
+	ifcName: string;
+	pdfId: string;
+	pdfName: string;
+	autoMatched: boolean;
+};
+
 type FolderOption = {
 	id: string;
 	name: string;
@@ -112,6 +125,26 @@ export async function renderBatchQrPanel(
           </div>
         </div>
 
+        <div class="rounded border border-gray-200 bg-white p-2">
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <h4 class="text-xs font-semibold text-gray-800">PDF / IFC Matches</h4>
+            <button
+              type="button"
+              class="rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
+              data-refresh-matches
+              disabled
+            >
+              Refresh matches
+            </button>
+          </div>
+          <p class="mb-2 text-[11px] text-gray-500" data-match-summary>
+            Select both folders to build the match table.
+          </p>
+          <div class="max-h-56 overflow-auto" data-match-table>
+            <p class="text-[11px] text-gray-400 italic">No matches yet.</p>
+          </div>
+        </div>
+
         <button
           type="button"
           class="w-full rounded bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -182,6 +215,11 @@ export async function renderBatchQrPanel(
 		"[data-selected-ifc-folder]",
 	);
 	const sizeSelect = container.querySelector<HTMLSelectElement>("[data-qr-size]");
+	const refreshMatchesButton = container.querySelector<HTMLButtonElement>(
+		"[data-refresh-matches]",
+	);
+	const matchSummary = container.querySelector<HTMLElement>("[data-match-summary]");
+	const matchTable = container.querySelector<HTMLElement>("[data-match-table]");
 	const batchButton = container.querySelector<HTMLButtonElement>(
 		"[data-generate-batch]",
 	);
@@ -209,6 +247,9 @@ export async function renderBatchQrPanel(
 		!pdfLabel ||
 		!ifcLabel ||
 		!sizeSelect ||
+		!refreshMatchesButton ||
+		!matchSummary ||
+		!matchTable ||
 		!batchButton ||
 		!modal ||
 		!modalTitle ||
@@ -230,6 +271,9 @@ export async function renderBatchQrPanel(
 		position: "top-left",
 		size: "medium",
 	};
+	let pdfFiles: FileItem[] = [];
+	let ifcFiles: FileItem[] = [];
+	let matchRows: MatchRow[] = [];
 
 	const project = await api.project.getProject();
 	if (!project?.id) {
@@ -335,12 +379,133 @@ export async function renderBatchQrPanel(
 	const refreshUi = (): void => {
 		const ready = state.pdfFolderId && state.ifcFolderId;
 		batchButton.disabled = !ready;
+		refreshMatchesButton.disabled = !ready;
 		if (!ready) {
 			status.textContent =
 				"Select both PDF and IFC folders to enable batch generation.";
 		} else {
 			status.textContent =
 				"Ready. Generate will match PDFs and IFCs by name and send jobs to the QR stamping service.";
+		}
+	};
+
+	const normalizeFileStem = (name: string): string =>
+		name
+			.toLowerCase()
+			.replace(/\.[^/.]+$/, "")
+			.replace(/[\s_\-.]+/g, "");
+
+	const buildMatchRows = (pdfList: FileItem[], ifcList: FileItem[]): MatchRow[] => {
+		return ifcList.map((ifc) => {
+			const ifcStem = normalizeFileStem(ifc.name);
+			const matchedPdf = pdfList.find((pdf) =>
+				normalizeFileStem(pdf.name).includes(ifcStem),
+			);
+			return {
+				ifcId: ifc.id,
+				ifcName: ifc.name,
+				pdfId: matchedPdf?.id ?? "",
+				pdfName: matchedPdf?.name ?? "",
+				autoMatched: Boolean(matchedPdf),
+			};
+		});
+	};
+
+	const renderMatchTable = (): void => {
+		if (!ifcFiles.length) {
+			matchSummary.textContent = "No IFC files found in selected IFC folder.";
+			matchTable.innerHTML =
+				'<p class="text-[11px] text-gray-400 italic">No IFC files to match.</p>';
+			return;
+		}
+		const autoCount = matchRows.filter((r) => r.autoMatched && r.pdfId).length;
+		const manualCount = matchRows.filter((r) => !r.autoMatched && r.pdfId).length;
+		const missingCount = matchRows.filter((r) => !r.pdfId).length;
+		matchSummary.textContent =
+			`${matchRows.length} IFC rows | auto: ${autoCount} | manual: ${manualCount} | missing: ${missingCount}`;
+
+		const pdfOptions = [
+			'<option value="">-- No match --</option>',
+			...pdfFiles.map((pdf) => `<option value="${pdf.id}">${pdf.name}</option>`),
+		].join("");
+
+		const rows = matchRows
+			.map((row) => {
+				return `
+          <tr class="border-b border-gray-100">
+            <td class="px-2 py-1.5 text-[11px] text-gray-700">${row.ifcName}</td>
+            <td class="px-2 py-1.5">
+              <select class="w-full rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-800" data-match-pdf-for-ifc="${row.ifcId}">
+                ${pdfOptions}
+              </select>
+            </td>
+          </tr>
+        `;
+			})
+			.join("");
+
+		matchTable.innerHTML = `
+      <table class="min-w-full border-collapse">
+        <thead class="sticky top-0 bg-gray-50">
+          <tr class="border-b border-gray-200">
+            <th class="px-2 py-1.5 text-left text-[11px] font-semibold text-gray-700">IFC</th>
+            <th class="px-2 py-1.5 text-left text-[11px] font-semibold text-gray-700">PDF</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+		for (const row of matchRows) {
+			const select = matchTable.querySelector<HTMLSelectElement>(
+				`[data-match-pdf-for-ifc="${row.ifcId}"]`,
+			);
+			if (select) {
+				select.value = row.pdfId;
+			}
+		}
+	};
+
+	const loadFilesAndMatches = async (): Promise<void> => {
+		if (!state.pdfFolderId || !state.ifcFolderId) {
+			matchRows = [];
+			pdfFiles = [];
+			ifcFiles = [];
+			renderMatchTable();
+			return;
+		}
+		matchSummary.textContent = "Loading files and building matches...";
+		matchTable.innerHTML =
+			'<p class="text-[11px] text-gray-400 italic">Loading...</p>';
+		try {
+			const [pdfItemsRaw, ifcItemsRaw] = await Promise.all([
+				client.listFolderItems(state.pdfFolderId, project.id),
+				client.listFolderItems(state.ifcFolderId, project.id),
+			]);
+			pdfFiles = (pdfItemsRaw ?? [])
+				.filter((item) => item.type?.toUpperCase() !== "FOLDER")
+				.filter((item) => /\.pdf$/i.test(item.name ?? ""))
+				.map((item) => ({
+					id: item.id || item.versionId || "",
+					name: item.name ?? "PDF",
+				}))
+				.filter((x) => x.id.length > 0);
+			ifcFiles = (ifcItemsRaw ?? [])
+				.filter((item) => item.type?.toUpperCase() !== "FOLDER")
+				.filter((item) => /\.(ifc|ifczip|ifcxml)$/i.test(item.name ?? ""))
+				.map((item) => ({
+					id: item.id || item.versionId || "",
+					name: item.name ?? "IFC",
+				}))
+				.filter((x) => x.id.length > 0);
+			matchRows = buildMatchRows(pdfFiles, ifcFiles);
+			renderMatchTable();
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "Failed to load files.";
+			matchSummary.textContent = message;
+			matchTable.innerHTML =
+				'<p class="text-[11px] text-red-600 italic">Failed to build matches.</p>';
 		}
 	};
 
@@ -424,13 +589,39 @@ export async function renderBatchQrPanel(
 			modalState.open = false;
 			renderModal();
 			refreshUi();
+			void loadFilesAndMatches();
 		}
+	});
+
+	refreshMatchesButton.addEventListener("click", () => {
+		void loadFilesAndMatches();
+	});
+
+	container.addEventListener("change", (event) => {
+		const target = event.target as HTMLElement;
+		const matchSelect = target.closest<HTMLSelectElement>("[data-match-pdf-for-ifc]");
+		if (!matchSelect) return;
+		const ifcId = matchSelect.dataset.matchPdfForIfc ?? "";
+		const nextPdfId = matchSelect.value;
+		const row = matchRows.find((r) => r.ifcId === ifcId);
+		if (!row) return;
+		row.pdfId = nextPdfId;
+		if (nextPdfId) {
+			const pdf = pdfFiles.find((p) => p.id === nextPdfId);
+			row.pdfName = pdf?.name ?? "";
+			row.autoMatched = false;
+		} else {
+			row.pdfName = "";
+			row.autoMatched = false;
+		}
+		renderMatchTable();
 	});
 
 	batchButton.addEventListener("click", () => {
 		if (batchButton.disabled) return;
+		const selectedMatches = matchRows.filter((r) => r.pdfId);
 		status.textContent =
-			`Would generate QRs for PDFs in "${state.pdfFolderName}" using IFCs in "${state.ifcFolderName}" (${state.position}, ${state.size}). Backend integration pending.`;
+			`Would generate QRs for ${selectedMatches.length} matched rows using "${state.pdfFolderName}" + "${state.ifcFolderName}" (${state.position}, ${state.size}). Backend integration pending.`;
 	});
 
 	refreshUi();
