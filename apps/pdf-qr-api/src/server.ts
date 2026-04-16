@@ -1,3 +1,4 @@
+import cors from "@fastify/cors";
 import sensible from "@fastify/sensible";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
@@ -39,6 +40,21 @@ export async function buildServer(env: Env) {
 	const pdfQrQueue = createPdfQrQueue(redis);
 
 	await app.register(sensible);
+	await app.register(cors, {
+		origin: true,
+		credentials: true,
+		methods: [
+			"GET",
+			"HEAD",
+			"POST",
+			"PUT",
+			"PATCH",
+			"DELETE",
+			"OPTIONS",
+		],
+		allowedHeaders: "*",
+		exposedHeaders: "*",
+	});
 	await app.register(errorHandlerPlugin);
 	await app.register(rateLimit, {
 		max: RATE_LIMIT.max,
