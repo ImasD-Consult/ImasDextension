@@ -15,6 +15,8 @@ type BatchState = {
 type FileItem = {
 	id: string;
 	name: string;
+	versionId?: string;
+	downloadUrls?: string[];
 };
 
 type MatchRow = {
@@ -24,6 +26,7 @@ type MatchRow = {
 	pdfId: string;
 	pdfName: string;
 	pdfVersionId?: string;
+	pdfDownloadUrls?: string[];
 	autoMatched: boolean;
 };
 
@@ -238,8 +241,8 @@ export async function renderBatchQrPanel(
 		ifcFolderId: "",
 		ifcFolderName: "",
 	};
-	let pdfFiles: Array<FileItem & { versionId?: string }> = [];
-	let ifcFiles: Array<FileItem & { versionId?: string }> = [];
+	let pdfFiles: FileItem[] = [];
+	let ifcFiles: FileItem[] = [];
 	let matchRows: MatchRow[] = [];
 
 	const project = await api.project.getProject();
@@ -470,6 +473,18 @@ export async function renderBatchQrPanel(
 	}
 
 	async function downloadPdf(pdfId: string): Promise<Blob> {
+		const row = matchRows.find((r) => r.pdfId === pdfId);
+		const directUrls = row?.pdfDownloadUrls ?? [];
+		for (const u of directUrls) {
+			try {
+				const r = await fetch(u, {
+					headers: { Authorization: `Bearer ${token}` },
+				});
+				if (r.ok) return r.blob();
+			} catch {
+				/* try next direct URL */
+			}
+		}
 		const res = await fetchWithToken([
 			`/tc/api/2.0/files/${encodeURIComponent(pdfId)}/download?projectId=${encodeURIComponent(project.id)}`,
 			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/files/${encodeURIComponent(pdfId)}/download`,
@@ -563,19 +578,48 @@ export async function renderBatchQrPanel(
 	const buildMatchRows = (pdfList: FileItem[], ifcList: FileItem[]): MatchRow[] => {
 		return ifcList.map((ifc) => {
 			const ifcStem = normalizeFileStem(ifc.name);
-			const matchedPdf = (pdfList as Array<FileItem & { versionId?: string }>).find((pdf) =>
+			const matchedPdf = pdfList.find((pdf) =>
 				normalizeFileStem(pdf.name).includes(ifcStem),
 			);
 			return {
 				ifcId: ifc.id,
 				ifcName: ifc.name,
-				ifcVersionId: (ifc as { versionId?: string }).versionId,
+				ifcVersionId: ifc.versionId,
 				pdfId: matchedPdf?.id ?? "",
 				pdfName: matchedPdf?.name ?? "",
 				pdfVersionId: matchedPdf?.versionId,
+				pdfDownloadUrls: matchedPdf?.downloadUrls ?? [],
 				autoMatched: Boolean(matchedPdf),
 			};
 		});
+	};
+
+	const extractDownloadUrls = (item: Record<string, unknown>): string[] => {
+		const out = new Set<string>();
+		const walk = (v: unknown, depth: number): void => {
+			if (depth > 6 || v == null) return;
+			if (typeof v === "string") {
+				const s = v.trim();
+				if (
+					/^https?:\/\//i.test(s) &&
+					(/download/i.test(s) || /\.pdf(\?|$)/i.test(s))
+				) {
+					out.add(s);
+				}
+				return;
+			}
+			if (Array.isArray(v)) {
+				for (const x of v) walk(x, depth + 1);
+				return;
+			}
+			if (typeof v === "object") {
+				for (const x of Object.values(v as Record<string, unknown>)) {
+					walk(x, depth + 1);
+				}
+			}
+		};
+		walk(item, 0);
+		return [...out];
 	};
 
 	const renderMatchTable = (): void => {
@@ -656,6 +700,10 @@ export async function renderBatchQrPanel(
 					id: item.id || item.versionId || "",
 					versionId: item.versionId,
 					name: item.name ?? "PDF",
+					downloadUrls:
+						item && typeof item === "object"
+							? extractDownloadUrls(item as unknown as Record<string, unknown>)
+							: [],
 				}))
 				.filter((x) => x.id.length > 0);
 			ifcFiles = (ifcItemsRaw ?? [])
