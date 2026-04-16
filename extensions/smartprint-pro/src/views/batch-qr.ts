@@ -399,9 +399,33 @@ export async function renderBatchQrPanel(
 				lastError = e;
 			}
 		}
+		const tried = candidates.slice(0, 3).join(" | ");
+		if (lastError instanceof TypeError) {
+			throw new Error(
+				`Trimble API unreachable (network/CORS). Tried: ${tried}.`,
+			);
+		}
 		throw lastError instanceof Error
-			? lastError
+			? new Error(`${lastError.message} (Tried: ${tried})`)
 			: new Error("All Trimble API attempts failed.");
+	}
+
+	async function stampFetch(
+		url: string,
+		init?: RequestInit,
+	): Promise<Response> {
+		try {
+			return await fetch(url, init);
+		} catch (error) {
+			if (error instanceof TypeError) {
+				throw new Error(
+					`Stamp API unreachable (network/CORS) at ${url}.`,
+				);
+			}
+			throw error instanceof Error
+				? error
+				: new Error("Unknown stamp API fetch failure.");
+		}
 	}
 
 	async function ensureQrSubfolder(parentFolderId: string): Promise<string> {
@@ -460,7 +484,7 @@ export async function renderBatchQrPanel(
 		fd.append("qr_text", qrText);
 		fd.append("position", "bottom-right");
 
-		const res = await fetch(`${STAMP_API_BASE}/v1/pdf/qr`, {
+		const res = await stampFetch(`${STAMP_API_BASE}/v1/pdf/qr`, {
 			method: "POST",
 			body: fd,
 		});
@@ -476,7 +500,9 @@ export async function renderBatchQrPanel(
 	async function waitAndDownloadStampedPdf(jobId: string): Promise<Blob> {
 		const started = Date.now();
 		while (Date.now() - started < 120000) {
-			const statusRes = await fetch(`${STAMP_API_BASE}/v1/pdf/qr/jobs/${jobId}`);
+			const statusRes = await stampFetch(
+				`${STAMP_API_BASE}/v1/pdf/qr/jobs/${jobId}`,
+			);
 			if (!statusRes.ok) {
 				const text = await statusRes.text();
 				throw new Error(`Stamp status failed: ${statusRes.status} ${text}`);
@@ -489,7 +515,7 @@ export async function renderBatchQrPanel(
 				throw new Error(s.error || "Stamp job failed.");
 			}
 			if (s.status === "completed") {
-				const resultRes = await fetch(
+				const resultRes = await stampFetch(
 					`${STAMP_API_BASE}/v1/pdf/qr/jobs/${jobId}/result`,
 				);
 				if (!resultRes.ok) {
@@ -763,7 +789,7 @@ export async function renderBatchQrPanel(
 				const qrFolderId = await ensureQrSubfolder(state.pdfFolderId);
 				let done = 0;
 				for (const row of selectedMatches) {
-					status.textContent = `Processing ${done + 1}/${selectedMatches.length}: ${row.pdfName}`;
+					status.textContent = `Processing ${done + 1}/${selectedMatches.length}: ${row.pdfName} (download source PDF)`;
 					const sourcePdf = await downloadPdf(row.pdfVersionId || row.pdfId);
 					const qrUrl =
 						buildQrNavigationUrl({
@@ -779,8 +805,11 @@ export async function renderBatchQrPanel(
 					if (!qrUrl) {
 						throw new Error(`Could not build QR url for IFC "${row.ifcName}".`);
 					}
+					status.textContent = `Processing ${done + 1}/${selectedMatches.length}: ${row.pdfName} (enqueue stamp job)`;
 					const jobId = await enqueueStamp(sourcePdf, qrUrl);
+					status.textContent = `Processing ${done + 1}/${selectedMatches.length}: ${row.pdfName} (waiting stamp result)`;
 					const stampedPdf = await waitAndDownloadStampedPdf(jobId);
+					status.textContent = `Processing ${done + 1}/${selectedMatches.length}: ${row.pdfName} (upload stamped PDF)`;
 					await uploadStampedPdfToFolder(qrFolderId, row.pdfName, stampedPdf);
 					done += 1;
 				}
