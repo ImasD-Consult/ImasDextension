@@ -8,8 +8,6 @@ type BatchState = {
 	pdfFolderName: string;
 	ifcFolderId: string;
 	ifcFolderName: string;
-	position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
-	size: "small" | "medium" | "large";
 };
 
 type FileItem = {
@@ -61,71 +59,47 @@ export async function renderBatchQrPanel(
         Loading project folders...
       </p>
 
-      <div class="space-y-3" data-batch-content hidden>
-        <div class="flex flex-col gap-2">
-          <p class="text-xs font-medium text-gray-700">PDF folder</p>
-          <button
-            type="button"
-            class="inline-flex items-center justify-center rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-            data-open-folder-modal="pdf"
-          >
-            Select PDF folder...
-          </button>
-          <p class="text-[11px] text-gray-500 truncate" data-selected-pdf-folder>
-            No PDF folder selected.
-          </p>
-        </div>
-
-        <div class="flex flex-col gap-2">
-          <p class="text-xs font-medium text-gray-700">IFC folder</p>
-          <button
-            type="button"
-            class="inline-flex items-center justify-center rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-            data-open-folder-modal="ifc"
-          >
-            Select IFC folder...
-          </button>
-          <p class="text-[11px] text-gray-500 truncate" data-selected-ifc-folder>
-            No IFC folder selected.
-          </p>
-        </div>
-
+      <div class="space-y-3 min-h-0" data-batch-content hidden>
         <div class="grid grid-cols-2 gap-3">
-          <div>
-            <p class="mb-1 text-xs font-medium text-gray-700">QR position</p>
-            <div class="grid grid-cols-2 gap-1 text-[11px] text-gray-700">
-              <label class="inline-flex items-center gap-1">
-                <input type="radio" name="qr-position" value="top-left" class="h-3 w-3" checked />
-                <span>Top left</span>
-              </label>
-              <label class="inline-flex items-center gap-1">
-                <input type="radio" name="qr-position" value="top-right" class="h-3 w-3" />
-                <span>Top right</span>
-              </label>
-              <label class="inline-flex items-center gap-1">
-                <input type="radio" name="qr-position" value="bottom-left" class="h-3 w-3" />
-                <span>Bottom left</span>
-              </label>
-              <label class="inline-flex items-center gap-1">
-                <input type="radio" name="qr-position" value="bottom-right" class="h-3 w-3" />
-                <span>Bottom right</span>
-              </label>
-            </div>
-          </div>
-          <div>
-            <p class="mb-1 text-xs font-medium text-gray-700">QR size</p>
-            <select
-              class="w-full rounded border border-gray-300 px-2 py-1 text-xs text-gray-800"
-              data-qr-size
+          <div class="flex flex-col gap-2">
+            <p class="text-xs font-medium text-gray-700">PDF folder</p>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              data-open-folder-modal="pdf"
             >
-              <option value="small">Small</option>
-              <option value="medium" selected>Medium</option>
-              <option value="large">Large</option>
-            </select>
+              Select PDF folder...
+            </button>
+            <p class="text-[11px] text-gray-500 truncate" data-selected-pdf-folder>
+              No PDF folder selected.
+            </p>
+          </div>
+
+          <div class="flex flex-col gap-2">
+            <p class="text-xs font-medium text-gray-700">IFC folder</p>
+            <button
+              type="button"
+              class="inline-flex items-center justify-center rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              data-open-folder-modal="ifc"
+            >
+              Select IFC folder...
+            </button>
+            <p class="text-[11px] text-gray-500 truncate" data-selected-ifc-folder>
+              No IFC folder selected.
+            </p>
           </div>
         </div>
 
-        <div class="rounded border border-gray-200 bg-white p-2">
+        <button
+          type="button"
+          class="w-full rounded bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          data-generate-batch
+          disabled
+        >
+          Generate QRs on assembly PDFs
+        </button>
+
+        <div class="rounded border border-gray-200 bg-white p-2 min-h-0">
           <div class="mb-2 flex items-center justify-between gap-2">
             <h4 class="text-xs font-semibold text-gray-800">PDF / IFC Matches</h4>
             <button
@@ -140,19 +114,10 @@ export async function renderBatchQrPanel(
           <p class="mb-2 text-[11px] text-gray-500" data-match-summary>
             Select both folders to build the match table.
           </p>
-          <div class="max-h-56 overflow-auto" data-match-table>
+          <div class="max-h-[52vh] overflow-auto" data-match-table>
             <p class="text-[11px] text-gray-400 italic">No matches yet.</p>
           </div>
         </div>
-
-        <button
-          type="button"
-          class="w-full rounded bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          data-generate-batch
-          disabled
-        >
-          Generate QRs on assembly PDFs
-        </button>
       </div>
 
       <div class="hidden fixed inset-0 z-50 bg-black/40 p-4" data-folder-modal>
@@ -214,7 +179,6 @@ export async function renderBatchQrPanel(
 	const ifcLabel = container.querySelector<HTMLElement>(
 		"[data-selected-ifc-folder]",
 	);
-	const sizeSelect = container.querySelector<HTMLSelectElement>("[data-qr-size]");
 	const refreshMatchesButton = container.querySelector<HTMLButtonElement>(
 		"[data-refresh-matches]",
 	);
@@ -246,7 +210,6 @@ export async function renderBatchQrPanel(
 		openFolderButtons.length === 0 ||
 		!pdfLabel ||
 		!ifcLabel ||
-		!sizeSelect ||
 		!refreshMatchesButton ||
 		!matchSummary ||
 		!matchTable ||
@@ -268,8 +231,6 @@ export async function renderBatchQrPanel(
 		pdfFolderName: "",
 		ifcFolderId: "",
 		ifcFolderName: "",
-		position: "top-left",
-		size: "medium",
 	};
 	let pdfFiles: FileItem[] = [];
 	let ifcFiles: FileItem[] = [];
@@ -383,9 +344,6 @@ export async function renderBatchQrPanel(
 		if (!ready) {
 			status.textContent =
 				"Select both PDF and IFC folders to enable batch generation.";
-		} else {
-			status.textContent =
-				"Ready. Generate will match PDFs and IFCs by name and send jobs to the QR stamping service.";
 		}
 	};
 
@@ -538,18 +496,6 @@ export async function renderBatchQrPanel(
 		void loadCurrentModalFolder();
 	});
 
-	container.addEventListener("change", (event) => {
-		const target = event.target as HTMLInputElement | HTMLSelectElement;
-		if (target.name === "qr-position") {
-			const val = target.value as BatchState["position"];
-			state.position = val;
-		}
-		if (target === sizeSelect) {
-			const val = sizeSelect.value as BatchState["size"];
-			state.size = val;
-		}
-	});
-
 	container.addEventListener("click", (event) => {
 		const target = event.target as HTMLElement;
 		const openNode = target.closest<HTMLElement>("[data-folder-open]");
@@ -621,7 +567,7 @@ export async function renderBatchQrPanel(
 		if (batchButton.disabled) return;
 		const selectedMatches = matchRows.filter((r) => r.pdfId);
 		status.textContent =
-			`Would generate QRs for ${selectedMatches.length} matched rows using "${state.pdfFolderName}" + "${state.ifcFolderName}" (${state.position}, ${state.size}). Backend integration pending.`;
+			`Would generate QRs for ${selectedMatches.length} matched rows using "${state.pdfFolderName}" + "${state.ifcFolderName}". Backend integration pending.`;
 	});
 
 	refreshUi();
