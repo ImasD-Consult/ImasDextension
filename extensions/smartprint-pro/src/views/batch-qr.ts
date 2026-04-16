@@ -2,6 +2,8 @@ import {
 	TrimbleClient,
 	type WorkspaceApi,
 } from "@imasd/shared/trimble";
+import { buildQrNavigationUrl } from "../services/qr";
+import { getRuntimeTrimbleConnectOrigin } from "../lib/runtime-env";
 
 type BatchState = {
 	pdfFolderId: string;
@@ -18,8 +20,10 @@ type FileItem = {
 type MatchRow = {
 	ifcId: string;
 	ifcName: string;
+	ifcVersionId?: string;
 	pdfId: string;
 	pdfName: string;
+	pdfVersionId?: string;
 	autoMatched: boolean;
 };
 
@@ -41,6 +45,8 @@ type FolderModalState = {
 	selectedName: string;
 	loading: boolean;
 };
+
+const STAMP_API_BASE = "https://stamp.imasd.dev";
 
 export async function renderBatchQrPanel(
 	container: HTMLElement,
@@ -232,8 +238,8 @@ export async function renderBatchQrPanel(
 		ifcFolderId: "",
 		ifcFolderName: "",
 	};
-	let pdfFiles: FileItem[] = [];
-	let ifcFiles: FileItem[] = [];
+	let pdfFiles: Array<FileItem & { versionId?: string }> = [];
+	let ifcFiles: Array<FileItem & { versionId?: string }> = [];
 	let matchRows: MatchRow[] = [];
 
 	const project = await api.project.getProject();
@@ -347,6 +353,181 @@ export async function renderBatchQrPanel(
 		}
 	};
 
+	const connectOrigins = (() => {
+		const out = new Set<string>();
+		const runtime = getRuntimeTrimbleConnectOrigin();
+		if (runtime) out.add(runtime.replace(/\/+$/, ""));
+		const viteOrigin = (
+			import.meta as ImportMeta & { env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string } }
+		).env?.VITE_TRIMBLE_CONNECT_ORIGIN?.trim();
+		if (viteOrigin) out.add(viteOrigin.replace(/\/+$/, ""));
+		if (typeof document !== "undefined" && document.referrer) {
+			try {
+				const u = new URL(document.referrer);
+				if (/connect\.trimble\.com$/i.test(u.hostname)) out.add(u.origin);
+			} catch {
+				/* ignore */
+			}
+		}
+		out.add("https://app.connect.trimble.com");
+		out.add("https://app21.connect.trimble.com");
+		out.add("https://app31.connect.trimble.com");
+		return [...out];
+	})();
+
+	async function fetchWithToken(
+		paths: string[],
+		init?: RequestInit,
+	): Promise<Response> {
+		const candidates = [
+			...paths,
+			...connectOrigins.flatMap((o) => paths.map((p) => `${o}${p}`)),
+		];
+		let lastError: unknown;
+		for (const url of candidates) {
+			try {
+				const res = await fetch(url, {
+					...init,
+					headers: {
+						Authorization: `Bearer ${token}`,
+						...(init?.headers ?? {}),
+					},
+				});
+				if (res.ok) return res;
+				lastError = new Error(`HTTP ${res.status} for ${url}`);
+			} catch (e) {
+				lastError = e;
+			}
+		}
+		throw lastError instanceof Error
+			? lastError
+			: new Error("All Trimble API attempts failed.");
+	}
+
+	async function ensureQrSubfolder(parentFolderId: string): Promise<string> {
+		const items = await client.listFolderItems(parentFolderId, project.id);
+		const existingQr = (items ?? []).find(
+			(x) =>
+				x.type?.toUpperCase() === "FOLDER" &&
+				(x.name ?? "").trim().toLowerCase() === "qr",
+		);
+		if (existingQr?.id || existingQr?.versionId) {
+			return existingQr.id || existingQr.versionId || "";
+		}
+
+		const body = JSON.stringify({
+			name: "QR",
+			parentId: parentFolderId,
+			projectId: project.id,
+		});
+		const res = await fetchWithToken(
+			[
+				`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/folders`,
+				`/tc/api/2.0/folders?projectId=${encodeURIComponent(project.id)}`,
+			],
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json",
+				},
+				body,
+			},
+		);
+		const json = (await res.json()) as Record<string, unknown>;
+		const id =
+			(typeof json.id === "string" && json.id) ||
+			(typeof json.versionId === "string" && json.versionId) ||
+			(typeof (json.data as Record<string, unknown> | undefined)?.id === "string"
+				? ((json.data as Record<string, unknown>).id as string)
+				: "");
+		if (!id) throw new Error("QR folder was created but id was not returned.");
+		return id;
+	}
+
+	async function downloadPdf(pdfId: string): Promise<Blob> {
+		const res = await fetchWithToken([
+			`/tc/api/2.0/files/${encodeURIComponent(pdfId)}/download?projectId=${encodeURIComponent(project.id)}`,
+			`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/files/${encodeURIComponent(pdfId)}/download`,
+			`/tc/api/2.0/files/${encodeURIComponent(pdfId)}/download`,
+		]);
+		return res.blob();
+	}
+
+	async function enqueueStamp(pdfBlob: Blob, qrText: string): Promise<string> {
+		const fd = new FormData();
+		fd.append("file", pdfBlob, "source.pdf");
+		fd.append("qr_text", qrText);
+		fd.append("position", "bottom-right");
+
+		const res = await fetch(`${STAMP_API_BASE}/v1/pdf/qr`, {
+			method: "POST",
+			body: fd,
+		});
+		if (!res.ok) {
+			const text = await res.text();
+			throw new Error(`Stamp enqueue failed: ${res.status} ${text}`);
+		}
+		const json = (await res.json()) as { jobId?: string };
+		if (!json.jobId) throw new Error("Stamp API did not return jobId.");
+		return json.jobId;
+	}
+
+	async function waitAndDownloadStampedPdf(jobId: string): Promise<Blob> {
+		const started = Date.now();
+		while (Date.now() - started < 120000) {
+			const statusRes = await fetch(`${STAMP_API_BASE}/v1/pdf/qr/jobs/${jobId}`);
+			if (!statusRes.ok) {
+				const text = await statusRes.text();
+				throw new Error(`Stamp status failed: ${statusRes.status} ${text}`);
+			}
+			const s = (await statusRes.json()) as {
+				status?: string;
+				error?: string;
+			};
+			if (s.status === "failed") {
+				throw new Error(s.error || "Stamp job failed.");
+			}
+			if (s.status === "completed") {
+				const resultRes = await fetch(
+					`${STAMP_API_BASE}/v1/pdf/qr/jobs/${jobId}/result`,
+				);
+				if (!resultRes.ok) {
+					const text = await resultRes.text();
+					throw new Error(
+						`Stamp result download failed: ${resultRes.status} ${text}`,
+					);
+				}
+				return resultRes.blob();
+			}
+			await new Promise((r) => setTimeout(r, 1500));
+		}
+		throw new Error("Stamp job timed out after 120 seconds.");
+	}
+
+	async function uploadStampedPdfToFolder(
+		folderId: string,
+		filename: string,
+		pdfBlob: Blob,
+	): Promise<void> {
+		const fd = new FormData();
+		fd.append("file", pdfBlob, filename);
+		fd.append("name", filename);
+		fd.append("parentId", folderId);
+		fd.append("projectId", project.id);
+
+		await fetchWithToken(
+			[
+				`/tc/api/2.0/projects/${encodeURIComponent(project.id)}/files`,
+				`/tc/api/2.0/files?projectId=${encodeURIComponent(project.id)}`,
+			],
+			{
+				method: "POST",
+				body: fd,
+			},
+		);
+	}
+
 	const normalizeFileStem = (name: string): string =>
 		name
 			.toLowerCase()
@@ -356,14 +537,16 @@ export async function renderBatchQrPanel(
 	const buildMatchRows = (pdfList: FileItem[], ifcList: FileItem[]): MatchRow[] => {
 		return ifcList.map((ifc) => {
 			const ifcStem = normalizeFileStem(ifc.name);
-			const matchedPdf = pdfList.find((pdf) =>
+			const matchedPdf = (pdfList as Array<FileItem & { versionId?: string }>).find((pdf) =>
 				normalizeFileStem(pdf.name).includes(ifcStem),
 			);
 			return {
 				ifcId: ifc.id,
 				ifcName: ifc.name,
+				ifcVersionId: (ifc as { versionId?: string }).versionId,
 				pdfId: matchedPdf?.id ?? "",
 				pdfName: matchedPdf?.name ?? "",
+				pdfVersionId: matchedPdf?.versionId,
 				autoMatched: Boolean(matchedPdf),
 			};
 		});
@@ -445,6 +628,7 @@ export async function renderBatchQrPanel(
 				.filter((item) => /\.pdf$/i.test(item.name ?? ""))
 				.map((item) => ({
 					id: item.id || item.versionId || "",
+					versionId: item.versionId,
 					name: item.name ?? "PDF",
 				}))
 				.filter((x) => x.id.length > 0);
@@ -453,6 +637,7 @@ export async function renderBatchQrPanel(
 				.filter((item) => /\.(ifc|ifczip|ifcxml)$/i.test(item.name ?? ""))
 				.map((item) => ({
 					id: item.id || item.versionId || "",
+					versionId: item.versionId,
 					name: item.name ?? "IFC",
 				}))
 				.filter((x) => x.id.length > 0);
@@ -565,9 +750,50 @@ export async function renderBatchQrPanel(
 
 	batchButton.addEventListener("click", () => {
 		if (batchButton.disabled) return;
-		const selectedMatches = matchRows.filter((r) => r.pdfId);
-		status.textContent =
-			`Would generate QRs for ${selectedMatches.length} matched rows using "${state.pdfFolderName}" + "${state.ifcFolderName}". Backend integration pending.`;
+		void (async () => {
+			const startedAt = Date.now();
+			const selectedMatches = matchRows.filter((r) => r.pdfId);
+			if (selectedMatches.length === 0) {
+				status.textContent = "No matched rows selected.";
+				return;
+			}
+			batchButton.disabled = true;
+			refreshMatchesButton.disabled = true;
+			try {
+				const qrFolderId = await ensureQrSubfolder(state.pdfFolderId);
+				let done = 0;
+				for (const row of selectedMatches) {
+					status.textContent = `Processing ${done + 1}/${selectedMatches.length}: ${row.pdfName}`;
+					const sourcePdf = await downloadPdf(row.pdfVersionId || row.pdfId);
+					const qrUrl =
+						buildQrNavigationUrl({
+							v: 1,
+							projectId: project.id,
+							modelId: row.ifcVersionId || row.ifcId,
+							modelVersionId: row.ifcVersionId,
+							partId: "",
+							partName: row.ifcName,
+							partType: "IFCModel",
+							createdAt: new Date().toISOString(),
+						}) ?? "";
+					if (!qrUrl) {
+						throw new Error(`Could not build QR url for IFC "${row.ifcName}".`);
+					}
+					const jobId = await enqueueStamp(sourcePdf, qrUrl);
+					const stampedPdf = await waitAndDownloadStampedPdf(jobId);
+					await uploadStampedPdfToFolder(qrFolderId, row.pdfName, stampedPdf);
+					done += 1;
+				}
+				const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+				status.textContent = `Finished. Processed ${done}/${selectedMatches.length} PDFs in ${seconds}s.`;
+			} catch (error) {
+				const message =
+					error instanceof Error ? error.message : "Batch generation failed.";
+				status.textContent = `Batch failed: ${message}`;
+			} finally {
+				refreshUi();
+			}
+		})();
 	});
 
 	refreshUi();
