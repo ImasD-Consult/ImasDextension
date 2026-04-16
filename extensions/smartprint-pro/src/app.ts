@@ -15,7 +15,7 @@ function getAppMode(): "project" | "3d" {
 async function render3dPanel(
 	container: HTMLElement,
 	api: WorkspaceApi,
-	panel: "qr" | "batch" | "wbs",
+	panel: "qr" | "wbs",
 ): Promise<void> {
 	container.className =
 		"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
@@ -27,13 +27,6 @@ async function render3dPanel(
         class="rounded px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
       >
         QR Targets
-      </button>
-      <button
-        type="button"
-        data-panel="batch"
-        class="rounded px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
-      >
-        Batch QR
       </button>
       <button
         type="button"
@@ -55,7 +48,7 @@ async function render3dPanel(
 	const panelButtons = container.querySelectorAll<HTMLButtonElement>("[data-panel]");
 	if (!content) return;
 
-	const setActivePanel = (active: "qr" | "batch" | "wbs"): void => {
+	const setActivePanel = (active: "qr" | "wbs"): void => {
 		panelButtons.forEach((btn) => {
 			const isActive = btn.dataset.panel === active;
 			btn.classList.toggle("bg-brand-600", isActive);
@@ -68,8 +61,7 @@ async function render3dPanel(
 	panelButtons.forEach((btn) => {
 		btn.addEventListener("click", () => {
 			const p = btn.dataset.panel;
-			const target: "qr" | "batch" | "wbs" =
-				p === "qr" || p === "batch" ? (p as "qr" | "batch") : "wbs";
+			const target: "qr" | "wbs" = p === "qr" ? "qr" : "wbs";
 			void render3dPanel(container, api, target);
 		});
 	});
@@ -78,10 +70,6 @@ async function render3dPanel(
 	content.innerHTML = "";
 	if (panel === "qr") {
 		await renderQrPanel(content, api);
-		return;
-	}
-	if (panel === "batch") {
-		await renderBatchQrPanel(content, api);
 		return;
 	}
 	await renderWbs(content, api, {
@@ -105,6 +93,7 @@ export async function initApp(): Promise<void> {
 					command &&
 					command !== "processes" &&
 					command !== "info" &&
+					command !== "batch_qr_project" &&
 					command !== "smartprint_main"
 				) {
 					return;
@@ -113,6 +102,10 @@ export async function initApp(): Promise<void> {
 				container.innerHTML = "";
 				if (command === "info") {
 					renderInfo(container);
+				} else if (command === "batch_qr_project") {
+					container.className =
+						"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
+					await renderBatchQrPanel(container, api);
 				} else {
 					await renderProcesses(container, api);
 				}
@@ -121,14 +114,12 @@ export async function initApp(): Promise<void> {
 			if (
 				command &&
 				command !== "qr" &&
-				command !== "batch_qr" &&
 				command !== "wbs" &&
 				command !== "smartprint_main"
 			) {
 				return;
 			}
-			const panel: "qr" | "batch" | "wbs" =
-				command === "qr" ? "qr" : command === "batch_qr" ? "batch" : "wbs";
+			const panel: "qr" | "wbs" = command === "qr" ? "qr" : "wbs";
 			await render3dPanel(container, api, panel);
 		});
 
@@ -139,7 +130,6 @@ export async function initApp(): Promise<void> {
 				command: "wbs",
 				subMenus: [
 					{ title: "QR Targets", command: "qr" },
-					{ title: "Batch QR", command: "batch_qr" },
 					{ title: "WBS", command: "wbs" },
 				],
 			});
@@ -154,6 +144,7 @@ export async function initApp(): Promise<void> {
 			command: "processes",
 			subMenus: [
 				{ title: "Processes", command: "processes" },
+				{ title: "Batch QR", command: "batch_qr_project" },
 				{ title: "Info", command: "info" },
 			],
 		});
