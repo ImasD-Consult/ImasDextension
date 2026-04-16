@@ -42,6 +42,11 @@ async function render3dPanel(
       >
         WBS
       </button>
+      <img
+        src="${SMARTPRINT_LOGO}"
+        alt="smartprintPRO"
+        class="ml-auto h-8 w-8 rounded-full object-cover border border-gray-200"
+      />
     </div>
     <div class="flex-1 min-h-0 pt-2" data-panel-content></div>
   `;
