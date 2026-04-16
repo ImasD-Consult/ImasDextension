@@ -11,6 +11,66 @@ function getAppMode(): "project" | "3d" {
 	return m === "3d" ? "3d" : "project";
 }
 
+async function render3dPanel(
+	container: HTMLElement,
+	api: WorkspaceApi,
+	panel: "wbs" | "qr",
+): Promise<void> {
+	container.className =
+		"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
+	container.innerHTML = `
+    <div class="shrink-0 flex items-center gap-2 pb-2 border-b border-gray-200">
+      <button
+        type="button"
+        data-panel="wbs"
+        class="rounded px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
+      >
+        WBS
+      </button>
+      <button
+        type="button"
+        data-panel="qr"
+        class="rounded px-3 py-1.5 text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50"
+      >
+        QR Targets
+      </button>
+    </div>
+    <div class="flex-1 min-h-0 pt-2" data-panel-content></div>
+  `;
+
+	const content = container.querySelector<HTMLElement>("[data-panel-content]");
+	const panelButtons = container.querySelectorAll<HTMLButtonElement>("[data-panel]");
+	if (!content) return;
+
+	const setActivePanel = (active: "wbs" | "qr"): void => {
+		panelButtons.forEach((btn) => {
+			const isActive = btn.dataset.panel === active;
+			btn.classList.toggle("bg-brand-600", isActive);
+			btn.classList.toggle("text-white", isActive);
+			btn.classList.toggle("border-brand-600", isActive);
+			btn.classList.toggle("text-gray-700", !isActive);
+		});
+	};
+
+	panelButtons.forEach((btn) => {
+		btn.addEventListener("click", () => {
+			const target = btn.dataset.panel === "qr" ? "qr" : "wbs";
+			void render3dPanel(container, api, target);
+		});
+	});
+
+	setActivePanel(panel);
+	content.innerHTML = "";
+	if (panel === "qr") {
+		await renderQrPanel(content, api);
+		return;
+	}
+	await renderWbs(content, api, {
+		useViewerModelOnly: true,
+		horizontalDockLayout: true,
+	});
+}
+
 export async function initApp(): Promise<void> {
 	const container = document.getElementById("app");
 	if (!container) return;
@@ -47,20 +107,11 @@ export async function initApp(): Promise<void> {
 			) {
 				return;
 			}
-			container.innerHTML = "";
-			if (command === "qr") {
-				await renderQrPanel(container, api);
-				return;
-			}
-			await renderWbs(container, api, {
-				useViewerModelOnly: true,
-				horizontalDockLayout: true,
-			});
+			const panel = command === "qr" ? "qr" : "wbs";
+			await render3dPanel(container, api, panel);
 		});
 
 		if (mode === "3d") {
-			container.className =
-				"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
 			await api.ui.setMenu({
 				title: "smartprintPRO",
 				icon: SMARTPRINT_LOGO,
@@ -70,11 +121,7 @@ export async function initApp(): Promise<void> {
 					{ title: "QR Targets", command: "qr" },
 				],
 			});
-			container.innerHTML = "";
-			await renderWbs(container, api, {
-				useViewerModelOnly: true,
-				horizontalDockLayout: true,
-			});
+			await render3dPanel(container, api, "wbs");
 			return;
 		}
 

@@ -15,7 +15,7 @@ export async function renderQrPanel(
     <div class="h-full min-h-0 w-full flex flex-col gap-3 text-gray-900">
       <div class="border-b border-gray-200 pb-2">
         <h2 class="text-base font-semibold">QR Targets</h2>
-        <p class="text-xs text-gray-500">Generate a QR from current 3D selection for mobile scan/open.</p>
+        <p class="text-xs text-gray-500">Generate a QR from current 3D selection to open in Trimble Connect.</p>
       </div>
       <p class="text-xs text-gray-600" data-qr-status>Select one object in the viewer, then click Generate.</p>
       <div class="flex items-center gap-2">
@@ -103,7 +103,7 @@ export async function renderQrPanel(
 			qrLink.classList.remove("hidden");
 			qrLink.href = deepLink;
 			qrPayload.value = JSON.stringify(payload, null, 2);
-			status.innerHTML = `QR generated for <strong>${escapeHtml(payload.partName)}</strong>.`;
+			status.innerHTML = `QR generated for <strong>${escapeHtml(payload.partName)}</strong>. Scan it with your phone QR reader and open in Trimble Connect.`;
 		} catch (error) {
 			const message =
 				error instanceof Error ? error.message : "Failed to generate QR.";

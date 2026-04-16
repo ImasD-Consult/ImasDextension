@@ -3,6 +3,7 @@
 interface SmartprintProRuntimeEnv {
 	readonly EXTENSION_URL?: string;
 	readonly TRIMBLE_CONNECT_ORIGIN?: string;
+	readonly TRIMBLE_CONNECT_QR_URL_TEMPLATE?: string;
 	/** `na` | `eu` | `ap` | `ap2` — matches Trimble `/regions` `serviceRegion` (EU → `eu`). */
 	readonly TRIMBLE_CONNECT_REGION?: string;
 	readonly PSET_SERVICE_URI?: string;

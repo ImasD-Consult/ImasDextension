@@ -9,3 +9,19 @@ export function getRuntimeExtensionUrl(): string | undefined {
 	if (!raw) return undefined;
 	return trimTrailingSlash(raw);
 }
+
+export function getRuntimeTrimbleConnectOrigin(): string | undefined {
+	const raw = window.__SMARTPRINT_PRO__?.TRIMBLE_CONNECT_ORIGIN?.trim();
+	if (!raw) return undefined;
+	return trimTrailingSlash(raw);
+}
+
+/**
+ * Optional URL template for QR targets.
+ * Supported placeholders:
+ * {origin} {modelId} {modelVersionId} {partId} {partLink}
+ */
+export function getRuntimeQrUrlTemplate(): string | undefined {
+	const raw = window.__SMARTPRINT_PRO__?.TRIMBLE_CONNECT_QR_URL_TEMPLATE?.trim();
+	return raw || undefined;
+}
