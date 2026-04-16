@@ -1,5 +1,7 @@
-import type { WorkspaceApi } from "@imasd/shared/trimble";
-import { fetchSmartprintFolderProSubfolders } from "../services/folders";
+import {
+	TrimbleClient,
+	type WorkspaceApi,
+} from "@imasd/shared/trimble";
 
 type BatchState = {
 	pdfFolderId: string;
@@ -8,6 +10,19 @@ type BatchState = {
 	ifcFolderName: string;
 	position: "top-left" | "top-right" | "bottom-left" | "bottom-right";
 	size: "small" | "medium" | "large";
+};
+
+type FolderOption = {
+	id: string;
+	name: string;
+	parentId?: string;
+};
+
+type FolderBrowserState = {
+	currentFolderId: string;
+	crumbs: Array<{ id: string; name: string }>;
+	items: FolderOption[];
+	loading: boolean;
 };
 
 export async function renderBatchQrPanel(
@@ -30,26 +45,56 @@ export async function renderBatchQrPanel(
       <div class="space-y-3" data-batch-content hidden>
         <div class="flex flex-col gap-2">
           <p class="text-xs font-medium text-gray-700">PDF folder</p>
-          <select
-            class="w-full rounded border border-gray-300 px-2 py-1 text-xs text-gray-800"
-            data-pdf-folder-select
+          <button
+            type="button"
+            class="inline-flex items-center justify-center rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            data-open-pdf-browser
           >
-          </select>
+            Select PDF folder...
+          </button>
           <p class="text-[11px] text-gray-500 truncate" data-selected-pdf-folder>
             No PDF folder selected.
           </p>
+          <div class="hidden rounded border border-gray-200 p-2 bg-gray-50" data-pdf-browser>
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                class="rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
+                data-pdf-up
+              >
+                Up
+              </button>
+              <p class="text-[11px] text-gray-600 truncate flex-1 text-right" data-pdf-path>Path: /</p>
+            </div>
+            <div class="max-h-40 overflow-auto space-y-1" data-pdf-items></div>
+          </div>
         </div>
 
         <div class="flex flex-col gap-2">
           <p class="text-xs font-medium text-gray-700">IFC folder</p>
-          <select
-            class="w-full rounded border border-gray-300 px-2 py-1 text-xs text-gray-800"
-            data-ifc-folder-select
+          <button
+            type="button"
+            class="inline-flex items-center justify-center rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            data-open-ifc-browser
           >
-          </select>
+            Select IFC folder...
+          </button>
           <p class="text-[11px] text-gray-500 truncate" data-selected-ifc-folder>
             No IFC folder selected.
           </p>
+          <div class="hidden rounded border border-gray-200 p-2 bg-gray-50" data-ifc-browser>
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                class="rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
+                data-ifc-up
+              >
+                Up
+              </button>
+              <p class="text-[11px] text-gray-600 truncate flex-1 text-right" data-ifc-path>Path: /</p>
+            </div>
+            <div class="max-h-40 overflow-auto space-y-1" data-ifc-items></div>
+          </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -101,10 +146,20 @@ export async function renderBatchQrPanel(
 
 	const status = container.querySelector<HTMLElement>("[data-batch-status]");
 	const content = container.querySelector<HTMLElement>("[data-batch-content]");
-	const pdfSelect =
-		container.querySelector<HTMLSelectElement>("[data-pdf-folder-select]");
-	const ifcSelect =
-		container.querySelector<HTMLSelectElement>("[data-ifc-folder-select]");
+	const pdfOpenButton = container.querySelector<HTMLButtonElement>(
+		"[data-open-pdf-browser]",
+	);
+	const ifcOpenButton = container.querySelector<HTMLButtonElement>(
+		"[data-open-ifc-browser]",
+	);
+	const pdfBrowser = container.querySelector<HTMLElement>("[data-pdf-browser]");
+	const ifcBrowser = container.querySelector<HTMLElement>("[data-ifc-browser]");
+	const pdfUpButton = container.querySelector<HTMLButtonElement>("[data-pdf-up]");
+	const ifcUpButton = container.querySelector<HTMLButtonElement>("[data-ifc-up]");
+	const pdfPath = container.querySelector<HTMLElement>("[data-pdf-path]");
+	const ifcPath = container.querySelector<HTMLElement>("[data-ifc-path]");
+	const pdfItems = container.querySelector<HTMLElement>("[data-pdf-items]");
+	const ifcItems = container.querySelector<HTMLElement>("[data-ifc-items]");
 	const pdfLabel = container.querySelector<HTMLElement>(
 		"[data-selected-pdf-folder]",
 	);
@@ -119,8 +174,16 @@ export async function renderBatchQrPanel(
 	if (
 		!status ||
 		!content ||
-		!pdfSelect ||
-		!ifcSelect ||
+		!pdfOpenButton ||
+		!ifcOpenButton ||
+		!pdfBrowser ||
+		!ifcBrowser ||
+		!pdfUpButton ||
+		!ifcUpButton ||
+		!pdfPath ||
+		!ifcPath ||
+		!pdfItems ||
+		!ifcItems ||
 		!pdfLabel ||
 		!ifcLabel ||
 		!sizeSelect ||
@@ -138,6 +201,113 @@ export async function renderBatchQrPanel(
 		size: "medium",
 	};
 
+	const project = await api.project.getProject();
+	if (!project?.id) {
+		status.textContent = "No project selected.";
+		return;
+	}
+	const token = await api.extension.requestPermission("accesstoken");
+	if (token === "denied" || token === "pending") {
+		status.textContent = `Access token ${token}. Please grant permission in extension settings.`;
+		return;
+	}
+	const client = new TrimbleClient({
+		accessToken: token,
+		region: "eu",
+		useDevProxy: import.meta.env.DEV,
+	});
+
+	const rootId = await client.getProjectRootId(project.id);
+	const rootCrumb = [{ id: rootId, name: "Project root" }];
+	const pdfTree: FolderBrowserState = {
+		currentFolderId: rootId,
+		crumbs: [...rootCrumb],
+		items: [],
+		loading: false,
+	};
+	const ifcTree: FolderBrowserState = {
+		currentFolderId: rootId,
+		crumbs: [...rootCrumb],
+		items: [],
+		loading: false,
+	};
+
+	const renderFolderItems = (
+		target: "pdf" | "ifc",
+		tree: FolderBrowserState,
+		targetItems: HTMLElement,
+		pathEl: HTMLElement,
+	): void => {
+		pathEl.textContent = `Path: /${tree.crumbs.map((c) => c.name).join("/")}`;
+		if (tree.loading) {
+			targetItems.innerHTML =
+				'<p class="text-[11px] text-gray-500 italic">Loading folders...</p>';
+			return;
+		}
+		if (!tree.items.length) {
+			targetItems.innerHTML =
+				'<p class="text-[11px] text-gray-500 italic">No subfolders in this location.</p>';
+			return;
+		}
+		targetItems.innerHTML = tree.items
+			.map(
+				(f) => `
+          <div class="flex items-center gap-1">
+            <button
+              type="button"
+              class="flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-left text-[11px] text-gray-700 hover:bg-gray-100"
+              data-folder-open-${target}
+              data-id="${f.id}"
+              data-name="${f.name}"
+            >
+              ${f.name}
+            </button>
+            <button
+              type="button"
+              class="rounded bg-brand-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-brand-700"
+              data-folder-select-${target}
+              data-id="${f.id}"
+              data-name="${f.name}"
+            >
+              Select
+            </button>
+          </div>
+        `,
+			)
+			.join("");
+	};
+
+	const listSubfolders = async (parentId: string): Promise<FolderOption[]> => {
+		const items = await client.listFolderItems(parentId, project.id);
+		const folders = (items ?? []).filter(
+			(item) => item.type?.toUpperCase() === "FOLDER",
+		);
+		return folders
+			.map((f) => ({
+				id: f.id || f.versionId || "",
+				name: f.name ?? "Folder",
+				parentId,
+			}))
+			.filter((f) => f.id.length > 0)
+			.sort((a, b) => a.name.localeCompare(b.name));
+	};
+
+	const loadTree = async (
+		target: "pdf" | "ifc",
+		tree: FolderBrowserState,
+		targetItems: HTMLElement,
+		pathEl: HTMLElement,
+	): Promise<void> => {
+		tree.loading = true;
+		renderFolderItems(target, tree, targetItems, pathEl);
+		try {
+			tree.items = await listSubfolders(tree.currentFolderId);
+		} finally {
+			tree.loading = false;
+			renderFolderItems(target, tree, targetItems, pathEl);
+		}
+	};
+
 	const refreshUi = (): void => {
 		const ready = state.pdfFolderId && state.ifcFolderId;
 		batchButton.disabled = !ready;
@@ -150,53 +320,34 @@ export async function renderBatchQrPanel(
 		}
 	};
 
-	try {
-		const folders = await fetchSmartprintFolderProSubfolders(api);
-		if (!folders.items.length) {
-			status.textContent =
-				"No folders found. Create a smartprintPRO folder in the project first.";
-			return;
-		}
-		const options = folders.items
-			.map(
-				(item) =>
-					`<option value="${item.id}">${item.name}</option>`,
-			)
-			.join("");
-		pdfSelect.innerHTML = `<option value="">Select PDF folder…</option>${options}`;
-		ifcSelect.innerHTML = `<option value="">Select IFC folder…</option>${options}`;
-		content.hidden = false;
-		status.textContent =
-			"Select the folders that contain your assembly PDFs and IFC models.";
-	} catch (error) {
-		const message =
-			error instanceof Error ? error.message : "Failed to load project folders.";
-		status.textContent = message;
-		return;
-	}
+	content.hidden = false;
+	status.textContent =
+		"Select the folders that contain your assembly PDFs and IFC models.";
+	await Promise.all([
+		loadTree("pdf", pdfTree, pdfItems, pdfPath),
+		loadTree("ifc", ifcTree, ifcItems, ifcPath),
+	]);
 
-	pdfSelect.addEventListener("change", () => {
-		const id = pdfSelect.value;
-		const name =
-			pdfSelect.options[pdfSelect.selectedIndex]?.textContent ?? "Folder";
-		state.pdfFolderId = id;
-		state.pdfFolderName = name;
-		pdfLabel.textContent = id
-			? `PDF folder: ${name}`
-			: "No PDF folder selected.";
-		refreshUi();
+	pdfOpenButton.addEventListener("click", () => {
+		pdfBrowser.classList.toggle("hidden");
+	});
+	ifcOpenButton.addEventListener("click", () => {
+		ifcBrowser.classList.toggle("hidden");
 	});
 
-	ifcSelect.addEventListener("change", () => {
-		const id = ifcSelect.value;
-		const name =
-			ifcSelect.options[ifcSelect.selectedIndex]?.textContent ?? "Folder";
-		state.ifcFolderId = id;
-		state.ifcFolderName = name;
-		ifcLabel.textContent = id
-			? `IFC folder: ${name}`
-			: "No IFC folder selected.";
-		refreshUi();
+	pdfUpButton.addEventListener("click", () => {
+		if (pdfTree.crumbs.length <= 1) return;
+		pdfTree.crumbs.pop();
+		const prev = pdfTree.crumbs[pdfTree.crumbs.length - 1];
+		pdfTree.currentFolderId = prev.id;
+		void loadTree("pdf", pdfTree, pdfItems, pdfPath);
+	});
+	ifcUpButton.addEventListener("click", () => {
+		if (ifcTree.crumbs.length <= 1) return;
+		ifcTree.crumbs.pop();
+		const prev = ifcTree.crumbs[ifcTree.crumbs.length - 1];
+		ifcTree.currentFolderId = prev.id;
+		void loadTree("ifc", ifcTree, ifcItems, ifcPath);
 	});
 
 	container.addEventListener("change", (event) => {
@@ -208,6 +359,55 @@ export async function renderBatchQrPanel(
 		if (target === sizeSelect) {
 			const val = sizeSelect.value as BatchState["size"];
 			state.size = val;
+		}
+	});
+
+	container.addEventListener("click", (event) => {
+		const target = event.target as HTMLElement;
+
+		const openPdf = target.closest<HTMLElement>("[data-folder-open-pdf]");
+		if (openPdf) {
+			const id = openPdf.dataset.id ?? "";
+			const name = openPdf.dataset.name ?? "Folder";
+			if (!id) return;
+			pdfTree.currentFolderId = id;
+			pdfTree.crumbs.push({ id, name });
+			void loadTree("pdf", pdfTree, pdfItems, pdfPath);
+			return;
+		}
+		const openIfc = target.closest<HTMLElement>("[data-folder-open-ifc]");
+		if (openIfc) {
+			const id = openIfc.dataset.id ?? "";
+			const name = openIfc.dataset.name ?? "Folder";
+			if (!id) return;
+			ifcTree.currentFolderId = id;
+			ifcTree.crumbs.push({ id, name });
+			void loadTree("ifc", ifcTree, ifcItems, ifcPath);
+			return;
+		}
+
+		const selectPdf = target.closest<HTMLElement>("[data-folder-select-pdf]");
+		if (selectPdf) {
+			const id = selectPdf.dataset.id ?? "";
+			const name = selectPdf.dataset.name ?? "Folder";
+			if (!id) return;
+			state.pdfFolderId = id;
+			state.pdfFolderName = name;
+			pdfLabel.textContent = `PDF folder: ${name}`;
+			pdfBrowser.classList.add("hidden");
+			refreshUi();
+			return;
+		}
+		const selectIfc = target.closest<HTMLElement>("[data-folder-select-ifc]");
+		if (selectIfc) {
+			const id = selectIfc.dataset.id ?? "";
+			const name = selectIfc.dataset.name ?? "Folder";
+			if (!id) return;
+			state.ifcFolderId = id;
+			state.ifcFolderName = name;
+			ifcLabel.textContent = `IFC folder: ${name}`;
+			ifcBrowser.classList.add("hidden");
+			refreshUi();
 		}
 	});
 
