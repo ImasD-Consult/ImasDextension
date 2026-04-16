@@ -5,7 +5,6 @@ import {
 	fetchIfcAssembliesFromFile,
 	fetchProjectIfcModels,
 } from "../services/folders";
-import { buildQrNavigationUrl, toQrDataUrl } from "../services/qr";
 import { resolveViewerModelsForWbs } from "../services/viewer-model";
 import { inspectWbsPsetConfig, writeWbsPropertySetValues } from "../services/pset";
 
@@ -420,38 +419,6 @@ export async function renderWbs(
         </button>
         <p class="text-[11px] text-gray-500">Writes Pset_IMASD_WBS on the open IFC.</p>
       </div>
-      <div class="shrink-0 rounded border border-gray-200 bg-white p-2 space-y-2">
-        <div class="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            class="rounded px-3 py-1 text-xs font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-generate-qr
-            disabled
-          >
-            Generate QR for selected object
-          </button>
-          <a
-            href="#"
-            class="text-xs text-brand-700 hover:underline hidden"
-            data-qr-link
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Open generated link
-          </a>
-          <p class="text-[11px] text-gray-500" data-qr-status>Select one object to generate a QR code.</p>
-        </div>
-        <div class="flex items-start gap-3">
-          <img class="hidden h-28 w-28 rounded border border-gray-200" data-qr-image alt="Generated QR code" />
-          <textarea
-            class="min-h-[64px] flex-1 rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-700"
-            data-qr-payload
-            readonly
-            placeholder="Generated deep link payload will appear here."
-          ></textarea>
-        </div>
-      </div>
-
       <div class="flex-1 flex flex-col min-h-0 gap-2 overflow-hidden">
         <div class="flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden shrink-0 max-h-[min(44vh,520px)]">
           <div class="px-2 py-1.5 bg-gray-100 border-b border-gray-200 flex items-center justify-between gap-2 shrink-0">
@@ -693,13 +660,6 @@ export async function renderWbs(
 	);
 	const partsList = container.querySelector<HTMLElement>("[data-parts-list]");
 	const assignButton = container.querySelector<HTMLButtonElement>("[data-assign]");
-	const generateQrButton = container.querySelector<HTMLButtonElement>(
-		"[data-generate-qr]",
-	);
-	const qrStatus = container.querySelector<HTMLElement>("[data-qr-status]");
-	const qrImage = container.querySelector<HTMLImageElement>("[data-qr-image]");
-	const qrPayload = container.querySelector<HTMLTextAreaElement>("[data-qr-payload]");
-	const qrLink = container.querySelector<HTMLAnchorElement>("[data-qr-link]");
 	const assignmentsList = container.querySelector<HTMLElement>(
 		"[data-assignments-list]",
 	);
@@ -714,11 +674,6 @@ export async function renderWbs(
 		!lastCheckedLabel ||
 		!partsList ||
 		!assignButton ||
-		!generateQrButton ||
-		!qrStatus ||
-		!qrImage ||
-		!qrPayload ||
-		!qrLink ||
 		!assignmentsList
 	) {
 		return;
@@ -744,11 +699,6 @@ export async function renderWbs(
 	const lastCheckedLabelEl = lastCheckedLabel;
 	const partsListEl = partsList;
 	const assignButtonEl = assignButton;
-	const generateQrButtonEl = generateQrButton;
-	const qrStatusEl = qrStatus;
-	const qrImageEl = qrImage;
-	const qrPayloadEl = qrPayload;
-	const qrLinkEl = qrLink;
 	const assignmentsListEl = assignmentsList;
 
 	function getActiveModelId(): string {
@@ -1041,33 +991,6 @@ export async function renderWbs(
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
 	let assignments = loadAssignmentsFromLocalStorage();
-	let qrDeepLink = "";
-	let qrDataUrl = "";
-
-	function refreshQrUi(): void {
-		const selectedCount = getAssignableParts().filter((p) =>
-			selectedPartIds.has(p.id),
-		).length;
-		generateQrButtonEl.disabled = selectedCount !== 1;
-		qrPayloadEl.value = qrDeepLink;
-		if (qrDeepLink) {
-			qrLinkEl.classList.remove("hidden");
-			qrLinkEl.href = qrDeepLink;
-		} else {
-			qrLinkEl.classList.add("hidden");
-			qrLinkEl.href = "#";
-		}
-		if (qrDataUrl) {
-			qrImageEl.classList.remove("hidden");
-			qrImageEl.src = qrDataUrl;
-		} else {
-			qrImageEl.classList.add("hidden");
-			qrImageEl.removeAttribute("src");
-		}
-		if (selectedCount !== 1 && !qrDeepLink) {
-			qrStatusEl.textContent = "Select exactly one object to generate a QR code.";
-		}
-	}
 
 	function getAssemblyCandidates(source: IfcPart[]): IfcPart[] {
 		return source.filter((p) => p.type.toUpperCase().includes("ASSEMBLY"));
@@ -1090,7 +1013,6 @@ export async function renderWbs(
 			selectedWbsRowIndex === null ||
 			selectedCount === 0 ||
 			!tableData.rows.length;
-		refreshQrUi();
 	}
 
 	function countReadyParts(source: IfcPart[]): number {
@@ -1877,8 +1799,6 @@ export async function renderWbs(
 			if (!partId) return;
 			if (selectedPartIds.has(partId)) selectedPartIds.delete(partId);
 			else selectedPartIds.add(partId);
-			qrDeepLink = "";
-			qrDataUrl = "";
 			refreshPartsList();
 			return;
 		}
@@ -2017,38 +1937,6 @@ export async function renderWbs(
 			});
 	});
 
-	generateQrButtonEl.addEventListener("click", async () => {
-		const selected = getAssignableParts().filter((part) =>
-			selectedPartIds.has(part.id),
-		);
-		if (selected.length !== 1) {
-			qrStatusEl.textContent = "Select exactly one object.";
-			return;
-		}
-		const resolved = await resolveStableLinksForParts(selected);
-		const part = resolved[0];
-		const modelId = part.modelId ?? getActiveModelId();
-		if (!modelId) {
-			qrStatusEl.textContent = "Unable to resolve active model id.";
-			return;
-		}
-		qrStatusEl.textContent = "Generating QR...";
-		const payload = {
-			v: 1 as const,
-			modelId,
-			modelVersionId: allIfcModels.find((m) => m.id === modelId)?.versionId,
-			partId: part.id,
-			partName: part.name,
-			partType: part.type,
-			partLink: part.link,
-			targetUrl: part.link,
-			createdAt: new Date().toISOString(),
-		};
-		qrDeepLink = buildQrNavigationUrl(payload);
-		qrDataUrl = await toQrDataUrl(qrDeepLink);
-		qrStatusEl.textContent = `QR generated for ${part.name}. You can place this QR in PDFs.`;
-		refreshQrUi();
-	});
 
 	uploadButton.addEventListener("click", async () => {
 		const selectedFile = fileInput.files?.[0];
@@ -2083,5 +1971,4 @@ export async function renderWbs(
 	});
 
 	void refreshPsetDebugInfo();
-	refreshQrUi();
 }
