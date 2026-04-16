@@ -15,13 +15,19 @@ type BatchState = {
 type FolderOption = {
 	id: string;
 	name: string;
-	parentId?: string;
+	parentId: string;
 };
 
-type FolderBrowserState = {
+type FolderModalTarget = "pdf" | "ifc";
+
+type FolderModalState = {
+	open: boolean;
+	target: FolderModalTarget;
 	currentFolderId: string;
 	crumbs: Array<{ id: string; name: string }>;
 	items: FolderOption[];
+	selectedId: string;
+	selectedName: string;
 	loading: boolean;
 };
 
@@ -48,26 +54,13 @@ export async function renderBatchQrPanel(
           <button
             type="button"
             class="inline-flex items-center justify-center rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-            data-open-pdf-browser
+            data-open-folder-modal="pdf"
           >
             Select PDF folder...
           </button>
           <p class="text-[11px] text-gray-500 truncate" data-selected-pdf-folder>
             No PDF folder selected.
           </p>
-          <div class="hidden rounded border border-gray-200 p-2 bg-gray-50" data-pdf-browser>
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                class="rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
-                data-pdf-up
-              >
-                Up
-              </button>
-              <p class="text-[11px] text-gray-600 truncate flex-1 text-right" data-pdf-path>Path: /</p>
-            </div>
-            <div class="max-h-40 overflow-auto space-y-1" data-pdf-items></div>
-          </div>
         </div>
 
         <div class="flex flex-col gap-2">
@@ -75,26 +68,13 @@ export async function renderBatchQrPanel(
           <button
             type="button"
             class="inline-flex items-center justify-center rounded border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-            data-open-ifc-browser
+            data-open-folder-modal="ifc"
           >
             Select IFC folder...
           </button>
           <p class="text-[11px] text-gray-500 truncate" data-selected-ifc-folder>
             No IFC folder selected.
           </p>
-          <div class="hidden rounded border border-gray-200 p-2 bg-gray-50" data-ifc-browser>
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <button
-                type="button"
-                class="rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
-                data-ifc-up
-              >
-                Up
-              </button>
-              <p class="text-[11px] text-gray-600 truncate flex-1 text-right" data-ifc-path>Path: /</p>
-            </div>
-            <div class="max-h-40 overflow-auto space-y-1" data-ifc-items></div>
-          </div>
         </div>
 
         <div class="grid grid-cols-2 gap-3">
@@ -141,25 +121,60 @@ export async function renderBatchQrPanel(
           Generate QRs on assembly PDFs
         </button>
       </div>
+
+      <div class="hidden fixed inset-0 z-50 bg-black/40 p-4" data-folder-modal>
+        <div class="mx-auto mt-8 flex h-[70vh] max-h-[640px] w-full max-w-[640px] flex-col rounded-lg border border-gray-300 bg-white shadow-lg">
+          <div class="flex items-center justify-between border-b border-gray-200 px-3 py-2">
+            <h3 class="text-sm font-semibold text-gray-800" data-folder-modal-title>Select folder</h3>
+            <button
+              type="button"
+              class="rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100"
+              data-folder-cancel
+            >
+              Close
+            </button>
+          </div>
+          <div class="flex items-center gap-2 border-b border-gray-100 px-3 py-2">
+            <button
+              type="button"
+              class="rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-700 hover:bg-gray-100 disabled:opacity-50"
+              data-folder-up
+            >
+              Up
+            </button>
+            <p class="truncate text-[11px] text-gray-600" data-folder-path>Path: /</p>
+          </div>
+          <div class="flex-1 overflow-auto px-3 py-2 space-y-1" data-folder-items></div>
+          <div class="border-t border-gray-100 px-3 py-2">
+            <p class="text-[11px] text-gray-600 truncate" data-folder-selected>Selected: -</p>
+          </div>
+          <div class="flex items-center justify-end gap-2 border-t border-gray-200 px-3 py-2">
+            <button
+              type="button"
+              class="rounded border border-gray-300 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-100"
+              data-folder-cancel
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="rounded bg-brand-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+              data-folder-confirm
+              disabled
+            >
+              Use this folder
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   `;
 
 	const status = container.querySelector<HTMLElement>("[data-batch-status]");
 	const content = container.querySelector<HTMLElement>("[data-batch-content]");
-	const pdfOpenButton = container.querySelector<HTMLButtonElement>(
-		"[data-open-pdf-browser]",
+	const openFolderButtons = container.querySelectorAll<HTMLButtonElement>(
+		"[data-open-folder-modal]",
 	);
-	const ifcOpenButton = container.querySelector<HTMLButtonElement>(
-		"[data-open-ifc-browser]",
-	);
-	const pdfBrowser = container.querySelector<HTMLElement>("[data-pdf-browser]");
-	const ifcBrowser = container.querySelector<HTMLElement>("[data-ifc-browser]");
-	const pdfUpButton = container.querySelector<HTMLButtonElement>("[data-pdf-up]");
-	const ifcUpButton = container.querySelector<HTMLButtonElement>("[data-ifc-up]");
-	const pdfPath = container.querySelector<HTMLElement>("[data-pdf-path]");
-	const ifcPath = container.querySelector<HTMLElement>("[data-ifc-path]");
-	const pdfItems = container.querySelector<HTMLElement>("[data-pdf-items]");
-	const ifcItems = container.querySelector<HTMLElement>("[data-ifc-items]");
 	const pdfLabel = container.querySelector<HTMLElement>(
 		"[data-selected-pdf-folder]",
 	);
@@ -170,24 +185,39 @@ export async function renderBatchQrPanel(
 	const batchButton = container.querySelector<HTMLButtonElement>(
 		"[data-generate-batch]",
 	);
+	const modal = container.querySelector<HTMLElement>("[data-folder-modal]");
+	const modalTitle = container.querySelector<HTMLElement>(
+		"[data-folder-modal-title]",
+	);
+	const modalPath = container.querySelector<HTMLElement>("[data-folder-path]");
+	const modalItems = container.querySelector<HTMLElement>("[data-folder-items]");
+	const modalSelected = container.querySelector<HTMLElement>(
+		"[data-folder-selected]",
+	);
+	const modalUp = container.querySelector<HTMLButtonElement>("[data-folder-up]");
+	const modalConfirm = container.querySelector<HTMLButtonElement>(
+		"[data-folder-confirm]",
+	);
+	const modalCancelButtons = container.querySelectorAll<HTMLButtonElement>(
+		"[data-folder-cancel]",
+	);
 
 	if (
 		!status ||
 		!content ||
-		!pdfOpenButton ||
-		!ifcOpenButton ||
-		!pdfBrowser ||
-		!ifcBrowser ||
-		!pdfUpButton ||
-		!ifcUpButton ||
-		!pdfPath ||
-		!ifcPath ||
-		!pdfItems ||
-		!ifcItems ||
+		openFolderButtons.length === 0 ||
 		!pdfLabel ||
 		!ifcLabel ||
 		!sizeSelect ||
-		!batchButton
+		!batchButton ||
+		!modal ||
+		!modalTitle ||
+		!modalPath ||
+		!modalItems ||
+		!modalSelected ||
+		!modalUp ||
+		!modalConfirm ||
+		modalCancelButtons.length === 0
 	) {
 		return;
 	}
@@ -218,57 +248,49 @@ export async function renderBatchQrPanel(
 	});
 
 	const rootId = await client.getProjectRootId(project.id);
-	const rootCrumb = [{ id: rootId, name: "Project root" }];
-	const pdfTree: FolderBrowserState = {
+	const folderCache = new Map<string, FolderOption[]>();
+	const modalState: FolderModalState = {
+		open: false,
+		target: "pdf",
 		currentFolderId: rootId,
-		crumbs: [...rootCrumb],
+		crumbs: [{ id: rootId, name: "Project root" }],
 		items: [],
-		loading: false,
-	};
-	const ifcTree: FolderBrowserState = {
-		currentFolderId: rootId,
-		crumbs: [...rootCrumb],
-		items: [],
+		selectedId: "",
+		selectedName: "",
 		loading: false,
 	};
 
-	const renderFolderItems = (
-		target: "pdf" | "ifc",
-		tree: FolderBrowserState,
-		targetItems: HTMLElement,
-		pathEl: HTMLElement,
-	): void => {
-		pathEl.textContent = `Path: /${tree.crumbs.map((c) => c.name).join("/")}`;
-		if (tree.loading) {
-			targetItems.innerHTML =
+	const renderModal = (): void => {
+		modal.classList.toggle("hidden", !modalState.open);
+		if (!modalState.open) return;
+
+		modalTitle.textContent =
+			modalState.target === "pdf" ? "Select PDF folder" : "Select IFC folder";
+		modalPath.textContent = `Path: /${modalState.crumbs.map((c) => c.name).join("/")}`;
+		modalSelected.textContent = modalState.selectedName
+			? `Selected: ${modalState.selectedName}`
+			: "Selected: -";
+		modalUp.disabled = modalState.crumbs.length <= 1;
+		modalConfirm.disabled = !modalState.selectedId;
+
+		if (modalState.loading) {
+			modalItems.innerHTML =
 				'<p class="text-[11px] text-gray-500 italic">Loading folders...</p>';
 			return;
 		}
-		if (!tree.items.length) {
-			targetItems.innerHTML =
+		if (!modalState.items.length) {
+			modalItems.innerHTML =
 				'<p class="text-[11px] text-gray-500 italic">No subfolders in this location.</p>';
 			return;
 		}
-		targetItems.innerHTML = tree.items
+		modalItems.innerHTML = modalState.items
 			.map(
 				(f) => `
-          <div class="flex items-center gap-1">
-            <button
-              type="button"
-              class="flex-1 rounded border border-gray-300 bg-white px-2 py-1 text-left text-[11px] text-gray-700 hover:bg-gray-100"
-              data-folder-open-${target}
-              data-id="${f.id}"
-              data-name="${f.name}"
-            >
+          <div class="flex items-center gap-2 rounded border border-gray-200 bg-white px-2 py-1">
+            <button type="button" class="flex-1 text-left text-[11px] text-gray-800 hover:text-brand-700" data-folder-open data-id="${f.id}" data-name="${f.name}">
               ${f.name}
             </button>
-            <button
-              type="button"
-              class="rounded bg-brand-600 px-2 py-1 text-[11px] font-medium text-white hover:bg-brand-700"
-              data-folder-select-${target}
-              data-id="${f.id}"
-              data-name="${f.name}"
-            >
+            <button type="button" class="rounded border border-gray-300 px-2 py-0.5 text-[11px] text-gray-700 hover:bg-gray-100" data-folder-select data-id="${f.id}" data-name="${f.name}">
               Select
             </button>
           </div>
@@ -286,25 +308,27 @@ export async function renderBatchQrPanel(
 			.map((f) => ({
 				id: f.id || f.versionId || "",
 				name: f.name ?? "Folder",
-				parentId,
+				parentId: parentId,
 			}))
 			.filter((f) => f.id.length > 0)
 			.sort((a, b) => a.name.localeCompare(b.name));
 	};
 
-	const loadTree = async (
-		target: "pdf" | "ifc",
-		tree: FolderBrowserState,
-		targetItems: HTMLElement,
-		pathEl: HTMLElement,
-	): Promise<void> => {
-		tree.loading = true;
-		renderFolderItems(target, tree, targetItems, pathEl);
+	const loadCurrentModalFolder = async (): Promise<void> => {
+		modalState.loading = true;
+		renderModal();
 		try {
-			tree.items = await listSubfolders(tree.currentFolderId);
+			const cached = folderCache.get(modalState.currentFolderId);
+			if (cached) {
+				modalState.items = cached;
+			} else {
+				const items = await listSubfolders(modalState.currentFolderId);
+				folderCache.set(modalState.currentFolderId, items);
+				modalState.items = items;
+			}
 		} finally {
-			tree.loading = false;
-			renderFolderItems(target, tree, targetItems, pathEl);
+			modalState.loading = false;
+			renderModal();
 		}
 	};
 
@@ -323,31 +347,30 @@ export async function renderBatchQrPanel(
 	content.hidden = false;
 	status.textContent =
 		"Select the folders that contain your assembly PDFs and IFC models.";
-	await Promise.all([
-		loadTree("pdf", pdfTree, pdfItems, pdfPath),
-		loadTree("ifc", ifcTree, ifcItems, ifcPath),
-	]);
 
-	pdfOpenButton.addEventListener("click", () => {
-		pdfBrowser.classList.toggle("hidden");
+	openFolderButtons.forEach((btn) => {
+		btn.addEventListener("click", () => {
+			const target = (btn.dataset.openFolderModal ?? "pdf") as FolderModalTarget;
+			modalState.open = true;
+			modalState.target = target;
+			modalState.currentFolderId = rootId;
+			modalState.crumbs = [{ id: rootId, name: "Project root" }];
+			modalState.selectedId = "";
+			modalState.selectedName = "";
+			void loadCurrentModalFolder();
+		});
 	});
-	ifcOpenButton.addEventListener("click", () => {
-		ifcBrowser.classList.toggle("hidden");
+	modalCancelButtons.forEach((btn) => {
+		btn.addEventListener("click", () => {
+			modalState.open = false;
+			renderModal();
+		});
 	});
-
-	pdfUpButton.addEventListener("click", () => {
-		if (pdfTree.crumbs.length <= 1) return;
-		pdfTree.crumbs.pop();
-		const prev = pdfTree.crumbs[pdfTree.crumbs.length - 1];
-		pdfTree.currentFolderId = prev.id;
-		void loadTree("pdf", pdfTree, pdfItems, pdfPath);
-	});
-	ifcUpButton.addEventListener("click", () => {
-		if (ifcTree.crumbs.length <= 1) return;
-		ifcTree.crumbs.pop();
-		const prev = ifcTree.crumbs[ifcTree.crumbs.length - 1];
-		ifcTree.currentFolderId = prev.id;
-		void loadTree("ifc", ifcTree, ifcItems, ifcPath);
+	modalUp.addEventListener("click", () => {
+		if (modalState.crumbs.length <= 1) return;
+		modalState.crumbs.pop();
+		modalState.currentFolderId = modalState.crumbs[modalState.crumbs.length - 1].id;
+		void loadCurrentModalFolder();
 	});
 
 	container.addEventListener("change", (event) => {
@@ -364,49 +387,42 @@ export async function renderBatchQrPanel(
 
 	container.addEventListener("click", (event) => {
 		const target = event.target as HTMLElement;
+		const openNode = target.closest<HTMLElement>("[data-folder-open]");
+		if (openNode) {
+			const id = openNode.dataset.id ?? "";
+			const name = openNode.dataset.name ?? "Folder";
+			if (!id) return;
+			modalState.currentFolderId = id;
+			modalState.crumbs.push({ id, name });
+			modalState.selectedId = "";
+			modalState.selectedName = "";
+			void loadCurrentModalFolder();
+			return;
+		}
+		const selectNode = target.closest<HTMLElement>("[data-folder-select]");
+		if (selectNode) {
+			const id = selectNode.dataset.id ?? "";
+			const name = selectNode.dataset.name ?? "Folder";
+			if (!id) return;
+			modalState.selectedId = id;
+			modalState.selectedName = name;
+			renderModal();
+			return;
+		}
 
-		const openPdf = target.closest<HTMLElement>("[data-folder-open-pdf]");
-		if (openPdf) {
-			const id = openPdf.dataset.id ?? "";
-			const name = openPdf.dataset.name ?? "Folder";
-			if (!id) return;
-			pdfTree.currentFolderId = id;
-			pdfTree.crumbs.push({ id, name });
-			void loadTree("pdf", pdfTree, pdfItems, pdfPath);
-			return;
-		}
-		const openIfc = target.closest<HTMLElement>("[data-folder-open-ifc]");
-		if (openIfc) {
-			const id = openIfc.dataset.id ?? "";
-			const name = openIfc.dataset.name ?? "Folder";
-			if (!id) return;
-			ifcTree.currentFolderId = id;
-			ifcTree.crumbs.push({ id, name });
-			void loadTree("ifc", ifcTree, ifcItems, ifcPath);
-			return;
-		}
-
-		const selectPdf = target.closest<HTMLElement>("[data-folder-select-pdf]");
-		if (selectPdf) {
-			const id = selectPdf.dataset.id ?? "";
-			const name = selectPdf.dataset.name ?? "Folder";
-			if (!id) return;
-			state.pdfFolderId = id;
-			state.pdfFolderName = name;
-			pdfLabel.textContent = `PDF folder: ${name}`;
-			pdfBrowser.classList.add("hidden");
-			refreshUi();
-			return;
-		}
-		const selectIfc = target.closest<HTMLElement>("[data-folder-select-ifc]");
-		if (selectIfc) {
-			const id = selectIfc.dataset.id ?? "";
-			const name = selectIfc.dataset.name ?? "Folder";
-			if (!id) return;
-			state.ifcFolderId = id;
-			state.ifcFolderName = name;
-			ifcLabel.textContent = `IFC folder: ${name}`;
-			ifcBrowser.classList.add("hidden");
+		if (target.closest("[data-folder-confirm]")) {
+			if (!modalState.selectedId) return;
+			if (modalState.target === "pdf") {
+				state.pdfFolderId = modalState.selectedId;
+				state.pdfFolderName = modalState.selectedName;
+				pdfLabel.textContent = `PDF folder: ${modalState.selectedName}`;
+			} else {
+				state.ifcFolderId = modalState.selectedId;
+				state.ifcFolderName = modalState.selectedName;
+				ifcLabel.textContent = `IFC folder: ${modalState.selectedName}`;
+			}
+			modalState.open = false;
+			renderModal();
 			refreshUi();
 		}
 	});
