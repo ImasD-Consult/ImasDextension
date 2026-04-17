@@ -22,7 +22,17 @@ const DEFAULT_HOSTS = [
 ];
 
 function buildHosts(input?: string): string[] {
-	if (input?.trim()) return [input.trim().replace(/\/$/, "")];
+	if (input?.trim()) {
+		try {
+			const u = new URL(input.trim());
+			// Guard against web.connect host (serves HTML, not Core API JSON).
+			if (/^app\d*\.connect\.trimble\.com$/i.test(u.hostname)) {
+				return [u.origin.replace(/\/$/, "")];
+			}
+		} catch {
+			// ignore invalid provided host and fall back to defaults
+		}
+	}
 	return [...DEFAULT_HOSTS];
 }
 

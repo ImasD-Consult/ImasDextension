@@ -364,7 +364,8 @@ export async function renderBatchQrPanel(
 		if (!raw?.trim()) return undefined;
 		try {
 			const u = new URL(raw);
-			if (/connect\.trimble\.com$/i.test(u.hostname)) return u.origin;
+			// Only allow Core API hosts; reject web.connect.trimble.com (HTML app shell).
+			if (/^app\d*\.connect\.trimble\.com$/i.test(u.hostname)) return u.origin;
 		} catch {
 			/* ignore invalid URL */
 		}
@@ -389,11 +390,13 @@ export async function renderBatchQrPanel(
 		}
 		// Last resort: explicit env override.
 		return (
-			(
+			toTrimbleOrigin(
+				(
 				import.meta as ImportMeta & {
 					env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string };
 				}
-			).env?.VITE_TRIMBLE_CONNECT_ORIGIN?.trim() || undefined
+			).env?.VITE_TRIMBLE_CONNECT_ORIGIN?.trim(),
+			) || undefined
 		);
 	})();
 
