@@ -149,27 +149,36 @@ async function uploadAsVersionName(
 		type: localFile.type || "application/octet-stream",
 		lastModified: localFile.lastModified,
 	});
-	const formData = new FormData();
-	formData.append("file", renamedFile, targetName);
-	formData.append("name", targetName);
-	formData.append("parentId", parentFolderId);
-	formData.append("projectId", projectId);
+	const buildFormData = (): FormData => {
+		const formData = new FormData();
+		formData.append("file", renamedFile, targetName);
+		formData.append("name", targetName);
+		formData.append("parentId", parentFolderId);
+		formData.append("projectId", projectId);
+		return formData;
+	};
 
 	const uploadEndpoints = [
+		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
+		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
+		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/folders/${encodeURIComponent(parentFolderId)}/files`,
+		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/folders/${encodeURIComponent(parentFolderId)}/files`,
 		`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
+		`/tc/api/2.1/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
 		"/tc/api/2.0/files",
+		"/tc/api/2.1/files",
 	];
-	let lastError = "Upload failed.";
+	const attemptErrors: string[] = [];
 
 	for (const endpoint of uploadEndpoints) {
 		try {
 			const res = await fetch(endpoint, {
 				method: "POST",
 				headers: getAuthHeaders(token),
-				body: formData,
+				body: buildFormData(),
 			});
 			if (!res.ok) {
-				lastError = `Upload failed (${res.status}) at ${endpoint}`;
+				attemptErrors.push(`${res.status} at ${endpoint}`);
 				continue;
 			}
 			const raw = (await res.json()) as Record<string, unknown>;
@@ -182,16 +191,20 @@ async function uploadAsVersionName(
 			const versionId =
 				typeof raw.versionId === "string" ? raw.versionId : undefined;
 			if (!fileId) {
-				lastError = `Upload succeeded but API returned no file id at ${endpoint}`;
+				attemptErrors.push(`missing file id at ${endpoint}`);
 				continue;
 			}
 			return { fileId, versionId };
 		} catch (error) {
-			lastError = error instanceof Error ? error.message : "Upload request failed.";
+			attemptErrors.push(
+				`${error instanceof Error ? error.message : "request failed"} at ${endpoint}`,
+			);
 		}
 	}
 
-	throw new Error(lastError);
+	throw new Error(
+		`Upload failed on all endpoints. Attempts: ${attemptErrors.join(" | ")}`,
+	);
 }
 
 async function saveOriginalNameMetadata(
