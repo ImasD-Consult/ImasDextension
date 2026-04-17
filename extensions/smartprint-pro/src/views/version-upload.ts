@@ -242,7 +242,7 @@ export async function renderVersionUploadPanel(
         </p>
       </div>
 
-      <p class="text-xs text-gray-600" data-version-status>
+      <p class="text-xs text-gray-600 transition-colors duration-200" data-version-status>
         Loading project files...
       </p>
 
@@ -316,15 +316,46 @@ export async function renderVersionUploadPanel(
 		return;
 	}
 
+	const applyIndexStatus = (
+		variant: "neutral" | "scanning" | "success" | "error",
+		text: string,
+	): void => {
+		status.textContent = text;
+		const base = "transition-colors duration-200";
+		if (variant === "scanning") {
+			status.className = `${base} text-base font-bold text-amber-700 animate-pulse`;
+		} else if (variant === "success") {
+			status.className = `${base} text-sm font-normal text-green-600`;
+		} else if (variant === "error") {
+			status.className = `${base} text-sm font-semibold text-red-600`;
+		} else {
+			status.className = `${base} text-xs text-gray-600`;
+		}
+	};
+
+	function uploadFeedbackClass(message: string): string {
+		const m = message.toLowerCase();
+		if (m.includes("upload failed") || m.includes("backend upload failed")) {
+			return "text-[13px] font-semibold text-red-600";
+		}
+		if (m.startsWith("upload complete")) {
+			return "text-[13px] font-medium text-green-700";
+		}
+		return "text-[11px] text-gray-600";
+	}
+
 	const project = await api.project.getProject();
 	if (!project?.id) {
-		status.textContent = "No project selected.";
+		applyIndexStatus("error", "No project selected.");
 		return;
 	}
 
 	const token = await api.extension.requestPermission("accesstoken");
 	if (token === "denied" || token === "pending") {
-		status.textContent = `Access token ${token}. Please grant permission in extension settings.`;
+		applyIndexStatus(
+			"error",
+			`Access token ${token}. Please grant permission in extension settings.`,
+		);
 		return;
 	}
 
@@ -441,7 +472,7 @@ export async function renderVersionUploadPanel(
       </p>
       ${
 				state.lastUploadMessage
-					? `<p class="text-[11px] text-gray-600">${escapeHtmlAttr(state.lastUploadMessage)}</p>`
+					? `<p class="${uploadFeedbackClass(state.lastUploadMessage)}">${escapeHtmlAttr(state.lastUploadMessage)}</p>`
 					: ""
 			}
     `;
@@ -463,11 +494,14 @@ export async function renderVersionUploadPanel(
 	const refreshProjectIndex = async (): Promise<void> => {
 		state.scanning = true;
 		refreshButton.disabled = true;
-		status.textContent = "Scanning project files...";
+		applyIndexStatus("scanning", "Scanning project files…");
 		try {
 			const rootId = await client.getProjectRootId(project.id);
 			state.allFiles = await indexProjectFiles(client, project.id, rootId);
-			status.textContent = `Indexed ${state.allFiles.length} files.`;
+			applyIndexStatus(
+				"success",
+				`Indexed ${state.allFiles.length} files.`,
+			);
 			if (state.selectedLocalFile) {
 				state.matches = buildMatchesFor(state.selectedLocalFile);
 				state.selectedMatchId = state.matches[0]?.id ?? "";
@@ -475,7 +509,7 @@ export async function renderVersionUploadPanel(
 			renderMatchArea();
 		} catch (error) {
 			const message = error instanceof Error ? error.message : "Indexing failed.";
-			status.textContent = `Indexing failed: ${message}`;
+			applyIndexStatus("error", `Indexing failed: ${message}`);
 		} finally {
 			state.scanning = false;
 			refreshButton.disabled = false;
