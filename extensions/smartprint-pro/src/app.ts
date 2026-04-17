@@ -5,6 +5,7 @@ import { renderInfo } from "./views/info";
 import { renderProcesses } from "./views/processes";
 import { renderQrPanel } from "./views/qr";
 import { renderBatchQrPanel } from "./views/batch-qr";
+import { renderVersionUploadPanel } from "./views/version-upload";
 import { renderWbs } from "./views/wbs";
 
 function getAppMode(): "project" | "3d" {
@@ -94,6 +95,7 @@ export async function initApp(): Promise<void> {
 					command !== "processes" &&
 					command !== "info" &&
 					command !== "batch_qr_project" &&
+					command !== "version_upload_project" &&
 					command !== "smartprint_main"
 				) {
 					return;
@@ -106,6 +108,10 @@ export async function initApp(): Promise<void> {
 					container.className =
 						"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
 					await renderBatchQrPanel(container, api);
+				} else if (command === "version_upload_project") {
+					container.className =
+						"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
+					await renderVersionUploadPanel(container, api);
 				} else {
 					await renderProcesses(container, api);
 				}
@@ -145,6 +151,7 @@ export async function initApp(): Promise<void> {
 			subMenus: [
 				{ title: "Processes", command: "processes" },
 				{ title: "Batch QR", command: "batch_qr_project" },
+				{ title: "File Version Upload", command: "version_upload_project" },
 				{ title: "Info", command: "info" },
 			],
 		});
