@@ -22,7 +22,19 @@ type UploadState = {
 	matches: IndexedFile[];
 	allFiles: IndexedFile[];
 	scanning: boolean;
+	searchingMatches: boolean;
+	matchSearchSeq: number;
 	lastUploadMessage: string;
+	versionRows: VersionRow[];
+};
+
+type VersionRow = {
+	fileId: string;
+	versionId?: string;
+	name: string;
+	description?: string;
+	updatedAt?: string;
+	originalName?: string;
 };
 
 const MAX_FOLDERS_TO_SCAN = 3500;
@@ -80,6 +92,14 @@ function getAuthHeaders(token: string): HeadersInit {
 
 function pickId(item: TrimbleFolderItem): string {
 	return item.id || item.versionId || "";
+}
+
+function extractOriginalName(description: string | undefined): string {
+	if (!description) return "";
+	const marker = "[smartprint-original-name]";
+	const idx = description.toLowerCase().indexOf(marker.toLowerCase());
+	if (idx < 0) return "";
+	return description.slice(idx + marker.length).trim();
 }
 
 async function indexProjectFiles(
@@ -208,6 +228,83 @@ async function saveOriginalNameMetadata(
 	);
 }
 
+async function fetchVersionRows(
+	token: string,
+	projectId: string,
+	match: IndexedFile,
+	client: TrimbleClient,
+): Promise<VersionRow[]> {
+	const endpoints = [
+		`/tc/api/2.0/files/${encodeURIComponent(match.id)}/versions?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.1/files/${encodeURIComponent(match.id)}/versions?projectId=${encodeURIComponent(projectId)}`,
+	];
+	for (const endpoint of endpoints) {
+		try {
+			const res = await fetch(endpoint, {
+				headers: getAuthHeaders(token),
+			});
+			if (!res.ok) continue;
+			const payload = (await res.json()) as Record<string, unknown>;
+			const itemsRaw =
+				(payload.items as unknown[] | undefined) ??
+				(payload.versions as unknown[] | undefined) ??
+				(Array.isArray(payload) ? payload : []);
+			if (!Array.isArray(itemsRaw) || itemsRaw.length === 0) continue;
+			const rows: VersionRow[] = itemsRaw
+				.map((raw) => raw as Record<string, unknown>)
+				.map((raw) => {
+					const description =
+						typeof raw.description === "string" ? raw.description : undefined;
+					return {
+						fileId:
+							typeof raw.fileId === "string"
+								? raw.fileId
+								: typeof raw.id === "string"
+									? raw.id
+									: "",
+						versionId:
+							typeof raw.versionId === "string"
+								? raw.versionId
+								: typeof raw.id === "string"
+									? raw.id
+									: undefined,
+						name: typeof raw.name === "string" ? raw.name : match.name,
+						description,
+						updatedAt:
+							typeof raw.updatedAt === "string"
+								? raw.updatedAt
+								: typeof raw.modifiedAt === "string"
+									? raw.modifiedAt
+									: undefined,
+						originalName: extractOriginalName(description),
+					};
+				})
+				.filter((row) => row.fileId);
+			if (rows.length > 0) return rows;
+		} catch {
+			// Keep trying fallbacks.
+		}
+	}
+
+	const fallbackItems = await client.listFolderItems(match.parentId, projectId);
+	const fallback = (fallbackItems ?? []).find(
+		(item) =>
+			item.type?.toUpperCase() !== "FOLDER" &&
+			item.name?.toLowerCase() === match.name.toLowerCase(),
+	);
+	if (!fallback) return [];
+	return [
+		{
+			fileId: fallback.id || fallback.versionId || "",
+			versionId: fallback.versionId,
+			name: fallback.name ?? match.name,
+			description: undefined,
+			updatedAt: undefined,
+			originalName: "",
+		},
+	].filter((row) => row.fileId);
+}
+
 export async function renderVersionUploadPanel(
 	container: HTMLElement,
 	api: WorkspaceApi,
@@ -261,6 +358,13 @@ export async function renderVersionUploadPanel(
       >
         Upload as new version
       </button>
+
+      <div class="rounded border border-gray-200 bg-white p-2 min-h-0">
+        <h4 class="text-xs font-semibold text-gray-800 mb-2">Version History / Original Name Metadata</h4>
+        <div class="max-h-[28vh] overflow-auto" data-version-table>
+          <p class="text-[11px] text-gray-400 italic">Upload a file to see versions and saved metadata.</p>
+        </div>
+      </div>
     </div>
   `;
 
@@ -274,8 +378,17 @@ export async function renderVersionUploadPanel(
 	const uploadButton = container.querySelector<HTMLButtonElement>(
 		"[data-upload-version]",
 	);
+	const versionTable = container.querySelector<HTMLElement>("[data-version-table]");
 
-	if (!status || !dropZone || !fileInput || !refreshButton || !matchArea || !uploadButton) {
+	if (
+		!status ||
+		!dropZone ||
+		!fileInput ||
+		!refreshButton ||
+		!matchArea ||
+		!uploadButton ||
+		!versionTable
+	) {
 		return;
 	}
 
@@ -303,7 +416,54 @@ export async function renderVersionUploadPanel(
 		matches: [],
 		allFiles: [],
 		scanning: false,
+		searchingMatches: false,
+		matchSearchSeq: 0,
 		lastUploadMessage: "",
+		versionRows: [],
+	};
+
+	const renderVersionTable = (): void => {
+		if (!state.versionRows.length) {
+			versionTable.innerHTML =
+				'<p class="text-[11px] text-gray-400 italic">No versions loaded yet.</p>';
+			return;
+		}
+		const rows = state.versionRows
+			.map((row) => {
+				const hasOriginalName = Boolean(row.originalName);
+				const badgeClass = hasOriginalName
+					? "bg-green-100 text-green-700 border-green-300"
+					: "bg-amber-100 text-amber-700 border-amber-300";
+				const badgeLabel = hasOriginalName ? "Saved" : "Missing";
+				return `
+          <tr class="border-b border-gray-100">
+            <td class="px-2 py-1 text-[11px] text-gray-700">${row.versionId ?? "-"}</td>
+            <td class="px-2 py-1 text-[11px] text-gray-700">${row.name}</td>
+            <td class="px-2 py-1 text-[11px] text-gray-700">${row.originalName || "-"}</td>
+            <td class="px-2 py-1 text-[11px]">
+              <span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-medium ${badgeClass}">
+                ${badgeLabel}
+              </span>
+            </td>
+            <td class="px-2 py-1 text-[11px] text-gray-600">${row.updatedAt ?? "-"}</td>
+          </tr>
+        `;
+			})
+			.join("");
+		versionTable.innerHTML = `
+      <table class="min-w-full border-collapse">
+        <thead class="sticky top-0 bg-gray-50">
+          <tr class="border-b border-gray-200">
+            <th class="px-2 py-1 text-left text-[11px] font-semibold text-gray-700">Version Id</th>
+            <th class="px-2 py-1 text-left text-[11px] font-semibold text-gray-700">Trimble Name</th>
+            <th class="px-2 py-1 text-left text-[11px] font-semibold text-gray-700">Saved Original Name</th>
+            <th class="px-2 py-1 text-left text-[11px] font-semibold text-gray-700">Metadata</th>
+            <th class="px-2 py-1 text-left text-[11px] font-semibold text-gray-700">Updated At</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
 	};
 
 	const renderMatchArea = (): void => {
@@ -311,6 +471,14 @@ export async function renderVersionUploadPanel(
 		if (!localFile) {
 			matchArea.innerHTML =
 				'<p class="text-[11px] text-gray-400 italic">No local file selected yet.</p>';
+			uploadButton.disabled = true;
+			return;
+		}
+		if (state.searchingMatches) {
+			matchArea.innerHTML = `
+        <p class="text-xs text-gray-700">Local file: <span class="font-medium">${localFile.name}</span></p>
+        <p class="text-[11px] text-gray-500 italic">Looking for similar files in project index...</p>
+      `;
 			uploadButton.disabled = true;
 			return;
 		}
@@ -390,14 +558,25 @@ export async function renderVersionUploadPanel(
 	const setLocalFile = (file: File): void => {
 		state.selectedLocalFile = file;
 		state.lastUploadMessage = "";
-		state.matches = buildMatchesFor(file);
-		state.selectedMatchId = state.matches[0]?.id ?? "";
+		const seq = state.matchSearchSeq + 1;
+		state.matchSearchSeq = seq;
+		state.searchingMatches = true;
 		renderMatchArea();
-		if (state.matches.length > 0) {
-			status.textContent = `${state.matches.length} similar files found. Confirm the target name and upload.`;
-		} else {
-			status.textContent = "No similar file found. Try another file name or refresh index.";
-		}
+		status.textContent = `Looking for matches for "${file.name}"...`;
+		void (async () => {
+			await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+			const matches = buildMatchesFor(file);
+			if (seq !== state.matchSearchSeq) return;
+			state.matches = matches;
+			state.selectedMatchId = matches[0]?.id ?? "";
+			state.searchingMatches = false;
+			renderMatchArea();
+			if (matches.length > 0) {
+				status.textContent = `${matches.length} similar files found. Confirm the target name and upload.`;
+			} else {
+				status.textContent = "No similar file found. Try another file name or refresh index.";
+			}
+		})();
 	};
 
 	dropZone.addEventListener("dragover", (event) => {
@@ -462,6 +641,8 @@ export async function renderVersionUploadPanel(
 					state.lastUploadMessage = `Uploaded, but metadata warning: ${m}`;
 				}
 				status.textContent = `Upload complete. Trimble name "${match.name}" kept for versioning.`;
+				state.versionRows = await fetchVersionRows(token, project.id, match, client);
+				renderVersionTable();
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "Upload failed.";
 				status.textContent = `Upload failed: ${message}`;
@@ -474,4 +655,5 @@ export async function renderVersionUploadPanel(
 
 	refreshButton.disabled = true;
 	await refreshProjectIndex();
+	renderVersionTable();
 }
