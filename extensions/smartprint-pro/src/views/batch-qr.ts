@@ -730,7 +730,7 @@ export async function renderBatchQrPanel(
 						);
 					}
 					return {
-						pdfFileId: row.pdfVersionId || row.pdfId,
+						pdfFileId: row.pdfId,
 						pdfFileName: row.pdfName,
 						qrText: qrUrl,
 					};

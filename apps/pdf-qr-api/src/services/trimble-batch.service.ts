@@ -182,23 +182,97 @@ async function ensureSubfolder(
 	return folderId;
 }
 
+type ResolvedTrimbleFile = {
+	fileId: string;
+	downloadUrls: string[];
+};
+
+function collectDownloadUrlsFromObject(
+	root: Record<string, unknown>,
+): string[] {
+	const out = new Set<string>();
+	const walk = (node: unknown, depth: number): void => {
+		if (depth > 8 || node == null) return;
+		if (typeof node === "string") {
+			const s = node.trim();
+			if (/^https?:\/\//i.test(s) && /download|content|signed|s3/i.test(s)) {
+				out.add(s);
+			}
+			return;
+		}
+		if (Array.isArray(node)) {
+			for (const item of node) walk(item, depth + 1);
+			return;
+		}
+		if (typeof node === "object") {
+			for (const value of Object.values(node as Record<string, unknown>)) {
+				walk(value, depth + 1);
+			}
+		}
+	};
+	walk(root, 0);
+	return [...out];
+}
+
+async function resolveTrimbleFile(
+	hosts: string[],
+	accessToken: string,
+	projectId: string,
+	idOrVersionId: string,
+): Promise<ResolvedTrimbleFile> {
+	const res = await trimbleFetch(
+		hosts,
+		[
+			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(idOrVersionId)}`,
+			`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(idOrVersionId)}`,
+			`/tc/api/2.0/files/${encodeURIComponent(idOrVersionId)}?projectId=${encodeURIComponent(projectId)}`,
+			`/tc/api/2.1/files/${encodeURIComponent(idOrVersionId)}?projectId=${encodeURIComponent(projectId)}`,
+		],
+		accessToken,
+		undefined,
+		{ expectJson: true },
+	);
+	const raw = (await res.json()) as Record<string, unknown>;
+	const fileId = String(
+		raw.fileId ??
+			raw.id ??
+			(raw.file as Record<string, unknown> | undefined)?.id ??
+			(raw.data as Record<string, unknown> | undefined)?.id ??
+			idOrVersionId,
+	);
+	return {
+		fileId,
+		downloadUrls: collectDownloadUrlsFromObject(raw),
+	};
+}
+
 async function downloadPdfFromTrimble(
 	hosts: string[],
 	accessToken: string,
 	projectId: string,
 	fileId: string,
 ): Promise<Uint8Array> {
+	const resolved = await resolveTrimbleFile(
+		hosts,
+		accessToken,
+		projectId,
+		fileId,
+	);
+	const canonicalId = resolved.fileId || fileId;
 	const paths = [
-		`/tc/api/2.0/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
-		`/tc/api/2.1/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
-		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download`,
-		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download`,
-		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
-		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
-		`/tc/api/2.0/files/${encodeURIComponent(fileId)}/download`,
-		`/tc/api/2.1/files/${encodeURIComponent(fileId)}/download`,
+		`/tc/api/2.0/files/${encodeURIComponent(canonicalId)}/download?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.1/files/${encodeURIComponent(canonicalId)}/download?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(canonicalId)}/download`,
+		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(canonicalId)}/download`,
+		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(canonicalId)}/download?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(canonicalId)}/download?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.0/files/${encodeURIComponent(canonicalId)}/download`,
+		`/tc/api/2.1/files/${encodeURIComponent(canonicalId)}/download`,
 	];
-	const urls = hosts.flatMap((h) => paths.map((p) => `${h}${p}`));
+	const urls = [
+		...resolved.downloadUrls,
+		...hosts.flatMap((h) => paths.map((p) => `${h}${p}`)),
+	];
 	let lastError: unknown;
 	const attempts: string[] = [];
 	for (const url of urls) {
