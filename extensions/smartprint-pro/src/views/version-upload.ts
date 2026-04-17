@@ -185,42 +185,66 @@ async function uploadAsVersionName(
 			}
 		).env?.VITE_BATCH_QR_API_BASE?.trim() || DEFAULT_BACKEND_BASE;
 	const url = `${backendBase.replace(/\/+$/, "")}/v1/integrations/trimble/version-upload`;
-	const body = new FormData();
-	body.append("file", localFile, localFile.name);
-	body.append("access_token", token);
-	body.append("project_id", projectId);
-	body.append("parent_folder_id", parentFolderId);
-	body.append("target_name", targetName);
-	body.append("original_name", localFile.name);
-	body.append("connect_origin", getRuntimeTrimbleConnectOrigin() ?? "");
-	// Helps the API pick the same regional host as Trimble for this file (matches batch QR host resolution).
-	body.append("probe_file_id", probeFileId);
 
-	let res: Response;
-	try {
-		res = await fetch(url, {
-			method: "POST",
-			body,
-			mode: "cors",
-		});
-	} catch (error) {
-		if (error instanceof TypeError) {
-			throw new Error(
-				`Cannot reach ${url} (network blocked, CORS, TLS, or server down). Same API base as Batch QR; confirm pdf-qr-api is deployed and check DevTools → Network for the failed request.`,
-			);
+	const buildFormData = (): FormData => {
+		const fd = new FormData();
+		fd.append("file", localFile, localFile.name);
+		fd.append("access_token", token);
+		fd.append("project_id", projectId);
+		fd.append("parent_folder_id", parentFolderId);
+		fd.append("target_name", targetName);
+		fd.append("original_name", localFile.name);
+		fd.append("connect_origin", getRuntimeTrimbleConnectOrigin() ?? "");
+		fd.append("probe_file_id", probeFileId);
+		return fd;
+	};
+
+	let res: Response | undefined;
+	let lastNetworkError: unknown;
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		try {
+			res = await fetch(url, {
+				method: "POST",
+				body: buildFormData(),
+				mode: "cors",
+				cache: "no-store",
+			});
+			break;
+		} catch (error) {
+			lastNetworkError = error;
+			if (error instanceof TypeError && attempt === 0) {
+				await new Promise<void>((r) => setTimeout(r, 1000));
+				continue;
+			}
+			if (error instanceof TypeError) {
+				throw new Error(
+					`Upload request did not finish (${url}). Often: connection reset during upload, CORS/preflight blocked, TLS, or origin unreachable. If Batch QR works, compare Network tab (multipart vs JSON). Retry, check pdf-qr-api logs, nginx/Cloudflare timeouts for long requests.`,
+				);
+			}
+			throw error instanceof Error ? error : new Error("Unknown upload network error.");
 		}
-		throw error instanceof Error ? error : new Error("Unknown upload network error.");
+	}
+	if (!res) {
+		throw lastNetworkError instanceof Error
+			? lastNetworkError
+			: new Error("Upload request failed.");
 	}
 	if (!res.ok) {
 		const text = await res.text();
+		const ctype = (res.headers.get("content-type") || "").toLowerCase();
 		let detail = text;
-		try {
-			const j = JSON.parse(text) as { message?: string; error?: string };
-			if (typeof j.message === "string" && j.message.trim()) {
-				detail = j.message.trim();
+		if (res.status === 502 && ctype.includes("text/html")) {
+			detail =
+				"502 HTML from Cloudflare/proxy — origin timed out, crashed, or did not respond. Deploy latest pdf-qr-api, raise nginx proxy_read_timeout, and keep uploads under the ~100s Cloudflare-to-origin limit.";
+		} else {
+			try {
+				const j = JSON.parse(text) as { message?: string; error?: string };
+				if (typeof j.message === "string" && j.message.trim()) {
+					detail = j.message.trim();
+				}
+			} catch {
+				// use raw text
 			}
-		} catch {
-			// use raw text
 		}
 		throw new Error(`Backend upload failed: ${res.status} ${detail}`);
 	}
