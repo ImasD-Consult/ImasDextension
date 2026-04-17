@@ -9,6 +9,9 @@ const ext = trim(process.env.EXTENSION_URL);
 const connectOrigin = trim(
 	process.env.VITE_TRIMBLE_CONNECT_ORIGIN || process.env.TRIMBLE_CONNECT_ORIGIN || "",
 );
+const qrUrlTemplate = trim(
+	process.env.TRIMBLE_CONNECT_QR_URL_TEMPLATE || process.env.VITE_TRIMBLE_CONNECT_QR_URL_TEMPLATE || "",
+);
 const connectRegion = trim(
 	process.env.VITE_TRIMBLE_CONNECT_REGION || process.env.TRIMBLE_CONNECT_REGION || "",
 );
@@ -30,17 +33,21 @@ const psetDefId = trim(
 const psetPropertyName = trim(
 	process.env.VITE_PSET_PROPERTY_NAME || process.env.PSET_PROPERTY_NAME || "",
 );
+const runtimeEnv = {
+	EXTENSION_URL: ext,
+	TRIMBLE_CONNECT_ORIGIN: connectOrigin,
+	TRIMBLE_CONNECT_QR_URL_TEMPLATE: qrUrlTemplate,
+	TRIMBLE_CONNECT_REGION: connectRegion,
+	PSET_SERVICE_URI: psetServiceUri,
+	PSET_LIB_ID: psetLibId,
+	PSET_LIBRARY_NAME: psetLibraryName,
+	PSET_DEFINITION_NAME: psetDefinitionName,
+	PSET_DEF_ID: psetDefId,
+	PSET_PROPERTY_NAME: psetPropertyName,
+};
 const body = [
 	"window.__SMARTPRINT_PRO__ = window.__SMARTPRINT_PRO__ || {};",
-	`window.__SMARTPRINT_PRO__.EXTENSION_URL = ${JSON.stringify(ext)};`,
-	`window.__SMARTPRINT_PRO__.TRIMBLE_CONNECT_ORIGIN = ${JSON.stringify(connectOrigin)};`,
-	`window.__SMARTPRINT_PRO__.TRIMBLE_CONNECT_REGION = ${JSON.stringify(connectRegion)};`,
-	`window.__SMARTPRINT_PRO__.PSET_SERVICE_URI = ${JSON.stringify(psetServiceUri)};`,
-	`window.__SMARTPRINT_PRO__.PSET_LIB_ID = ${JSON.stringify(psetLibId)};`,
-	`window.__SMARTPRINT_PRO__.PSET_LIBRARY_NAME = ${JSON.stringify(psetLibraryName)};`,
-	`window.__SMARTPRINT_PRO__.PSET_DEFINITION_NAME = ${JSON.stringify(psetDefinitionName)};`,
-	`window.__SMARTPRINT_PRO__.PSET_DEF_ID = ${JSON.stringify(psetDefId)};`,
-	`window.__SMARTPRINT_PRO__.PSET_PROPERTY_NAME = ${JSON.stringify(psetPropertyName)};`,
+	`Object.assign(window.__SMARTPRINT_PRO__, ${JSON.stringify(runtimeEnv, null, 2)});`,
 	"",
 ].join("\n");
 fs.writeFileSync("/app/env.js", body, "utf8");
