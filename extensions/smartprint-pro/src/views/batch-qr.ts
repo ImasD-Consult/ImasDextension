@@ -360,21 +360,41 @@ export async function renderBatchQrPanel(
 			}
 		).env?.VITE_BATCH_QR_API_BASE?.trim() || DEFAULT_BACKEND_BASE;
 
-	const connectHost = (() => {
-		if (typeof document !== "undefined" && document.referrer) {
-			try {
-				const u = new URL(document.referrer);
-				if (/connect\.trimble\.com$/i.test(u.hostname)) return u.origin;
-			} catch {
-				/* ignore */
-			}
+	const toTrimbleOrigin = (raw?: string): string | undefined => {
+		if (!raw?.trim()) return undefined;
+		try {
+			const u = new URL(raw);
+			if (/connect\.trimble\.com$/i.test(u.hostname)) return u.origin;
+		} catch {
+			/* ignore invalid URL */
 		}
-		const v = (
-			import.meta as ImportMeta & {
-				env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string };
-			}
-		).env?.VITE_TRIMBLE_CONNECT_ORIGIN?.trim();
-		return v || undefined;
+		return undefined;
+	};
+
+	const connectHost = (() => {
+		// Prefer the actual runtime host where extension is running.
+		if (typeof window !== "undefined") {
+			const fromLocation = toTrimbleOrigin(window.location.origin);
+			if (fromLocation) return fromLocation;
+			const fromAncestor =
+				typeof window.location.ancestorOrigins !== "undefined"
+					? toTrimbleOrigin(window.location.ancestorOrigins[0])
+					: undefined;
+			if (fromAncestor) return fromAncestor;
+		}
+		// Fallback to embedding page referrer if present.
+		if (typeof document !== "undefined") {
+			const fromReferrer = toTrimbleOrigin(document.referrer);
+			if (fromReferrer) return fromReferrer;
+		}
+		// Last resort: explicit env override.
+		return (
+			(
+				import.meta as ImportMeta & {
+					env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string };
+				}
+			).env?.VITE_TRIMBLE_CONNECT_ORIGIN?.trim() || undefined
+		);
 	})();
 
 	type BackendBatchItem = {

@@ -22,10 +22,8 @@ const DEFAULT_HOSTS = [
 ];
 
 function buildHosts(input?: string): string[] {
-	const set = new Set<string>();
-	if (input?.trim()) set.add(input.trim().replace(/\/$/, ""));
-	for (const h of DEFAULT_HOSTS) set.add(h);
-	return [...set];
+	if (input?.trim()) return [input.trim().replace(/\/$/, "")];
+	return [...DEFAULT_HOSTS];
 }
 
 async function resolvePreferredHosts(
@@ -50,6 +48,38 @@ async function resolvePreferredHosts(
 			return [host, ...hosts.filter((h) => h !== host)];
 		} catch {
 			// try next host
+		}
+	}
+	return hosts;
+}
+
+async function resolveProjectRegionHost(
+	hosts: string[],
+	accessToken: string,
+	projectId: string,
+): Promise<string[]> {
+	for (const host of hosts) {
+		for (const path of [
+			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}`,
+			`/tc/api/2.1/projects/${encodeURIComponent(projectId)}`,
+			`/tc/api/2.0/projects?ids=${encodeURIComponent(projectId)}`,
+			`/tc/api/2.1/projects?ids=${encodeURIComponent(projectId)}`,
+		]) {
+			try {
+				const res = await fetch(`${host}${path}`, {
+					headers: {
+						Authorization: `Bearer ${accessToken}`,
+						Accept: "application/json",
+					},
+				});
+				if (!res.ok) continue;
+				const ctype = (res.headers.get("content-type") || "").toLowerCase();
+				if (!ctype.includes("application/json")) continue;
+				// Successful project lookup pins the region host for this job.
+				return [host];
+			} catch {
+				// try next path/host
+			}
 		}
 	}
 	return hosts;
@@ -277,12 +307,23 @@ async function downloadPdfFromTrimble(
 	const attempts: string[] = [];
 	for (const url of urls) {
 		try {
-			const res = await fetch(url, {
-				headers: {
-					Authorization: `Bearer ${accessToken}`,
-					Accept: "application/pdf",
-				},
-			});
+			const isDirectDataUrl = /\/tc\/api\/\d+\.\d+\/data\//i.test(url);
+			const headersNoAuth: HeadersInit = { Accept: "application/pdf" };
+			const headersWithAuth: HeadersInit = {
+				Accept: "application/pdf",
+				Authorization: `Bearer ${accessToken}`,
+			};
+			let res: Response;
+			if (isDirectDataUrl) {
+				// Signed /data URLs may reject bearer headers; try clean request first.
+				res = await fetch(url, { headers: headersNoAuth });
+				if (!res.ok) {
+					attempts.push(`HTTP ${res.status} @ ${url} (no-auth)`);
+					res = await fetch(url, { headers: headersWithAuth });
+				}
+			} else {
+				res = await fetch(url, { headers: headersWithAuth });
+			}
 			if (!res.ok) {
 				attempts.push(`HTTP ${res.status} @ ${url}`);
 				lastError = new Error(`HTTP ${res.status} at ${url}`);
@@ -405,6 +446,11 @@ export async function startTrimbleBatchJob(
 		await saveStatus(app, env, running);
 		const results: FileResult[] = [];
 		try {
+			hosts = await resolveProjectRegionHost(
+				hosts,
+				input.trimble.accessToken,
+				input.trimble.projectId,
+			);
 			hosts = await resolvePreferredHosts(
 				hosts,
 				input.trimble.accessToken,
