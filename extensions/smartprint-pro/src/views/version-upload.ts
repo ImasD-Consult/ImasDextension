@@ -75,6 +75,21 @@ function diceCoefficient(a: string, b: string): number {
 	return (2 * hits) / (a.length + b.length - 2);
 }
 
+function escapeHtmlAttr(s: string): string {
+	return s
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;");
+}
+
+/** Same display name can exist in different folders — show parent id tail so the user picks the right file. */
+function matchOptionLabel(match: IndexedFile): string {
+	const tail =
+		match.parentId.length > 10 ? `…${match.parentId.slice(-8)}` : match.parentId;
+	return `${match.name} · ${tail}`;
+}
+
 function similarityScore(localName: string, tcName: string): number {
 	const localNorm = normalizeBaseName(localName);
 	const remoteNorm = normalizeBaseName(tcName);
@@ -379,7 +394,7 @@ export async function renderVersionUploadPanel(
 		const options = state.matches
 			.map((match) => {
 				const selected = match.id === state.selectedMatchId ? "selected" : "";
-				return `<option value="${match.id}" ${selected}>${match.name}</option>`;
+				return `<option value="${escapeHtmlAttr(match.id)}" ${selected}>${escapeHtmlAttr(matchOptionLabel(match))}</option>`;
 			})
 			.join("");
 

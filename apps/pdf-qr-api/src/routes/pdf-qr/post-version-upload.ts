@@ -76,6 +76,8 @@ async function tryUpload(
 	targetName: string,
 	file: MultipartFile,
 	hosts: string[],
+	/** When set, upload a new version of this file (avoids duplicate-name issues in the project). */
+	existingFileId?: string,
 ): Promise<{ fileId: string; versionId?: string }> {
 	const bytes = await file.toBuffer();
 	const blobBytes = new Uint8Array(bytes);
@@ -88,6 +90,7 @@ async function tryUpload(
 		targetName,
 		blobBytes,
 		contentType,
+		existingFileId,
 	);
 	return { fileId };
 }
@@ -251,6 +254,7 @@ export function registerPostVersionUpload(rawApp: FastifyInstance): void {
 					fields.target_name,
 					fields.file,
 					hosts,
+					fields.probe_file_id?.trim() || undefined,
 				);
 				const metadataSaved = await trySaveMetadata(
 					fields.access_token,

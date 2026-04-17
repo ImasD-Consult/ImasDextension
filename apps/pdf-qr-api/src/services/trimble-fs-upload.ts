@@ -56,6 +56,9 @@ function collectHttpUrlsFromObject(root: Record<string, unknown>): string[] {
 	return [...out];
 }
 
+/**
+ * @param existingFileId When set, upload a new version of that file (parentType=FILE). Otherwise create/upload under folder (FOLDER).
+ */
 export async function uploadFileToTrimbleFolder(
 	hosts: string[],
 	accessToken: string,
@@ -64,9 +67,15 @@ export async function uploadFileToTrimbleFolder(
 	fileName: string,
 	fileBytes: Uint8Array,
 	contentType: string,
+	existingFileId?: string,
 ): Promise<string> {
 	let lastError: unknown;
 	const attempts: string[] = [];
+	const folderQuery = `parentId=${encodeURIComponent(parentFolderId)}&parentType=FOLDER&projectId=${encodeURIComponent(projectId)}`;
+	const fileVersionQuery = existingFileId
+		? `parentId=${encodeURIComponent(existingFileId)}&parentType=FILE&projectId=${encodeURIComponent(projectId)}`
+		: null;
+
 	for (const host of hosts) {
 		try {
 			for (const fsPath of [
@@ -74,9 +83,13 @@ export async function uploadFileToTrimbleFolder(
 				"/tc/api/2.0/files/fs/upload",
 				"/tc/api/files/fs/upload",
 			]) {
+				const query =
+					fileVersionQuery !== null
+						? fileVersionQuery
+						: folderQuery;
 				attempts.push(`fs_upload_init @ ${host}${fsPath}`);
 				const initRes = await fetch(
-					`${host}${fsPath}?parentId=${encodeURIComponent(parentFolderId)}&parentType=FOLDER&projectId=${encodeURIComponent(projectId)}`,
+					`${host}${fsPath}?${query}`,
 					{
 						method: "POST",
 						headers: {
@@ -204,12 +217,21 @@ export async function uploadFileToTrimbleFolder(
 			);
 		}
 
-		for (const path of [
-			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
-			`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
-			`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
-			`/tc/api/2.1/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
-		]) {
+		const legacyPaths = existingFileId
+			? [
+					`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(existingFileId)}&parentType=FILE`,
+					`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(existingFileId)}&parentType=FILE`,
+					`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(existingFileId)}&parentType=FILE`,
+					`/tc/api/2.1/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(existingFileId)}&parentType=FILE`,
+				]
+			: [
+					`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
+					`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
+					`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
+					`/tc/api/2.1/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
+				];
+		const legacyParentId = existingFileId ?? parentFolderId;
+		for (const path of legacyPaths) {
 			try {
 				attempts.push(`legacy_upload @ ${host}${path}`);
 				const fd = new FormData();
@@ -223,7 +245,8 @@ export async function uploadFileToTrimbleFolder(
 					fileName,
 				);
 				fd.append("name", fileName);
-				fd.append("parentId", parentFolderId);
+				fd.append("parentId", legacyParentId);
+				if (existingFileId) fd.append("parentType", "FILE");
 				fd.append("projectId", projectId);
 				const res = await fetch(`${host}${path}`, {
 					method: "POST",
