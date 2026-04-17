@@ -227,6 +227,7 @@ async function ensureSubfolder(
 type ResolvedTrimbleFile = {
 	fileId: string;
 	downloadUrls: string[];
+	versionId?: string;
 };
 
 function collectDownloadUrlsFromObject(
@@ -285,6 +286,7 @@ async function resolveTrimbleFile(
 	return {
 		fileId,
 		downloadUrls: collectDownloadUrlsFromObject(raw),
+		versionId: String(raw.versionId ?? (raw.file as Record<string, unknown> | undefined)?.versionId ?? ""),
 	};
 }
 
@@ -301,6 +303,23 @@ async function downloadPdfFromTrimble(
 		fileId,
 	);
 	const canonicalId = resolved.fileId || fileId;
+	const signedUrlRes = await trimbleFetch(
+		hosts,
+		[
+			`/tc/api/2.1/files/fs/${encodeURIComponent(canonicalId)}/downloadurl?projectId=${encodeURIComponent(projectId)}${resolved.versionId ? `&versionId=${encodeURIComponent(resolved.versionId)}` : ""}`,
+			`/tc/api/2.0/files/fs/${encodeURIComponent(canonicalId)}/downloadurl?projectId=${encodeURIComponent(projectId)}${resolved.versionId ? `&versionId=${encodeURIComponent(resolved.versionId)}` : ""}`,
+		],
+		accessToken,
+		undefined,
+		{ expectJson: true },
+	);
+	const signedJson = (await signedUrlRes.json()) as Record<string, unknown>;
+	const signedUrl = String(
+		signedJson.downloadUrl ??
+			signedJson.url ??
+			(signedJson.data as Record<string, unknown> | undefined)?.downloadUrl ??
+			"",
+	).trim();
 	const paths = [
 		`/tc/api/2.0/files/${encodeURIComponent(canonicalId)}/download?projectId=${encodeURIComponent(projectId)}`,
 		`/tc/api/2.1/files/${encodeURIComponent(canonicalId)}/download?projectId=${encodeURIComponent(projectId)}`,
@@ -312,6 +331,7 @@ async function downloadPdfFromTrimble(
 		`/tc/api/2.1/files/${encodeURIComponent(canonicalId)}/download`,
 	];
 	const urls = [
+		...(signedUrl ? [signedUrl] : []),
 		...resolved.downloadUrls,
 		...hosts.flatMap((h) => paths.map((p) => `${h}${p}`)),
 	];
@@ -385,6 +405,75 @@ async function uploadPdfToTrimble(
 ): Promise<string> {
 	let lastError: unknown;
 	for (const host of hosts) {
+		try {
+			const initRes = await fetch(
+				`${host}/tc/api/2.1/files/fs/upload?parentId=${encodeURIComponent(parentFolderId)}&parentType=FOLDER`,
+				{
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${accessToken}`,
+						Accept: "application/json",
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({ name: fileName }),
+				},
+			);
+			if (initRes.ok) {
+				const ctype = (initRes.headers.get("content-type") || "").toLowerCase();
+				if (ctype.includes("application/json")) {
+					const initJson = (await initRes.json()) as Record<string, unknown>;
+					const uploadUrl = String(
+						initJson.uploadUrl ??
+							initJson.uploadURL ??
+							(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
+								?.uploadUrl ??
+							(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
+								?.uploadURL ??
+							"",
+					);
+					const uploadId = String(initJson.uploadId ?? "");
+					if (uploadUrl) {
+						const arrBuf = pdfBytes.buffer.slice(
+							pdfBytes.byteOffset,
+							pdfBytes.byteOffset + pdfBytes.byteLength,
+						) as ArrayBuffer;
+						const putRes = await fetch(uploadUrl, {
+							method: "PUT",
+							headers: { "Content-Type": "application/pdf" },
+							body: new Blob([arrBuf], { type: "application/pdf" }),
+						});
+						if (putRes.ok) {
+							if (uploadId) {
+								const detailsRes = await fetch(
+									`${host}/tc/api/2.1/files/fs/upload?uploadId=${encodeURIComponent(uploadId)}&wait=true`,
+									{
+										headers: {
+											Authorization: `Bearer ${accessToken}`,
+											Accept: "application/json",
+										},
+									},
+								);
+								if (detailsRes.ok) {
+									const details = (await detailsRes.json()) as Record<string, unknown>;
+									const uploadedId = String(
+										details.fileId ??
+											details.id ??
+											(details.file as Record<string, unknown> | undefined)?.id ??
+											"",
+									);
+									if (uploadedId) return uploadedId;
+								}
+							}
+						} else {
+							lastError = new Error(`HTTP ${putRes.status} at ${uploadUrl}`);
+						}
+					}
+				}
+			}
+		} catch (e) {
+			lastError = e;
+		}
+
 		for (const path of [
 			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
 			`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
