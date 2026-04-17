@@ -32,9 +32,16 @@ const errorHandlerPlugin: FastifyPluginAsync = async (app) => {
 			}
 
 			if (isServerError) {
+				const routeUrl = request.routeOptions?.url ?? request.url;
+				const trimbleIntegration =
+					/\/integrations\/trimble\//.test(routeUrl);
+				const message =
+					trimbleIntegration && err instanceof Error
+						? err.message
+						: "An unexpected error occurred";
 				return reply.status(statusCode).send({
 					error: "internal_error",
-					message: "An unexpected error occurred",
+					message,
 				});
 			}
 

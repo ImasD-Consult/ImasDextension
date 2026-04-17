@@ -276,7 +276,11 @@ export function registerPostVersionUpload(rawApp: FastifyInstance): void {
 				});
 			} catch (err) {
 				const message =
-					err instanceof Error ? err.message : "Version upload failed";
+					err instanceof Error
+						? err.message
+						: typeof err === "string"
+							? err
+							: "Version upload failed";
 				request.log.warn({ err }, "version_upload_failed");
 				return reply.status(502).send({
 					error: "trimble_upload_failed",

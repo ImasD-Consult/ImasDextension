@@ -9,6 +9,8 @@ type IndexedFile = {
 	versionId?: string;
 	name: string;
 	parentId: string;
+	/** Display name of the folder containing this file (for disambiguating same names). */
+	parentFolderName: string;
 };
 
 type UploadResult = {
@@ -83,11 +85,10 @@ function escapeHtmlAttr(s: string): string {
 		.replace(/"/g, "&quot;");
 }
 
-/** Same display name can exist in different folders — show parent id tail so the user picks the right file. */
+/** Same file name can exist in different folders — show parent folder name so the user picks the right file. */
 function matchOptionLabel(match: IndexedFile): string {
-	const tail =
-		match.parentId.length > 10 ? `…${match.parentId.slice(-8)}` : match.parentId;
-	return `${match.name} · ${tail}`;
+	const folder = match.parentFolderName?.trim() || "Folder";
+	return `${match.name} · ${folder}`;
 }
 
 function similarityScore(localName: string, tcName: string): number {
@@ -123,6 +124,8 @@ async function indexProjectFiles(
 	const queue: string[] = [rootId];
 	const visited = new Set<string>();
 	const files: IndexedFile[] = [];
+	const folderDisplayName = new Map<string, string>();
+	folderDisplayName.set(rootId, "Project");
 	let scanned = 0;
 
 	while (queue.length > 0 && scanned < MAX_FOLDERS_TO_SCAN) {
@@ -136,7 +139,11 @@ async function indexProjectFiles(
 			const id = pickId(item);
 			const isFolder = item.type?.toUpperCase() === "FOLDER";
 			if (isFolder) {
-				if (id) queue.push(id);
+				if (id) {
+					queue.push(id);
+					const label = item.name?.trim();
+					folderDisplayName.set(id, label && label.length > 0 ? label : "Folder");
+				}
 				continue;
 			}
 			if (!id || !item.name) continue;
@@ -145,6 +152,7 @@ async function indexProjectFiles(
 				versionId: item.versionId,
 				name: item.name,
 				parentId: folderId,
+				parentFolderName: folderDisplayName.get(folderId) ?? "Folder",
 			});
 		}
 	}
@@ -187,7 +195,16 @@ async function uploadAsVersionName(
 	});
 	if (!res.ok) {
 		const text = await res.text();
-		throw new Error(`Backend upload failed: ${res.status} ${text}`);
+		let detail = text;
+		try {
+			const j = JSON.parse(text) as { message?: string; error?: string };
+			if (typeof j.message === "string" && j.message.trim()) {
+				detail = j.message.trim();
+			}
+		} catch {
+			// use raw text
+		}
+		throw new Error(`Backend upload failed: ${res.status} ${detail}`);
 	}
 	const json = (await res.json()) as {
 		fileId?: string;
