@@ -1,4 +1,5 @@
 import {
+	TRIMBLE_REGIONS,
 	TrimbleClient,
 	type TrimbleFolderItem,
 	type WorkspaceApi,
@@ -90,6 +91,62 @@ function getAuthHeaders(token: string): HeadersInit {
 	};
 }
 
+type SmartprintProWindow = Window & {
+	__SMARTPRINT_PRO__?: {
+		TRIMBLE_CONNECT_ORIGIN?: string;
+	};
+};
+
+function getRuntimeTrimbleConnectOrigin(): string | undefined {
+	if (typeof window === "undefined") return undefined;
+	const origin = (window as SmartprintProWindow).__SMARTPRINT_PRO__?.TRIMBLE_CONNECT_ORIGIN?.trim();
+	return origin ? origin.replace(/\/$/, "") : undefined;
+}
+
+function getConnectTrimbleBaseUrls(): string[] {
+	const bases = new Set<string>();
+
+	const runtime = getRuntimeTrimbleConnectOrigin();
+	if (runtime) bases.add(runtime);
+
+	const env = (
+		import.meta as ImportMeta & {
+			env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string };
+		}
+	).env?.VITE_TRIMBLE_CONNECT_ORIGIN;
+	if (env?.trim()) bases.add(env.replace(/\/$/, ""));
+
+	if (typeof window !== "undefined" && window.location.ancestorOrigins?.length) {
+		for (let i = 0; i < window.location.ancestorOrigins.length; i += 1) {
+			try {
+				const { origin, hostname } = new URL(window.location.ancestorOrigins[i]);
+				if (/connect\.trimble\.com$/i.test(hostname)) {
+					bases.add(origin);
+				}
+			} catch {
+				// Ignore malformed ancestor URL.
+			}
+		}
+	}
+
+	if (typeof document !== "undefined" && document.referrer) {
+		try {
+			const { origin, hostname } = new URL(document.referrer);
+			if (/connect\.trimble\.com$/i.test(hostname)) {
+				bases.add(origin);
+			}
+		} catch {
+			// Ignore malformed referrer.
+		}
+	}
+
+	for (const region of Object.values(TRIMBLE_REGIONS)) {
+		bases.add(region.host);
+	}
+
+	return [...bases];
+}
+
 function pickId(item: TrimbleFolderItem): string {
 	return item.id || item.versionId || "";
 }
@@ -158,7 +215,7 @@ async function uploadAsVersionName(
 		return formData;
 	};
 
-	const uploadEndpoints = [
+	const relativePaths = [
 		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
 		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
 		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/folders/${encodeURIComponent(parentFolderId)}/files`,
@@ -168,6 +225,25 @@ async function uploadAsVersionName(
 		"/tc/api/2.0/files",
 		"/tc/api/2.1/files",
 	];
+	const uploadEndpoints: string[] = [];
+	const seen = new Set<string>();
+
+	for (const base of getConnectTrimbleBaseUrls()) {
+		for (const path of relativePaths) {
+			const absolute = `${base}${path}`;
+			if (!seen.has(absolute)) {
+				seen.add(absolute);
+				uploadEndpoints.push(absolute);
+			}
+		}
+	}
+	for (const path of relativePaths) {
+		if (!seen.has(path)) {
+			seen.add(path);
+			uploadEndpoints.push(path);
+		}
+	}
+
 	const attemptErrors: string[] = [];
 
 	for (const endpoint of uploadEndpoints) {
