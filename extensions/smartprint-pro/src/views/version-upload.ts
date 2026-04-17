@@ -1,5 +1,4 @@
 import {
-	TRIMBLE_REGIONS,
 	TrimbleClient,
 	type TrimbleFolderItem,
 	type WorkspaceApi,
@@ -40,6 +39,7 @@ type VersionRow = {
 
 const MAX_FOLDERS_TO_SCAN = 3500;
 const MAX_CANDIDATES_TO_SHOW = 30;
+const DEFAULT_BACKEND_BASE = "https://stamp.imasd.dev";
 
 function normalizeBaseName(name: string): string {
 	return name
@@ -84,13 +84,6 @@ function similarityScore(localName: string, tcName: string): number {
 	return diceCoefficient(localNorm, remoteNorm) + extBoost + stemContainment;
 }
 
-function getAuthHeaders(token: string): HeadersInit {
-	return {
-		Authorization: `Bearer ${token}`,
-		Accept: "application/json",
-	};
-}
-
 type SmartprintProWindow = Window & {
 	__SMARTPRINT_PRO__?: {
 		TRIMBLE_CONNECT_ORIGIN?: string;
@@ -103,60 +96,8 @@ function getRuntimeTrimbleConnectOrigin(): string | undefined {
 	return origin ? origin.replace(/\/$/, "") : undefined;
 }
 
-function getConnectTrimbleBaseUrls(): string[] {
-	const bases = new Set<string>();
-
-	const runtime = getRuntimeTrimbleConnectOrigin();
-	if (runtime) bases.add(runtime);
-
-	const env = (
-		import.meta as ImportMeta & {
-			env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string };
-		}
-	).env?.VITE_TRIMBLE_CONNECT_ORIGIN;
-	if (env?.trim()) bases.add(env.replace(/\/$/, ""));
-
-	if (typeof window !== "undefined" && window.location.ancestorOrigins?.length) {
-		for (let i = 0; i < window.location.ancestorOrigins.length; i += 1) {
-			try {
-				const { origin, hostname } = new URL(window.location.ancestorOrigins[i]);
-				if (/connect\.trimble\.com$/i.test(hostname)) {
-					bases.add(origin);
-				}
-			} catch {
-				// Ignore malformed ancestor URL.
-			}
-		}
-	}
-
-	if (typeof document !== "undefined" && document.referrer) {
-		try {
-			const { origin, hostname } = new URL(document.referrer);
-			if (/connect\.trimble\.com$/i.test(hostname)) {
-				bases.add(origin);
-			}
-		} catch {
-			// Ignore malformed referrer.
-		}
-	}
-
-	for (const region of Object.values(TRIMBLE_REGIONS)) {
-		bases.add(region.host);
-	}
-
-	return [...bases];
-}
-
 function pickId(item: TrimbleFolderItem): string {
 	return item.id || item.versionId || "";
-}
-
-function extractOriginalName(description: string | undefined): string {
-	if (!description) return "";
-	const marker = "[smartprint-original-name]";
-	const idx = description.toLowerCase().indexOf(marker.toLowerCase());
-	if (idx < 0) return "";
-	return description.slice(idx + marker.length).trim();
 }
 
 async function indexProjectFiles(
@@ -201,212 +142,49 @@ async function uploadAsVersionName(
 	parentFolderId: string,
 	targetName: string,
 	localFile: File,
-): Promise<UploadResult> {
-	const renamedFile = new File([localFile], targetName, {
-		type: localFile.type || "application/octet-stream",
-		lastModified: localFile.lastModified,
+): Promise<{
+	result: UploadResult;
+	metadataSaved: boolean;
+	versions: VersionRow[];
+}> {
+	const backendBase =
+		(
+			import.meta as ImportMeta & {
+				env?: { VITE_BATCH_QR_API_BASE?: string };
+			}
+		).env?.VITE_BATCH_QR_API_BASE?.trim() || DEFAULT_BACKEND_BASE;
+	const url = `${backendBase.replace(/\/+$/, "")}/v1/integrations/trimble/version-upload`;
+	const body = new FormData();
+	body.append("file", localFile, localFile.name);
+	body.append("access_token", token);
+	body.append("project_id", projectId);
+	body.append("parent_folder_id", parentFolderId);
+	body.append("target_name", targetName);
+	body.append("original_name", localFile.name);
+	body.append("connect_origin", getRuntimeTrimbleConnectOrigin() ?? "");
+
+	const res = await fetch(url, {
+		method: "POST",
+		body,
 	});
-	const buildFormData = (): FormData => {
-		const formData = new FormData();
-		formData.append("file", renamedFile, targetName);
-		formData.append("name", targetName);
-		formData.append("parentId", parentFolderId);
-		formData.append("projectId", projectId);
-		return formData;
+	if (!res.ok) {
+		const text = await res.text();
+		throw new Error(`Backend upload failed: ${res.status} ${text}`);
+	}
+	const json = (await res.json()) as {
+		fileId?: string;
+		versionId?: string;
+		metadataSaved?: boolean;
+		versions?: VersionRow[];
 	};
-
-	const relativePaths = [
-		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
-		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
-		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/folders/${encodeURIComponent(parentFolderId)}/files`,
-		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/folders/${encodeURIComponent(parentFolderId)}/files`,
-		`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
-		`/tc/api/2.1/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
-		"/tc/api/2.0/files",
-		"/tc/api/2.1/files",
-	];
-	const uploadEndpoints: string[] = [];
-	const seen = new Set<string>();
-
-	for (const base of getConnectTrimbleBaseUrls()) {
-		for (const path of relativePaths) {
-			const absolute = `${base}${path}`;
-			if (!seen.has(absolute)) {
-				seen.add(absolute);
-				uploadEndpoints.push(absolute);
-			}
-		}
+	if (!json.fileId) {
+		throw new Error("Backend upload succeeded but returned no fileId.");
 	}
-	for (const path of relativePaths) {
-		if (!seen.has(path)) {
-			seen.add(path);
-			uploadEndpoints.push(path);
-		}
-	}
-
-	const attemptErrors: string[] = [];
-	let fetchFailureCount = 0;
-
-	for (const endpoint of uploadEndpoints) {
-		try {
-			const res = await fetch(endpoint, {
-				method: "POST",
-				headers: getAuthHeaders(token),
-				body: buildFormData(),
-			});
-			if (!res.ok) {
-				attemptErrors.push(`${res.status} at ${endpoint}`);
-				continue;
-			}
-			const raw = (await res.json()) as Record<string, unknown>;
-			const fileId =
-				typeof raw.id === "string"
-					? raw.id
-					: typeof raw.fileId === "string"
-						? raw.fileId
-						: "";
-			const versionId =
-				typeof raw.versionId === "string" ? raw.versionId : undefined;
-			if (!fileId) {
-				attemptErrors.push(`missing file id at ${endpoint}`);
-				continue;
-			}
-			return { fileId, versionId };
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				error.message.toLowerCase().includes("failed to fetch")
-			) {
-				fetchFailureCount += 1;
-			}
-			attemptErrors.push(
-				`${error instanceof Error ? error.message : "request failed"} at ${endpoint}`,
-			);
-		}
-	}
-
-	if (fetchFailureCount > 0 && fetchFailureCount === uploadEndpoints.length) {
-		throw new Error(
-			"Upload blocked by browser/network policy (all attempts returned 'Failed to fetch'). " +
-				"This is usually cross-origin/CORS or CSP from extension host. " +
-				"Trimble version sequence is not the issue.",
-		);
-	}
-
-	throw new Error(
-		`Upload failed on all endpoints. Attempts: ${attemptErrors.join(" | ")}`,
-	);
-}
-
-async function saveOriginalNameMetadata(
-	token: string,
-	fileId: string,
-	originalName: string,
-): Promise<void> {
-	const payload = {
-		description: `[smartprint-original-name] ${originalName}`,
+	return {
+		result: { fileId: json.fileId, versionId: json.versionId },
+		metadataSaved: Boolean(json.metadataSaved),
+		versions: Array.isArray(json.versions) ? json.versions : [],
 	};
-	const endpoints = [
-		`/tc/api/2.0/files/${encodeURIComponent(fileId)}`,
-		`/tc/api/2.1/files/${encodeURIComponent(fileId)}`,
-	];
-	for (const endpoint of endpoints) {
-		for (const method of ["PATCH", "PUT"] as const) {
-			try {
-				const res = await fetch(endpoint, {
-					method,
-					headers: {
-						...getAuthHeaders(token),
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify(payload),
-				});
-				if (res.ok) return;
-			} catch {
-				// Continue trying fallback endpoint/method.
-			}
-		}
-	}
-	throw new Error(
-		"Could not persist original filename metadata in file description.",
-	);
-}
-
-async function fetchVersionRows(
-	token: string,
-	projectId: string,
-	match: IndexedFile,
-	client: TrimbleClient,
-): Promise<VersionRow[]> {
-	const endpoints = [
-		`/tc/api/2.0/files/${encodeURIComponent(match.id)}/versions?projectId=${encodeURIComponent(projectId)}`,
-		`/tc/api/2.1/files/${encodeURIComponent(match.id)}/versions?projectId=${encodeURIComponent(projectId)}`,
-	];
-	for (const endpoint of endpoints) {
-		try {
-			const res = await fetch(endpoint, {
-				headers: getAuthHeaders(token),
-			});
-			if (!res.ok) continue;
-			const payload = (await res.json()) as Record<string, unknown>;
-			const itemsRaw =
-				(payload.items as unknown[] | undefined) ??
-				(payload.versions as unknown[] | undefined) ??
-				(Array.isArray(payload) ? payload : []);
-			if (!Array.isArray(itemsRaw) || itemsRaw.length === 0) continue;
-			const rows: VersionRow[] = itemsRaw
-				.map((raw) => raw as Record<string, unknown>)
-				.map((raw) => {
-					const description =
-						typeof raw.description === "string" ? raw.description : undefined;
-					return {
-						fileId:
-							typeof raw.fileId === "string"
-								? raw.fileId
-								: typeof raw.id === "string"
-									? raw.id
-									: "",
-						versionId:
-							typeof raw.versionId === "string"
-								? raw.versionId
-								: typeof raw.id === "string"
-									? raw.id
-									: undefined,
-						name: typeof raw.name === "string" ? raw.name : match.name,
-						description,
-						updatedAt:
-							typeof raw.updatedAt === "string"
-								? raw.updatedAt
-								: typeof raw.modifiedAt === "string"
-									? raw.modifiedAt
-									: undefined,
-						originalName: extractOriginalName(description),
-					};
-				})
-				.filter((row) => row.fileId);
-			if (rows.length > 0) return rows;
-		} catch {
-			// Keep trying fallbacks.
-		}
-	}
-
-	const fallbackItems = await client.listFolderItems(match.parentId, projectId);
-	const fallback = (fallbackItems ?? []).find(
-		(item) =>
-			item.type?.toUpperCase() !== "FOLDER" &&
-			item.name?.toLowerCase() === match.name.toLowerCase(),
-	);
-	if (!fallback) return [];
-	return [
-		{
-			fileId: fallback.id || fallback.versionId || "",
-			versionId: fallback.versionId,
-			name: fallback.name ?? match.name,
-			description: undefined,
-			updatedAt: undefined,
-			originalName: "",
-		},
-	].filter((row) => row.fileId);
 }
 
 export async function renderVersionUploadPanel(
@@ -724,28 +502,18 @@ export async function renderVersionUploadPanel(
 			refreshButton.disabled = true;
 			status.textContent = `Uploading "${state.selectedLocalFile.name}" as "${match.name}"...`;
 			try {
-				const result = await uploadAsVersionName(
+				const upload = await uploadAsVersionName(
 					project.id,
 					token,
 					match.parentId,
 					match.name,
 					state.selectedLocalFile,
 				);
-				try {
-					await saveOriginalNameMetadata(
-						token,
-						result.fileId,
-						state.selectedLocalFile.name,
-					);
-					state.lastUploadMessage =
-						"Original local name saved in file description metadata.";
-				} catch (metaError) {
-					const m =
-						metaError instanceof Error ? metaError.message : "Metadata update failed.";
-					state.lastUploadMessage = `Uploaded, but metadata warning: ${m}`;
-				}
+				state.lastUploadMessage = upload.metadataSaved
+					? "Original local name saved in file description metadata."
+					: "Uploaded, but metadata could not be saved.";
 				status.textContent = `Upload complete. Trimble name "${match.name}" kept for versioning.`;
-				state.versionRows = await fetchVersionRows(token, project.id, match, client);
+				state.versionRows = upload.versions;
 				renderVersionTable();
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "Upload failed.";
