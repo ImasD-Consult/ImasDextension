@@ -2,6 +2,7 @@ import type { MultipartFile } from "@fastify/multipart";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
+import { fetchWithTimeout } from "../../lib/fetch-with-timeout";
 import { buildTrimbleHosts, uploadFileToTrimbleFolder } from "../../services/trimble-fs-upload";
 import {
 	resolveHostsByFolderProbe,
@@ -10,6 +11,8 @@ import {
 
 /** Cloudflare/proxies often cut off the origin around ~100s; keep version list fetch bounded. */
 const VERSION_LIST_MAX_MS = 12_000;
+const METADATA_FETCH_MS = 8_000;
+const VERSIONS_FETCH_MS = 10_000;
 
 type VersionRow = {
 	fileId: string;
@@ -111,15 +114,19 @@ async function trySaveMetadata(
 		]) {
 			for (const method of ["PATCH", "PUT"] as const) {
 				try {
-					const res = await fetch(`${host}${path}`, {
-						method,
-						headers: {
-							Authorization: `Bearer ${accessToken}`,
-							Accept: "application/json",
-							"Content-Type": "application/json",
+					const res = await fetchWithTimeout(
+						`${host}${path}`,
+						{
+							method,
+							headers: {
+								Authorization: `Bearer ${accessToken}`,
+								Accept: "application/json",
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify(payload),
 						},
-						body: JSON.stringify(payload),
-					});
+						METADATA_FETCH_MS,
+					);
 					if (res.ok) return true;
 				} catch {
 					// Try next option.
@@ -142,9 +149,16 @@ async function tryLoadVersions(
 			`/tc/api/2.1/files/${encodeURIComponent(fileId)}/versions?projectId=${encodeURIComponent(projectId)}`,
 		]) {
 			try {
-				const res = await fetch(`${host}${path}`, {
-					headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-				});
+				const res = await fetchWithTimeout(
+					`${host}${path}`,
+					{
+						headers: {
+							Authorization: `Bearer ${accessToken}`,
+							Accept: "application/json",
+						},
+					},
+					VERSIONS_FETCH_MS,
+				);
 				if (!res.ok) continue;
 				const raw = (await res.json()) as Record<string, unknown>;
 				const items =

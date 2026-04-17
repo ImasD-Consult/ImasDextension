@@ -3,6 +3,14 @@
  * Shared by batch QR and version-history upload so behavior stays aligned.
  */
 
+import { fetchWithTimeout } from "../lib/fetch-with-timeout";
+
+/** Keep under reverse-proxy / Cloudflare origin ceilings; `wait=true` can otherwise hang minutes. */
+const FS_INIT_MS = 25_000;
+const FS_PUT_MS = 90_000;
+const FS_STATUS_WAIT_MS = 50_000;
+const LEGACY_UPLOAD_MS = 90_000;
+
 const DEFAULT_TRIMBLE_HOSTS = [
 	"https://app.connect.trimble.com",
 	"https://app21.connect.trimble.com",
@@ -88,7 +96,7 @@ export async function uploadFileToTrimbleFolder(
 						? fileVersionQuery
 						: folderQuery;
 				attempts.push(`fs_upload_init @ ${host}${fsPath}`);
-				const initRes = await fetch(
+				const initRes = await fetchWithTimeout(
 					`${host}${fsPath}?${query}`,
 					{
 						method: "POST",
@@ -99,6 +107,7 @@ export async function uploadFileToTrimbleFolder(
 						},
 						body: JSON.stringify({ name: fileName }),
 					},
+					FS_INIT_MS,
 				);
 				if (initRes.ok) {
 					const ctype = (initRes.headers.get("content-type") || "").toLowerCase();
@@ -136,14 +145,18 @@ export async function uploadFileToTrimbleFolder(
 								fileBytes.byteOffset,
 								fileBytes.byteOffset + fileBytes.byteLength,
 							) as ArrayBuffer;
-							const putRes = await fetch(uploadUrl, {
-								method: "PUT",
-								body: new Blob([arrBuf], { type: contentType }),
-							});
+							const putRes = await fetchWithTimeout(
+								uploadUrl,
+								{
+									method: "PUT",
+									body: new Blob([arrBuf], { type: contentType }),
+								},
+								FS_PUT_MS,
+							);
 							if (putRes.ok) {
 								if (uploadId) {
 									attempts.push(`fs_upload_status @ ${host}${fsPath} uploadId=${uploadId}`);
-									const detailsRes = await fetch(
+									const detailsRes = await fetchWithTimeout(
 										`${host}${fsPath}?uploadId=${encodeURIComponent(uploadId)}&wait=true`,
 										{
 											headers: {
@@ -151,6 +164,7 @@ export async function uploadFileToTrimbleFolder(
 												Accept: "application/json",
 											},
 										},
+										FS_STATUS_WAIT_MS,
 									);
 									if (detailsRes.ok) {
 										const details = (await detailsRes.json()) as Record<string, unknown>;
@@ -248,11 +262,15 @@ export async function uploadFileToTrimbleFolder(
 				fd.append("parentId", legacyParentId);
 				if (existingFileId) fd.append("parentType", "FILE");
 				fd.append("projectId", projectId);
-				const res = await fetch(`${host}${path}`, {
-					method: "POST",
-					headers: { Authorization: `Bearer ${accessToken}` },
-					body: fd,
-				});
+				const res = await fetchWithTimeout(
+					`${host}${path}`,
+					{
+						method: "POST",
+						headers: { Authorization: `Bearer ${accessToken}` },
+						body: fd,
+					},
+					LEGACY_UPLOAD_MS,
+				);
 				if (!res.ok) {
 					lastError = new Error(`HTTP ${res.status} at ${host}${path}`);
 					attempts.push(`legacy_upload_http_${res.status} @ ${host}${path}`);
