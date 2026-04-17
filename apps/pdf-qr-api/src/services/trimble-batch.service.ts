@@ -62,6 +62,7 @@ async function trimbleFetch(
 	paths: string[],
 	accessToken: string,
 	init?: RequestInit,
+	opts?: { expectJson?: boolean },
 ): Promise<Response> {
 	const urls = hosts.flatMap((h) => paths.map((p) => `${h}${p}`));
 	let lastError: unknown;
@@ -75,7 +76,18 @@ async function trimbleFetch(
 					...(init?.headers ?? {}),
 				},
 			});
-			if (res.ok) return res;
+			if (res.ok) {
+				if (opts?.expectJson) {
+					const ctype = (res.headers.get("content-type") || "").toLowerCase();
+					if (!ctype.includes("application/json")) {
+						lastError = new Error(
+							`Unexpected content-type "${ctype}" at ${url} (expected JSON)`,
+						);
+						continue;
+					}
+				}
+				return res;
+			}
 			lastError = new Error(`HTTP ${res.status} at ${url}`);
 		} catch (e) {
 			lastError = e;
@@ -100,6 +112,8 @@ async function ensureSubfolder(
 			`/tc/api/2.1/folders/${encodeURIComponent(parentFolderId)}/items?projectId=${encodeURIComponent(projectId)}`,
 		],
 		accessToken,
+		undefined,
+		{ expectJson: true },
 	);
 	const listJson = (await listRes.json()) as Record<string, unknown>;
 	const items =
@@ -133,6 +147,7 @@ async function ensureSubfolder(
 			headers: { "Content-Type": "application/json" },
 			body,
 		},
+		{ expectJson: true },
 	);
 	const raw = (await createRes.json()) as Record<string, unknown>;
 	const folderId = String(raw.id ?? raw.versionId ?? "");
@@ -199,6 +214,13 @@ async function uploadPdfToTrimble(
 				});
 				if (!res.ok) {
 					lastError = new Error(`HTTP ${res.status} at ${host}${path}`);
+					continue;
+				}
+				const ctype = (res.headers.get("content-type") || "").toLowerCase();
+				if (!ctype.includes("application/json")) {
+					lastError = new Error(
+						`Unexpected content-type "${ctype}" at ${host}${path} (expected JSON)`,
+					);
 					continue;
 				}
 				const raw = (await res.json()) as Record<string, unknown>;
