@@ -150,8 +150,13 @@ async function downloadPdfFromTrimble(
 		hosts,
 		[
 			`/tc/api/2.0/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
+			`/tc/api/2.1/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
 			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download`,
+			`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download`,
+			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
+			`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
 			`/tc/api/2.0/files/${encodeURIComponent(fileId)}/download`,
+			`/tc/api/2.1/files/${encodeURIComponent(fileId)}/download`,
 		],
 		accessToken,
 		{ headers: { Accept: "application/pdf" } },

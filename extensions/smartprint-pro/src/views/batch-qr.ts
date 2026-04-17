@@ -360,6 +360,23 @@ export async function renderBatchQrPanel(
 			}
 		).env?.VITE_BATCH_QR_API_BASE?.trim() || DEFAULT_BACKEND_BASE;
 
+	const connectHost = (() => {
+		if (typeof document !== "undefined" && document.referrer) {
+			try {
+				const u = new URL(document.referrer);
+				if (/connect\.trimble\.com$/i.test(u.hostname)) return u.origin;
+			} catch {
+				/* ignore */
+			}
+		}
+		const v = (
+			import.meta as ImportMeta & {
+				env?: { VITE_TRIMBLE_CONNECT_ORIGIN?: string };
+			}
+		).env?.VITE_TRIMBLE_CONNECT_ORIGIN?.trim();
+		return v || undefined;
+	})();
+
 	type BackendBatchItem = {
 		pdfFileId: string;
 		pdfFileName: string;
@@ -410,6 +427,7 @@ export async function renderBatchQrPanel(
 					accessToken: token,
 					pdfParentFolderId: state.pdfFolderId,
 					outputSubfolderName: "QR",
+					host: connectHost,
 				},
 				stamp: {
 					baseUrl: "https://stamp.imasd.dev",
