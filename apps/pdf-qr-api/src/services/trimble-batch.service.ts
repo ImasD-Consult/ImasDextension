@@ -421,10 +421,14 @@ async function uploadPdfToTrimble(
 	const attempts: string[] = [];
 	for (const host of hosts) {
 		try {
-			for (const fsVersion of ["2.1", "2.0"]) {
-				attempts.push(`fs_upload_init @ ${host} v${fsVersion}`);
+			for (const fsPath of [
+				"/tc/api/2.1/files/fs/upload",
+				"/tc/api/2.0/files/fs/upload",
+				"/tc/api/files/fs/upload",
+			]) {
+				attempts.push(`fs_upload_init @ ${host}${fsPath}`);
 				const initRes = await fetch(
-					`${host}/tc/api/${fsVersion}/files/fs/upload?parentId=${encodeURIComponent(parentFolderId)}&parentType=FOLDER&projectId=${encodeURIComponent(projectId)}`,
+					`${host}${fsPath}?parentId=${encodeURIComponent(parentFolderId)}&parentType=FOLDER&projectId=${encodeURIComponent(projectId)}`,
 					{
 						method: "POST",
 						headers: {
@@ -439,13 +443,27 @@ async function uploadPdfToTrimble(
 					const ctype = (initRes.headers.get("content-type") || "").toLowerCase();
 					if (ctype.includes("application/json")) {
 						const initJson = (await initRes.json()) as Record<string, unknown>;
+						const uploadUrlsFromContents = (
+							(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
+								?.uploadUrls as string[] | undefined
+						)?.filter(Boolean);
+						const uploadUrlsTop = (
+							initJson.uploadUrls as string[] | undefined
+						)?.filter(Boolean);
 						const uploadUrl = String(
 							initJson.uploadUrl ??
 								initJson.uploadURL ??
+								uploadUrlsTop?.[0] ??
+								uploadUrlsFromContents?.[0] ??
 								(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
 									?.uploadUrl ??
 								(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
 									?.uploadURL ??
+								(initJson.data as Record<string, unknown> | undefined)?.uploadUrl ??
+								(
+									(initJson.data as Record<string, unknown> | undefined)
+										?.uploadUrls as string[] | undefined
+								)?.[0] ??
 								"",
 						);
 						const uploadId = String(initJson.uploadId ?? "");
@@ -462,9 +480,9 @@ async function uploadPdfToTrimble(
 							});
 							if (putRes.ok) {
 								if (uploadId) {
-									attempts.push(`fs_upload_status @ ${host} v${fsVersion} uploadId=${uploadId}`);
+									attempts.push(`fs_upload_status @ ${host}${fsPath} uploadId=${uploadId}`);
 									const detailsRes = await fetch(
-										`${host}/tc/api/${fsVersion}/files/fs/upload?uploadId=${encodeURIComponent(uploadId)}&wait=true`,
+										`${host}${fsPath}?uploadId=${encodeURIComponent(uploadId)}&wait=true`,
 										{
 											headers: {
 												Authorization: `Bearer ${accessToken}`,
@@ -481,11 +499,11 @@ async function uploadPdfToTrimble(
 												"",
 										);
 										if (uploadedId) return uploadedId;
-										attempts.push(`fs_upload_status_no_file_id @ ${host} v${fsVersion}`);
+										attempts.push(`fs_upload_status_no_file_id @ ${host}${fsPath}`);
 									}
 									if (!detailsRes.ok) {
 										attempts.push(
-											`fs_upload_status_http_${detailsRes.status} @ ${host} v${fsVersion}`,
+											`fs_upload_status_http_${detailsRes.status} @ ${host}${fsPath}`,
 										);
 									}
 								}
@@ -494,18 +512,22 @@ async function uploadPdfToTrimble(
 								attempts.push(`fs_upload_put_http_${putRes.status} @ ${uploadUrl}`);
 							}
 						}
-						if (!uploadUrl) attempts.push(`fs_upload_init_no_upload_url @ ${host} v${fsVersion}`);
+						if (!uploadUrl) {
+							attempts.push(
+								`fs_upload_init_no_upload_url @ ${host}${fsPath} keys=${Object.keys(initJson).join(",")}`,
+							);
+						}
 					}
 					if (!ctype.includes("application/json")) {
 						attempts.push(
-							`fs_upload_init_non_json_${ctype || "unknown"} @ ${host} v${fsVersion}`,
+							`fs_upload_init_non_json_${ctype || "unknown"} @ ${host}${fsPath}`,
 						);
 					}
 				} else {
 					lastError = new Error(
-						`HTTP ${initRes.status} at ${host}/tc/api/${fsVersion}/files/fs/upload`,
+						`HTTP ${initRes.status} at ${host}${fsPath}`,
 					);
-					attempts.push(`fs_upload_init_http_${initRes.status} @ ${host} v${fsVersion}`);
+					attempts.push(`fs_upload_init_http_${initRes.status} @ ${host}${fsPath}`);
 				}
 			}
 		} catch (e) {
@@ -633,9 +655,7 @@ export async function startTrimbleBatchJob(
 				input.trimble.outputSubfolderName,
 			);
 			const qrFolderId = qrFolder.folderId;
-			const uploadHosts = qrFolder.host
-				? [qrFolder.host, ...hosts.filter((h) => h !== qrFolder.host)]
-				: hosts;
+			const uploadHosts = qrFolder.host ? [qrFolder.host] : hosts;
 			app.log.info(
 				{
 					jobId,
