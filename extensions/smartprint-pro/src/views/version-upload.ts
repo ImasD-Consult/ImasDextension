@@ -9,8 +9,8 @@ type IndexedFile = {
 	versionId?: string;
 	name: string;
 	parentId: string;
-	/** Display name of the folder containing this file (for disambiguating same names). */
-	parentFolderName: string;
+	/** Breadcrumb from project root, e.g. "smartprintPRO / proc06 / pdf". */
+	parentFolderPath: string;
 };
 
 type UploadResult = {
@@ -85,10 +85,10 @@ function escapeHtmlAttr(s: string): string {
 		.replace(/"/g, "&quot;");
 }
 
-/** Same file name can exist in different folders — show parent folder name so the user picks the right file. */
+/** Same file name can exist under different paths — show full folder breadcrumb. */
 function matchOptionLabel(match: IndexedFile): string {
-	const folder = match.parentFolderName?.trim() || "Folder";
-	return `${match.name} · ${folder}`;
+	const path = match.parentFolderPath?.trim() || "Unknown folder";
+	return `${match.name} · ${path}`;
 }
 
 function similarityScore(localName: string, tcName: string): number {
@@ -124,8 +124,9 @@ async function indexProjectFiles(
 	const queue: string[] = [rootId];
 	const visited = new Set<string>();
 	const files: IndexedFile[] = [];
-	const folderDisplayName = new Map<string, string>();
-	folderDisplayName.set(rootId, "Project");
+	/** Path string for each folder id (segments joined with " / "), empty for project root. */
+	const folderBreadcrumb = new Map<string, string>();
+	folderBreadcrumb.set(rootId, "");
 	let scanned = 0;
 
 	while (queue.length > 0 && scanned < MAX_FOLDERS_TO_SCAN) {
@@ -133,6 +134,7 @@ async function indexProjectFiles(
 		if (!folderId || visited.has(folderId)) continue;
 		visited.add(folderId);
 		scanned += 1;
+		const parentPath = folderBreadcrumb.get(folderId) ?? "";
 		const items = await client.listFolderItems(folderId, projectId);
 		if (!items?.length) continue;
 		for (const item of items) {
@@ -141,18 +143,23 @@ async function indexProjectFiles(
 			if (isFolder) {
 				if (id) {
 					queue.push(id);
-					const label = item.name?.trim();
-					folderDisplayName.set(id, label && label.length > 0 ? label : "Folder");
+					const segment = item.name?.trim() || "Folder";
+					const childPath = parentPath
+						? `${parentPath} / ${segment}`
+						: segment;
+					folderBreadcrumb.set(id, childPath);
 				}
 				continue;
 			}
 			if (!id || !item.name) continue;
+			const parentFolderPath =
+				parentPath === "" ? "Project" : parentPath;
 			files.push({
 				id: item.id || id,
 				versionId: item.versionId,
 				name: item.name,
 				parentId: folderId,
-				parentFolderName: folderDisplayName.get(folderId) ?? "Folder",
+				parentFolderPath,
 			});
 		}
 	}
@@ -393,7 +400,7 @@ export async function renderVersionUploadPanel(
 		}
 		if (state.searchingMatches) {
 			matchArea.innerHTML = `
-        <p class="text-xs text-gray-700">Local file: <span class="font-medium">${localFile.name}</span></p>
+        <p class="text-xs text-gray-700">Local file: <span class="font-medium">${escapeHtmlAttr(localFile.name)}</span></p>
         <p class="text-[11px] text-gray-500 italic">Looking for similar files in project index...</p>
       `;
 			uploadButton.disabled = true;
@@ -401,7 +408,7 @@ export async function renderVersionUploadPanel(
 		}
 		if (!state.matches.length) {
 			matchArea.innerHTML = `
-        <p class="text-xs text-gray-700">Local file: <span class="font-medium">${localFile.name}</span></p>
+        <p class="text-xs text-gray-700">Local file: <span class="font-medium">${escapeHtmlAttr(localFile.name)}</span></p>
         <p class="text-[11px] text-red-600">No similar Trimble files were found. Refresh index or upload manually in Trimble.</p>
       `;
 			uploadButton.disabled = true;
@@ -411,12 +418,14 @@ export async function renderVersionUploadPanel(
 		const options = state.matches
 			.map((match) => {
 				const selected = match.id === state.selectedMatchId ? "selected" : "";
-				return `<option value="${escapeHtmlAttr(match.id)}" ${selected}>${escapeHtmlAttr(matchOptionLabel(match))}</option>`;
+				const label = matchOptionLabel(match);
+				const tip = `${match.name} — ${match.parentFolderPath?.trim() || "Unknown folder"}`;
+				return `<option value="${escapeHtmlAttr(match.id)}" title="${escapeHtmlAttr(tip)}" ${selected}>${escapeHtmlAttr(label)}</option>`;
 			})
 			.join("");
 
 		matchArea.innerHTML = `
-      <p class="text-xs text-gray-700">Local file: <span class="font-medium">${localFile.name}</span></p>
+      <p class="text-xs text-gray-700">Local file: <span class="font-medium">${escapeHtmlAttr(localFile.name)}</span></p>
       <div class="grid grid-cols-2 gap-2 items-center">
         <p class="text-[11px] text-gray-600">Upload as Trimble name:</p>
         <select
@@ -427,11 +436,12 @@ export async function renderVersionUploadPanel(
         </select>
       </div>
       <p class="text-[11px] text-gray-500">
+        Each option shows the folder path from the project root (breadcrumb), so identical names like <span class="font-mono">pdf</span> under different branches stay distinct.
         The file is uploaded with the selected name (version chain kept). Original local name is saved in description metadata.
       </p>
       ${
 				state.lastUploadMessage
-					? `<p class="text-[11px] text-gray-600">${state.lastUploadMessage}</p>`
+					? `<p class="text-[11px] text-gray-600">${escapeHtmlAttr(state.lastUploadMessage)}</p>`
 					: ""
 			}
     `;
@@ -479,7 +489,6 @@ export async function renderVersionUploadPanel(
 		state.matchSearchSeq = seq;
 		state.searchingMatches = true;
 		renderMatchArea();
-		status.textContent = `Looking for matches for "${file.name}"...`;
 		void (async () => {
 			await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
 			const matches = buildMatchesFor(file);
@@ -488,11 +497,6 @@ export async function renderVersionUploadPanel(
 			state.selectedMatchId = matches[0]?.id ?? "";
 			state.searchingMatches = false;
 			renderMatchArea();
-			if (matches.length > 0) {
-				status.textContent = `${matches.length} similar files found. Confirm the target name and upload.`;
-			} else {
-				status.textContent = "No similar file found. Try another file name or refresh index.";
-			}
 		})();
 	};
 
@@ -535,7 +539,8 @@ export async function renderVersionUploadPanel(
 			if (!match) return;
 			uploadButton.disabled = true;
 			refreshButton.disabled = true;
-			status.textContent = `Uploading "${state.selectedLocalFile.name}" as "${match.name}"...`;
+			state.lastUploadMessage = `Uploading "${state.selectedLocalFile.name}" as "${match.name}"...`;
+			renderMatchArea();
 			try {
 				const upload = await uploadAsVersionName(
 					project.id,
@@ -545,15 +550,15 @@ export async function renderVersionUploadPanel(
 					state.selectedLocalFile,
 					match.id,
 				);
-				state.lastUploadMessage = upload.metadataSaved
+				const metaPart = upload.metadataSaved
 					? "Original local name saved in file description metadata."
 					: "Uploaded, but metadata could not be saved.";
-				status.textContent = `Upload complete. Trimble name "${match.name}" kept for versioning.`;
+				state.lastUploadMessage = `Upload complete. Trimble name "${match.name}" kept for versioning. ${metaPart}`;
 				state.versionRows = upload.versions;
 				renderVersionTable();
 			} catch (error) {
 				const message = error instanceof Error ? error.message : "Upload failed.";
-				status.textContent = `Upload failed: ${message}`;
+				state.lastUploadMessage = `Upload failed: ${message}`;
 			} finally {
 				refreshButton.disabled = false;
 				renderMatchArea();
