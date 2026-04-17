@@ -75,10 +75,11 @@ async function tryUpload(
 			const endpoint = `${host}${path}`;
 			try {
 				const bytes = await file.toBuffer();
+				const blobBytes = new Uint8Array(bytes);
 				const fd = new FormData();
 				fd.append(
 					"file",
-					new Blob([bytes], { type: file.mimetype || "application/octet-stream" }),
+					new Blob([blobBytes], { type: file.mimetype || "application/octet-stream" }),
 					targetName,
 				);
 				fd.append("name", targetName);
