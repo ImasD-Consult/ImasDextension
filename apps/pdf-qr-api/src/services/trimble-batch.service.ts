@@ -173,7 +173,7 @@ async function ensureSubfolder(
 	projectId: string,
 	parentFolderId: string,
 	subfolderName: string,
-): Promise<string> {
+): Promise<{ folderId: string; host: string | null }> {
 	const listRes = await trimbleFetch(
 		hosts,
 		[
@@ -198,7 +198,13 @@ async function ensureSubfolder(
 	);
 	if (existing) {
 		const id = String(existing.id ?? existing.versionId ?? "");
-		if (id) return id;
+		if (id) {
+			const host =
+				typeof listRes.url === "string" && listRes.url
+					? new URL(listRes.url).origin
+					: null;
+			return { folderId: id, host };
+		}
 	}
 
 	const body = JSON.stringify({
@@ -225,7 +231,11 @@ async function ensureSubfolder(
 	const raw = (await createRes.json()) as Record<string, unknown>;
 	const folderId = String(raw.id ?? raw.versionId ?? "");
 	if (!folderId) throw new Error("Could not resolve created QR folder id.");
-	return folderId;
+	const host =
+		typeof createRes.url === "string" && createRes.url
+			? new URL(createRes.url).origin
+			: null;
+	return { folderId, host };
 }
 
 type ResolvedTrimbleFile = {
@@ -408,74 +418,101 @@ async function uploadPdfToTrimble(
 	pdfBytes: Uint8Array,
 ): Promise<string> {
 	let lastError: unknown;
+	const attempts: string[] = [];
 	for (const host of hosts) {
 		try {
-			const initRes = await fetch(
-				`${host}/tc/api/2.1/files/fs/upload?parentId=${encodeURIComponent(parentFolderId)}&parentType=FOLDER`,
-				{
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${accessToken}`,
-						Accept: "application/json",
-						"Content-Type": "application/json",
+			for (const fsVersion of ["2.1", "2.0"]) {
+				attempts.push(`fs_upload_init @ ${host} v${fsVersion}`);
+				const initRes = await fetch(
+					`${host}/tc/api/${fsVersion}/files/fs/upload?parentId=${encodeURIComponent(parentFolderId)}&parentType=FOLDER&projectId=${encodeURIComponent(projectId)}`,
+					{
+						method: "POST",
+						headers: {
+							Authorization: `Bearer ${accessToken}`,
+							Accept: "application/json",
+							"Content-Type": "application/json",
+						},
+						body: JSON.stringify({ name: fileName }),
 					},
-					body: JSON.stringify({ name: fileName }),
-				},
-			);
-			if (initRes.ok) {
-				const ctype = (initRes.headers.get("content-type") || "").toLowerCase();
-				if (ctype.includes("application/json")) {
-					const initJson = (await initRes.json()) as Record<string, unknown>;
-					const uploadUrl = String(
-						initJson.uploadUrl ??
-							initJson.uploadURL ??
-							(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
-								?.uploadUrl ??
-							(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
-								?.uploadURL ??
-							"",
-					);
-					const uploadId = String(initJson.uploadId ?? "");
-					if (uploadUrl) {
-						const arrBuf = pdfBytes.buffer.slice(
-							pdfBytes.byteOffset,
-							pdfBytes.byteOffset + pdfBytes.byteLength,
-						) as ArrayBuffer;
-						const putRes = await fetch(uploadUrl, {
-							method: "PUT",
-							headers: { "Content-Type": "application/pdf" },
-							body: new Blob([arrBuf], { type: "application/pdf" }),
-						});
-						if (putRes.ok) {
-							if (uploadId) {
-								const detailsRes = await fetch(
-									`${host}/tc/api/2.1/files/fs/upload?uploadId=${encodeURIComponent(uploadId)}&wait=true`,
-									{
-										headers: {
-											Authorization: `Bearer ${accessToken}`,
-											Accept: "application/json",
+				);
+				if (initRes.ok) {
+					const ctype = (initRes.headers.get("content-type") || "").toLowerCase();
+					if (ctype.includes("application/json")) {
+						const initJson = (await initRes.json()) as Record<string, unknown>;
+						const uploadUrl = String(
+							initJson.uploadUrl ??
+								initJson.uploadURL ??
+								(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
+									?.uploadUrl ??
+								(initJson.contents as Array<Record<string, unknown>> | undefined)?.[0]
+									?.uploadURL ??
+								"",
+						);
+						const uploadId = String(initJson.uploadId ?? "");
+						if (uploadUrl) {
+							attempts.push(`fs_upload_put @ ${uploadUrl}`);
+							const arrBuf = pdfBytes.buffer.slice(
+								pdfBytes.byteOffset,
+								pdfBytes.byteOffset + pdfBytes.byteLength,
+							) as ArrayBuffer;
+							const putRes = await fetch(uploadUrl, {
+								method: "PUT",
+								headers: { "Content-Type": "application/pdf" },
+								body: new Blob([arrBuf], { type: "application/pdf" }),
+							});
+							if (putRes.ok) {
+								if (uploadId) {
+									attempts.push(`fs_upload_status @ ${host} v${fsVersion} uploadId=${uploadId}`);
+									const detailsRes = await fetch(
+										`${host}/tc/api/${fsVersion}/files/fs/upload?uploadId=${encodeURIComponent(uploadId)}&wait=true`,
+										{
+											headers: {
+												Authorization: `Bearer ${accessToken}`,
+												Accept: "application/json",
+											},
 										},
-									},
-								);
-								if (detailsRes.ok) {
-									const details = (await detailsRes.json()) as Record<string, unknown>;
-									const uploadedId = String(
-										details.fileId ??
-											details.id ??
-											(details.file as Record<string, unknown> | undefined)?.id ??
-											"",
 									);
-									if (uploadedId) return uploadedId;
+									if (detailsRes.ok) {
+										const details = (await detailsRes.json()) as Record<string, unknown>;
+										const uploadedId = String(
+											details.fileId ??
+												details.id ??
+												(details.file as Record<string, unknown> | undefined)?.id ??
+												"",
+										);
+										if (uploadedId) return uploadedId;
+										attempts.push(`fs_upload_status_no_file_id @ ${host} v${fsVersion}`);
+									}
+									if (!detailsRes.ok) {
+										attempts.push(
+											`fs_upload_status_http_${detailsRes.status} @ ${host} v${fsVersion}`,
+										);
+									}
 								}
+							} else {
+								lastError = new Error(`HTTP ${putRes.status} at ${uploadUrl}`);
+								attempts.push(`fs_upload_put_http_${putRes.status} @ ${uploadUrl}`);
 							}
-						} else {
-							lastError = new Error(`HTTP ${putRes.status} at ${uploadUrl}`);
 						}
+						if (!uploadUrl) attempts.push(`fs_upload_init_no_upload_url @ ${host} v${fsVersion}`);
 					}
+					if (!ctype.includes("application/json")) {
+						attempts.push(
+							`fs_upload_init_non_json_${ctype || "unknown"} @ ${host} v${fsVersion}`,
+						);
+					}
+				} else {
+					lastError = new Error(
+						`HTTP ${initRes.status} at ${host}/tc/api/${fsVersion}/files/fs/upload`,
+					);
+					attempts.push(`fs_upload_init_http_${initRes.status} @ ${host} v${fsVersion}`);
 				}
 			}
 		} catch (e) {
 			lastError = e;
+			attempts.push(
+				`fs_upload_exception @ ${host}: ${e instanceof Error ? e.message : "unknown"}`,
+			);
 		}
 
 		for (const path of [
@@ -483,6 +520,7 @@ async function uploadPdfToTrimble(
 			`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
 		]) {
 			try {
+				attempts.push(`legacy_upload @ ${host}${path}`);
 				const fd = new FormData();
 				const arrBuf = pdfBytes.buffer.slice(
 					pdfBytes.byteOffset,
@@ -503,6 +541,7 @@ async function uploadPdfToTrimble(
 				});
 				if (!res.ok) {
 					lastError = new Error(`HTTP ${res.status} at ${host}${path}`);
+					attempts.push(`legacy_upload_http_${res.status} @ ${host}${path}`);
 					continue;
 				}
 				const ctype = (res.headers.get("content-type") || "").toLowerCase();
@@ -510,18 +549,29 @@ async function uploadPdfToTrimble(
 					lastError = new Error(
 						`Unexpected content-type "${ctype}" at ${host}${path} (expected JSON)`,
 					);
+					attempts.push(
+						`legacy_upload_non_json_${ctype || "unknown"} @ ${host}${path}`,
+					);
 					continue;
 				}
 				const raw = (await res.json()) as Record<string, unknown>;
 				const fileId = String(raw.id ?? raw.fileId ?? "");
 				if (fileId) return fileId;
 				lastError = new Error("Upload returned OK without file id.");
+				attempts.push(`legacy_upload_no_file_id @ ${host}${path}`);
 			} catch (e) {
 				lastError = e;
+				attempts.push(
+					`legacy_upload_exception @ ${host}${path}: ${e instanceof Error ? e.message : "unknown"}`,
+				);
 			}
 		}
 	}
-	throw lastError instanceof Error ? lastError : new Error("Upload failed.");
+	const details = attempts.slice(0, 12).join(" | ");
+	if (lastError instanceof Error) {
+		throw new Error(`${lastError.message}${details ? ` (upload attempts: ${details})` : ""}`);
+	}
+	throw new Error(`Upload failed.${details ? ` Attempts: ${details}` : ""}`);
 }
 
 export async function startTrimbleBatchJob(
@@ -566,22 +616,34 @@ export async function startTrimbleBatchJob(
 				input.trimble.projectId,
 			);
 			app.log.info({ jobId, hosts }, "trimble_batch_hosts_after_region_probe");
-			hosts = await resolvePreferredHosts(
+			const preferredHosts = await resolvePreferredHosts(
 				hosts,
 				input.trimble.accessToken,
 				input.trimble.projectId,
 				input.items[0]?.pdfFileId ?? "",
 			);
+			// Keep project-region host pinned first; do not let file probe fully override it.
+			hosts = [hosts[0], ...preferredHosts.filter((h) => h !== hosts[0])];
 			app.log.info({ jobId, hosts }, "trimble_batch_hosts_after_preference_probe");
-			const qrFolderId = await ensureSubfolder(
+			const qrFolder = await ensureSubfolder(
 				hosts,
 				input.trimble.accessToken,
 				input.trimble.projectId,
 				input.trimble.pdfParentFolderId,
 				input.trimble.outputSubfolderName,
 			);
+			const qrFolderId = qrFolder.folderId;
+			const uploadHosts = qrFolder.host
+				? [qrFolder.host, ...hosts.filter((h) => h !== qrFolder.host)]
+				: hosts;
 			app.log.info(
-				{ jobId, qrFolderId, outputSubfolderName: input.trimble.outputSubfolderName },
+				{
+					jobId,
+					qrFolderId,
+					qrFolderHost: qrFolder.host,
+					uploadHosts,
+					outputSubfolderName: input.trimble.outputSubfolderName,
+				},
 				"trimble_batch_qr_folder_ready",
 			);
 			let done = 0;
@@ -621,7 +683,7 @@ export async function startTrimbleBatchJob(
 					);
 					app.log.info({ jobId, pdfFileId: item.pdfFileId }, "trimble_batch_item_upload_start");
 					const outputFileId = await uploadPdfToTrimble(
-						hosts,
+						uploadHosts,
 						input.trimble.accessToken,
 						input.trimble.projectId,
 						qrFolderId,
