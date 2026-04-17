@@ -245,6 +245,7 @@ async function uploadAsVersionName(
 	}
 
 	const attemptErrors: string[] = [];
+	let fetchFailureCount = 0;
 
 	for (const endpoint of uploadEndpoints) {
 		try {
@@ -272,10 +273,24 @@ async function uploadAsVersionName(
 			}
 			return { fileId, versionId };
 		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message.toLowerCase().includes("failed to fetch")
+			) {
+				fetchFailureCount += 1;
+			}
 			attemptErrors.push(
 				`${error instanceof Error ? error.message : "request failed"} at ${endpoint}`,
 			);
 		}
+	}
+
+	if (fetchFailureCount > 0 && fetchFailureCount === uploadEndpoints.length) {
+		throw new Error(
+			"Upload blocked by browser/network policy (all attempts returned 'Failed to fetch'). " +
+				"This is usually cross-origin/CORS or CSP from extension host. " +
+				"Trimble version sequence is not the issue.",
+		);
 	}
 
 	throw new Error(
