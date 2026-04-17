@@ -161,22 +161,52 @@ async function downloadPdfFromTrimble(
 	projectId: string,
 	fileId: string,
 ): Promise<Uint8Array> {
-	const res = await trimbleFetch(
-		hosts,
-		[
-			`/tc/api/2.0/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
-			`/tc/api/2.1/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
-			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download`,
-			`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download`,
-			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
-			`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
-			`/tc/api/2.0/files/${encodeURIComponent(fileId)}/download`,
-			`/tc/api/2.1/files/${encodeURIComponent(fileId)}/download`,
-		],
-		accessToken,
-		{ headers: { Accept: "application/pdf" } },
-	);
-	return new Uint8Array(await res.arrayBuffer());
+	const paths = [
+		`/tc/api/2.0/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.1/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download`,
+		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download`,
+		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download?projectId=${encodeURIComponent(projectId)}`,
+		`/tc/api/2.0/files/${encodeURIComponent(fileId)}/download`,
+		`/tc/api/2.1/files/${encodeURIComponent(fileId)}/download`,
+	];
+	const urls = hosts.flatMap((h) => paths.map((p) => `${h}${p}`));
+	let lastError: unknown;
+	for (const url of urls) {
+		try {
+			const res = await fetch(url, {
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					Accept: "application/pdf",
+				},
+			});
+			if (!res.ok) {
+				lastError = new Error(`HTTP ${res.status} at ${url}`);
+				continue;
+			}
+			const bytes = new Uint8Array(await res.arrayBuffer());
+			const ctype = (res.headers.get("content-type") || "").toLowerCase();
+			const isPdfByType = ctype.includes("application/pdf");
+			const isPdfByMagic =
+				bytes.length >= 4 &&
+				bytes[0] === 0x25 && // %
+				bytes[1] === 0x50 && // P
+				bytes[2] === 0x44 && // D
+				bytes[3] === 0x46; // F
+			if (isPdfByType || isPdfByMagic) {
+				return bytes;
+			}
+			lastError = new Error(
+				`Non-PDF response at ${url} (content-type: ${ctype || "unknown"})`,
+			);
+		} catch (e) {
+			lastError = e;
+		}
+	}
+	throw lastError instanceof Error
+		? lastError
+		: new Error("Could not download a valid PDF from Trimble.");
 }
 
 async function uploadPdfToTrimble(
