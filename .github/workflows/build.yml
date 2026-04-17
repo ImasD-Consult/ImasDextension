@@ -60,11 +60,13 @@ jobs:
           build-args: |
             EXTENSION_URL=${{ matrix.extension.extension_url }}
             VITE_TRIMBLE_CONNECT_ORIGIN=${{ vars.VITE_TRIMBLE_CONNECT_ORIGIN }}
+            TRIMBLE_CONNECT_ORIGIN=${{ vars.TRIMBLE_CONNECT_ORIGIN }}
             VITE_PSET_SERVICE_URI=${{ vars.VITE_PSET_SERVICE_URI }}
             VITE_PSET_LIB_ID=${{ vars.VITE_PSET_LIB_ID }}
             VITE_PSET_DEF_ID=${{ vars.VITE_PSET_DEF_ID }}
             VITE_PSET_PROPERTY_NAME=${{ vars.VITE_PSET_PROPERTY_NAME }}
             VITE_TRIMBLE_CONNECT_REGION=${{ vars.VITE_TRIMBLE_CONNECT_REGION }}
+            TRIMBLE_CONNECT_REGION=${{ vars.TRIMBLE_CONNECT_REGION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
