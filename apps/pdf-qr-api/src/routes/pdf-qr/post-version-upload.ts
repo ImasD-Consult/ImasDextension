@@ -6,8 +6,10 @@ import { buildTrimbleHosts, uploadFileToTrimbleFolder } from "../../services/tri
 import {
 	resolveHostsByFolderProbe,
 	resolvePreferredHosts,
-	resolveProjectRegionHost,
 } from "../../services/trimble-host-resolution";
+
+/** Cloudflare/proxies often cut off the origin around ~100s; keep version list fetch bounded. */
+const VERSION_LIST_MAX_MS = 12_000;
 
 type VersionRow = {
 	fileId: string;
@@ -188,6 +190,15 @@ async function tryLoadVersions(
 	return [];
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+	return Promise.race([
+		promise,
+		new Promise<T>((resolve) => {
+			setTimeout(() => resolve(fallback), ms);
+		}),
+	]);
+}
+
 export function registerPostVersionUpload(rawApp: FastifyInstance): void {
 	const app = rawApp.withTypeProvider<ZodTypeProvider>();
 	app.post(
@@ -226,11 +237,7 @@ export function registerPostVersionUpload(rawApp: FastifyInstance): void {
 				const fields = parsed.data;
 
 				let hosts = buildTrimbleHosts(fields.connect_origin);
-				hosts = await resolveProjectRegionHost(
-					hosts,
-					fields.access_token,
-					fields.project_id,
-				);
+				// Folder probe alone pins the regional host for this path (faster than also probing /projects).
 				hosts = await resolveHostsByFolderProbe(
 					hosts,
 					fields.access_token,
@@ -256,18 +263,24 @@ export function registerPostVersionUpload(rawApp: FastifyInstance): void {
 					hosts,
 					fields.probe_file_id?.trim() || undefined,
 				);
-				const metadataSaved = await trySaveMetadata(
-					fields.access_token,
-					upload.fileId,
-					fields.original_name,
-					hosts,
-				);
-				const versions = await tryLoadVersions(
-					fields.access_token,
-					fields.project_id,
-					upload.fileId,
-					hosts,
-				);
+				const [metadataSaved, versions] = await Promise.all([
+					trySaveMetadata(
+						fields.access_token,
+						upload.fileId,
+						fields.original_name,
+						hosts,
+					),
+					withTimeout(
+						tryLoadVersions(
+							fields.access_token,
+							fields.project_id,
+							upload.fileId,
+							hosts,
+						),
+						VERSION_LIST_MAX_MS,
+						[],
+					),
+				]);
 				return reply.send({
 					fileId: upload.fileId,
 					versionId: upload.versionId,

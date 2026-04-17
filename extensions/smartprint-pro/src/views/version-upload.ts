@@ -196,10 +196,21 @@ async function uploadAsVersionName(
 	// Helps the API pick the same regional host as Trimble for this file (matches batch QR host resolution).
 	body.append("probe_file_id", probeFileId);
 
-	const res = await fetch(url, {
-		method: "POST",
-		body,
-	});
+	let res: Response;
+	try {
+		res = await fetch(url, {
+			method: "POST",
+			body,
+			mode: "cors",
+		});
+	} catch (error) {
+		if (error instanceof TypeError) {
+			throw new Error(
+				`Cannot reach ${url} (network blocked, CORS, TLS, or server down). Same API base as Batch QR; confirm pdf-qr-api is deployed and check DevTools → Network for the failed request.`,
+			);
+		}
+		throw error instanceof Error ? error : new Error("Unknown upload network error.");
+	}
 	if (!res.ok) {
 		const text = await res.text();
 		let detail = text;
