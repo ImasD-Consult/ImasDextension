@@ -67,6 +67,9 @@ async function tryUpload(
 	file: MultipartFile,
 	connectOrigin: string | undefined,
 ): Promise<{ fileId: string; versionId?: string }> {
+	// Multipart streams are single-read; buffer once before trying hosts/paths.
+	const bytes = await file.toBuffer();
+	const blobBytes = new Uint8Array(bytes);
 	const hosts = buildHosts(connectOrigin);
 	const paths = buildUploadPaths(projectId, parentFolderId);
 	const errors: string[] = [];
@@ -74,8 +77,6 @@ async function tryUpload(
 		for (const path of paths) {
 			const endpoint = `${host}${path}`;
 			try {
-				const bytes = await file.toBuffer();
-				const blobBytes = new Uint8Array(bytes);
 				const fd = new FormData();
 				fd.append(
 					"file",
