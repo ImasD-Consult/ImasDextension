@@ -87,8 +87,8 @@ async function resolveProjectRegionHost(
 				if (!res.ok) continue;
 				const ctype = (res.headers.get("content-type") || "").toLowerCase();
 				if (!ctype.includes("application/json")) continue;
-				// Successful project lookup pins the region host for this job.
-				return [host];
+				// Prefer detected host first, but keep fallbacks for endpoint variance.
+				return [host, ...hosts.filter((h) => h !== host)];
 			} catch {
 				// try next path/host
 			}
