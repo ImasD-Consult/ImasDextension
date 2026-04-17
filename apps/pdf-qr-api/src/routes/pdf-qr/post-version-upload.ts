@@ -2,6 +2,10 @@ import type { MultipartFile } from "@fastify/multipart";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
+import {
+	buildTrimbleHosts,
+	uploadFileToTrimbleFolder,
+} from "../../services/trimble-fs-upload";
 
 type VersionRow = {
 	fileId: string;
@@ -37,28 +41,6 @@ function extractOriginalName(description: string | undefined): string {
 	return description.slice(idx + marker.length).trim();
 }
 
-function buildHosts(connectOrigin: string | undefined): string[] {
-	const defaults = [
-		"https://web.connect.trimble.com",
-		"https://app.connect.trimble.com",
-		"https://app21.connect.trimble.com",
-		"https://app31.connect.trimble.com",
-	];
-	const hosts = new Set<string>();
-	if (connectOrigin?.trim()) hosts.add(connectOrigin.trim().replace(/\/$/, ""));
-	for (const h of defaults) hosts.add(h);
-	return [...hosts];
-}
-
-function buildUploadPaths(projectId: string, parentFolderId: string): string[] {
-	return [
-		`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
-		`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
-		`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
-		`/tc/api/2.1/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
-	];
-}
-
 async function tryUpload(
 	accessToken: string,
 	projectId: string,
@@ -67,54 +49,20 @@ async function tryUpload(
 	file: MultipartFile,
 	connectOrigin: string | undefined,
 ): Promise<{ fileId: string; versionId?: string }> {
-	// Multipart streams are single-read; buffer once before trying hosts/paths.
 	const bytes = await file.toBuffer();
 	const blobBytes = new Uint8Array(bytes);
-	const hosts = buildHosts(connectOrigin);
-	const paths = buildUploadPaths(projectId, parentFolderId);
-	const errors: string[] = [];
-	for (const host of hosts) {
-		for (const path of paths) {
-			const endpoint = `${host}${path}`;
-			try {
-				const fd = new FormData();
-				fd.append(
-					"file",
-					new Blob([blobBytes], { type: file.mimetype || "application/octet-stream" }),
-					targetName,
-				);
-				fd.append("name", targetName);
-				fd.append("parentId", parentFolderId);
-				fd.append("projectId", projectId);
-				const res = await fetch(endpoint, {
-					method: "POST",
-					headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-					body: fd,
-				});
-				if (!res.ok) {
-					errors.push(`${res.status} at ${endpoint}`);
-					continue;
-				}
-				const raw = (await res.json()) as Record<string, unknown>;
-				const fileId =
-					typeof raw.id === "string"
-						? raw.id
-						: typeof raw.fileId === "string"
-							? raw.fileId
-							: "";
-				const versionId =
-					typeof raw.versionId === "string" ? raw.versionId : undefined;
-				if (!fileId) {
-					errors.push(`missing file id at ${endpoint}`);
-					continue;
-				}
-				return { fileId, versionId };
-			} catch (error) {
-				errors.push(`${error instanceof Error ? error.message : "request failed"} at ${endpoint}`);
-			}
-		}
-	}
-	throw new Error(`Upload failed on all endpoints. Attempts: ${errors.join(" | ")}`);
+	const hosts = buildTrimbleHosts(connectOrigin);
+	const contentType = file.mimetype || "application/octet-stream";
+	const fileId = await uploadFileToTrimbleFolder(
+		hosts,
+		accessToken,
+		projectId,
+		parentFolderId,
+		targetName,
+		blobBytes,
+		contentType,
+	);
+	return { fileId };
 }
 
 async function trySaveMetadata(
@@ -123,7 +71,7 @@ async function trySaveMetadata(
 	originalName: string,
 	connectOrigin: string | undefined,
 ): Promise<boolean> {
-	const hosts = buildHosts(connectOrigin);
+	const hosts = buildTrimbleHosts(connectOrigin);
 	const payload = { description: `[smartprint-original-name] ${originalName}` };
 	for (const host of hosts) {
 		for (const path of [
@@ -157,7 +105,7 @@ async function tryLoadVersions(
 	fileId: string,
 	connectOrigin: string | undefined,
 ): Promise<VersionRow[]> {
-	const hosts = buildHosts(connectOrigin);
+	const hosts = buildTrimbleHosts(connectOrigin);
 	for (const host of hosts) {
 		for (const path of [
 			`/tc/api/2.0/files/${encodeURIComponent(fileId)}/versions?projectId=${encodeURIComponent(projectId)}`,
