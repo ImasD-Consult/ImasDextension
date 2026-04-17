@@ -271,6 +271,37 @@ function collectDownloadUrlsFromObject(
 	return [...out];
 }
 
+function collectHttpUrlsFromObject(root: Record<string, unknown>): string[] {
+	const out = new Set<string>();
+	const walk = (node: unknown, depth: number): void => {
+		if (depth > 10 || node == null) return;
+		if (typeof node === "string") {
+			const s = node.trim();
+			if (/^https?:\/\//i.test(s)) out.add(s);
+			return;
+		}
+		if (Array.isArray(node)) {
+			for (const item of node) walk(item, depth + 1);
+			return;
+		}
+		if (typeof node === "object") {
+			for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+				// Prefer likely upload-url keys when present.
+				if (
+					typeof v === "string" &&
+					/^https?:\/\//i.test(v) &&
+					/(upload|url|signed|presign|storage|s3)/i.test(k)
+				) {
+					out.add(v.trim());
+				}
+				walk(v, depth + 1);
+			}
+		}
+	};
+	walk(root, 0);
+	return [...out];
+}
+
 async function resolveTrimbleFile(
 	hosts: string[],
 	accessToken: string,
@@ -450,6 +481,7 @@ async function uploadPdfToTrimble(
 						const uploadUrlsTop = (
 							initJson.uploadUrls as string[] | undefined
 						)?.filter(Boolean);
+						const discoveredHttpUrls = collectHttpUrlsFromObject(initJson);
 						const uploadUrl = String(
 							initJson.uploadUrl ??
 								initJson.uploadURL ??
@@ -464,6 +496,7 @@ async function uploadPdfToTrimble(
 									(initJson.data as Record<string, unknown> | undefined)
 										?.uploadUrls as string[] | undefined
 								)?.[0] ??
+								discoveredHttpUrls[0] ??
 								"",
 						);
 						const uploadId = String(initJson.uploadId ?? "");
@@ -475,7 +508,6 @@ async function uploadPdfToTrimble(
 							) as ArrayBuffer;
 							const putRes = await fetch(uploadUrl, {
 								method: "PUT",
-								headers: { "Content-Type": "application/pdf" },
 								body: new Blob([arrBuf], { type: "application/pdf" }),
 							});
 							if (putRes.ok) {
