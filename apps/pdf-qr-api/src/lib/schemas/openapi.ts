@@ -13,6 +13,11 @@ import {
 	jobStatusResponseSchema,
 } from "./job";
 import {
+	trimbleBatchRequestSchema,
+	trimbleBatchStartResponseSchema,
+	trimbleBatchStatusResponseSchema,
+} from "./integration";
+import {
 	layoutModeSchema,
 	qrPositionSchema,
 	stampJobPayloadSchema,
@@ -29,6 +34,9 @@ export const openapiComponentSchemas = {
 	LayoutMode: layoutModeSchema,
 	StampOptions: stampOptionsSchema,
 	StampJobPayload: stampJobPayloadSchema,
+	TrimbleBatchRequest: trimbleBatchRequestSchema,
+	TrimbleBatchStartResponse: trimbleBatchStartResponseSchema,
+	TrimbleBatchStatusResponse: trimbleBatchStatusResponseSchema,
 	EnqueueResponse: enqueueResponseSchema,
 	JobStatusResponse: jobStatusResponseSchema,
 	JobIdPathParams: jobIdParamsSchema,
