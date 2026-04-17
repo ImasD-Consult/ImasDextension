@@ -177,8 +177,10 @@ async function ensureSubfolder(
 	const listRes = await trimbleFetch(
 		hosts,
 		[
-			`/tc/api/2.0/folders/${encodeURIComponent(parentFolderId)}/items?projectId=${encodeURIComponent(projectId)}`,
 			`/tc/api/2.1/folders/${encodeURIComponent(parentFolderId)}/items?projectId=${encodeURIComponent(projectId)}`,
+			`/tc/api/2.1/folders/${encodeURIComponent(parentFolderId)}/items`,
+			`/tc/api/folders/${encodeURIComponent(parentFolderId)}/items`,
+			`/tc/api/2.0/folders/${encodeURIComponent(parentFolderId)}/items?projectId=${encodeURIComponent(projectId)}`,
 		],
 		accessToken,
 		undefined,
@@ -207,6 +209,8 @@ async function ensureSubfolder(
 	const createRes = await trimbleFetch(
 		hosts,
 		[
+			`/tc/api/2.1/folders`,
+			`/tc/api/folders`,
 			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/folders`,
 			`/tc/api/2.0/folders?projectId=${encodeURIComponent(projectId)}`,
 		],
@@ -539,6 +543,15 @@ export async function startTrimbleBatchJob(
 
 	void (async () => {
 		let hosts = buildHosts(input.trimble.host);
+		app.log.info(
+			{
+				jobId,
+				projectId: input.trimble.projectId,
+				items: input.items.length,
+				initialHosts: hosts,
+			},
+			"trimble_batch_job_started",
+		);
 		const running: TrimbleBatchStatusResponse = {
 			...queued,
 			status: "running",
@@ -552,12 +565,14 @@ export async function startTrimbleBatchJob(
 				input.trimble.accessToken,
 				input.trimble.projectId,
 			);
+			app.log.info({ jobId, hosts }, "trimble_batch_hosts_after_region_probe");
 			hosts = await resolvePreferredHosts(
 				hosts,
 				input.trimble.accessToken,
 				input.trimble.projectId,
 				input.items[0]?.pdfFileId ?? "",
 			);
+			app.log.info({ jobId, hosts }, "trimble_batch_hosts_after_preference_probe");
 			const qrFolderId = await ensureSubfolder(
 				hosts,
 				input.trimble.accessToken,
@@ -565,15 +580,28 @@ export async function startTrimbleBatchJob(
 				input.trimble.pdfParentFolderId,
 				input.trimble.outputSubfolderName,
 			);
+			app.log.info(
+				{ jobId, qrFolderId, outputSubfolderName: input.trimble.outputSubfolderName },
+				"trimble_batch_qr_folder_ready",
+			);
 			let done = 0;
 			for (const item of input.items) {
 				try {
+					app.log.info(
+						{ jobId, pdfFileId: item.pdfFileId, pdfFileName: item.pdfFileName },
+						"trimble_batch_item_download_start",
+					);
 					const sourcePdf = await downloadPdfFromTrimble(
 						hosts,
 						input.trimble.accessToken,
 						input.trimble.projectId,
 						item.pdfFileId,
 					);
+					app.log.info(
+						{ jobId, pdfFileId: item.pdfFileId, bytes: sourcePdf.byteLength },
+						"trimble_batch_item_download_ok",
+					);
+					app.log.info({ jobId, pdfFileId: item.pdfFileId }, "trimble_batch_item_stamp_start");
 					const { pdf: stamped } = await stampPdfWithQr(
 						sourcePdf,
 						{
@@ -587,6 +615,11 @@ export async function startTrimbleBatchJob(
 						},
 						{ maxPages: env.MAX_PDF_PAGES },
 					);
+					app.log.info(
+						{ jobId, pdfFileId: item.pdfFileId, bytes: stamped.byteLength },
+						"trimble_batch_item_stamp_ok",
+					);
+					app.log.info({ jobId, pdfFileId: item.pdfFileId }, "trimble_batch_item_upload_start");
 					const outputFileId = await uploadPdfToTrimble(
 						hosts,
 						input.trimble.accessToken,
@@ -594,6 +627,10 @@ export async function startTrimbleBatchJob(
 						qrFolderId,
 						item.pdfFileName,
 						stamped,
+					);
+					app.log.info(
+						{ jobId, pdfFileId: item.pdfFileId, outputFileId },
+						"trimble_batch_item_upload_ok",
 					);
 					results.push({
 						pdfFileId: item.pdfFileId,
@@ -608,8 +645,17 @@ export async function startTrimbleBatchJob(
 						outputFileId: null,
 						message: error instanceof Error ? error.message : "Unknown error",
 					});
+					app.log.error(
+						{
+							jobId,
+							pdfFileId: item.pdfFileId,
+							error: error instanceof Error ? error.message : "Unknown error",
+						},
+						"trimble_batch_item_failed",
+					);
 				}
 				done += 1;
+				app.log.info({ jobId, done, total: input.items.length }, "trimble_batch_progress");
 				await saveStatus(app, env, {
 					...running,
 					progress: { done, total: input.items.length },
@@ -626,7 +672,23 @@ export async function startTrimbleBatchJob(
 					: null,
 				finishedAt: nowMs(),
 			});
+			app.log.info(
+				{
+					jobId,
+					status: results.some((r) => !r.ok) ? "failed" : "completed",
+					done: results.length,
+					total: input.items.length,
+				},
+				"trimble_batch_job_finished",
+			);
 		} catch (error) {
+			app.log.error(
+				{
+					jobId,
+					error: error instanceof Error ? error.message : "Batch failed",
+				},
+				"trimble_batch_job_failed_before_items",
+			);
 			await saveStatus(app, env, {
 				...running,
 				status: "failed",
