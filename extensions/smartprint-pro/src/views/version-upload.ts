@@ -43,6 +43,45 @@ const MAX_FOLDERS_TO_SCAN = 3500;
 const MAX_CANDIDATES_TO_SHOW = 30;
 const DEFAULT_BACKEND_BASE = "https://stamp.imasd.dev";
 
+/** Persists across extension menu tabs in the same browser tab; cleared when the tab closes. */
+const VERSION_UPLOAD_INDEX_STORAGE_KEY = "smartprintPro.v1.versionUploadIndex";
+
+type StoredProjectIndexPayload = {
+	projectId: string;
+	files: IndexedFile[];
+};
+
+function loadVersionUploadIndexFromSession(
+	projectId: string,
+): IndexedFile[] | undefined {
+	try {
+		const raw = sessionStorage.getItem(VERSION_UPLOAD_INDEX_STORAGE_KEY);
+		if (!raw) return undefined;
+		const parsed = JSON.parse(raw) as StoredProjectIndexPayload;
+		if (parsed.projectId !== projectId || !Array.isArray(parsed.files)) {
+			return undefined;
+		}
+		return parsed.files;
+	} catch {
+		return undefined;
+	}
+}
+
+function saveVersionUploadIndexToSession(
+	projectId: string,
+	files: IndexedFile[],
+): void {
+	try {
+		const payload: StoredProjectIndexPayload = { projectId, files };
+		sessionStorage.setItem(
+			VERSION_UPLOAD_INDEX_STORAGE_KEY,
+			JSON.stringify(payload),
+		);
+	} catch {
+		// Quota or private mode — next open will run a full index.
+	}
+}
+
 function normalizeBaseName(name: string): string {
 	return name
 		.toLowerCase()
@@ -533,6 +572,7 @@ export async function renderVersionUploadPanel(
 		try {
 			const rootId = await client.getProjectRootId(project.id);
 			state.allFiles = await indexProjectFiles(client, project.id, rootId);
+			saveVersionUploadIndexToSession(project.id, state.allFiles);
 			applyIndexStatus(
 				"success",
 				`Indexed ${state.allFiles.length} files.`,
@@ -635,7 +675,22 @@ export async function renderVersionUploadPanel(
 		})();
 	});
 
-	refreshButton.disabled = true;
-	await refreshProjectIndex();
+	const cachedFiles = loadVersionUploadIndexFromSession(project.id);
+	if (cachedFiles !== undefined) {
+		state.allFiles = cachedFiles;
+		applyIndexStatus(
+			"success",
+			`Using saved project index (${cachedFiles.length} files). Click “Refresh project index” after you add or move files in Trimble.`,
+		);
+		refreshButton.disabled = false;
+		if (state.selectedLocalFile) {
+			state.matches = buildMatchesFor(state.selectedLocalFile);
+			state.selectedMatchId = state.matches[0]?.id ?? "";
+		}
+		renderMatchArea();
+	} else {
+		refreshButton.disabled = true;
+		await refreshProjectIndex();
+	}
 	renderVersionTable();
 }
