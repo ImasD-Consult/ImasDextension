@@ -2,10 +2,12 @@ import type { MultipartFile } from "@fastify/multipart";
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 import { z } from "zod";
+import { buildTrimbleHosts, uploadFileToTrimbleFolder } from "../../services/trimble-fs-upload";
 import {
-	buildTrimbleHosts,
-	uploadFileToTrimbleFolder,
-} from "../../services/trimble-fs-upload";
+	resolveHostsByFolderProbe,
+	resolvePreferredHosts,
+	resolveProjectRegionHost,
+} from "../../services/trimble-host-resolution";
 
 type VersionRow = {
 	fileId: string;
@@ -16,14 +18,40 @@ type VersionRow = {
 	originalName?: string;
 };
 
+function multipartTextOptional() {
+	return z.preprocess((val) => {
+		if (val === undefined || val === null) return undefined;
+		if (typeof val === "object" && val !== null && "value" in val) {
+			const s = String((val as { value: unknown }).value ?? "");
+			return s === "" ? undefined : s;
+		}
+		const s = String(val);
+		return s === "" ? undefined : s;
+	}, z.string().optional());
+}
+
+const multipartFileFieldSchema = z
+	.custom<MultipartFile>(
+		(v): v is MultipartFile =>
+			typeof v === "object" &&
+			v !== null &&
+			"mimetype" in v &&
+			typeof (v as MultipartFile).toBuffer === "function",
+	)
+	.refine((f) => Boolean((f as MultipartFile).file), {
+		message: "Missing file field `file`",
+	});
+
 const fieldSchema = z.object({
-	file: z.custom<MultipartFile>(),
+	file: multipartFileFieldSchema,
 	access_token: z.string().min(1),
 	project_id: z.string().min(1),
 	parent_folder_id: z.string().min(1),
 	target_name: z.string().min(1),
 	original_name: z.string().min(1),
 	connect_origin: z.string().optional(),
+	/** Matched Trimble file id from the extension — pins the correct regional host. */
+	probe_file_id: multipartTextOptional(),
 });
 
 function getFieldValue(raw: unknown): string {
@@ -47,11 +75,10 @@ async function tryUpload(
 	parentFolderId: string,
 	targetName: string,
 	file: MultipartFile,
-	connectOrigin: string | undefined,
+	hosts: string[],
 ): Promise<{ fileId: string; versionId?: string }> {
 	const bytes = await file.toBuffer();
 	const blobBytes = new Uint8Array(bytes);
-	const hosts = buildTrimbleHosts(connectOrigin);
 	const contentType = file.mimetype || "application/octet-stream";
 	const fileId = await uploadFileToTrimbleFolder(
 		hosts,
@@ -69,9 +96,8 @@ async function trySaveMetadata(
 	accessToken: string,
 	fileId: string,
 	originalName: string,
-	connectOrigin: string | undefined,
+	hosts: string[],
 ): Promise<boolean> {
-	const hosts = buildTrimbleHosts(connectOrigin);
 	const payload = { description: `[smartprint-original-name] ${originalName}` };
 	for (const host of hosts) {
 		for (const path of [
@@ -103,9 +129,8 @@ async function tryLoadVersions(
 	accessToken: string,
 	projectId: string,
 	fileId: string,
-	connectOrigin: string | undefined,
+	hosts: string[],
 ): Promise<VersionRow[]> {
-	const hosts = buildTrimbleHosts(connectOrigin);
 	for (const host of hosts) {
 		for (const path of [
 			`/tc/api/2.0/files/${encodeURIComponent(fileId)}/versions?projectId=${encodeURIComponent(projectId)}`,
@@ -173,50 +198,87 @@ export function registerPostVersionUpload(rawApp: FastifyInstance): void {
 			},
 		},
 		async (request, reply) => {
-			const body = request.body as Record<string, unknown>;
-			const parsed = fieldSchema.safeParse({
-				file: body.file,
-				access_token: getFieldValue(body.access_token),
-				project_id: getFieldValue(body.project_id),
-				parent_folder_id: getFieldValue(body.parent_folder_id),
-				target_name: getFieldValue(body.target_name),
-				original_name: getFieldValue(body.original_name),
-				connect_origin: getFieldValue(body.connect_origin) || undefined,
-			});
-			if (!parsed.success) {
-				return reply.status(400).send({
-					error: "Invalid multipart payload",
-					details: parsed.error.flatten(),
+			try {
+				const body = request.body;
+				if (!body || typeof body !== "object") {
+					return reply.status(400).send({ error: "Missing multipart body" });
+				}
+				const b = body as Record<string, unknown>;
+				const parsed = fieldSchema.safeParse({
+					file: b.file,
+					access_token: getFieldValue(b.access_token),
+					project_id: getFieldValue(b.project_id),
+					parent_folder_id: getFieldValue(b.parent_folder_id),
+					target_name: getFieldValue(b.target_name),
+					original_name: getFieldValue(b.original_name),
+					connect_origin: getFieldValue(b.connect_origin) || undefined,
+					probe_file_id: b.probe_file_id,
+				});
+				if (!parsed.success) {
+					return reply.status(400).send({
+						error: "Invalid multipart payload",
+						details: parsed.error.flatten(),
+					});
+				}
+				const fields = parsed.data;
+
+				let hosts = buildTrimbleHosts(fields.connect_origin);
+				hosts = await resolveProjectRegionHost(
+					hosts,
+					fields.access_token,
+					fields.project_id,
+				);
+				hosts = await resolveHostsByFolderProbe(
+					hosts,
+					fields.access_token,
+					fields.project_id,
+					fields.parent_folder_id,
+				);
+				if (fields.probe_file_id?.trim()) {
+					const preferred = await resolvePreferredHosts(
+						hosts,
+						fields.access_token,
+						fields.project_id,
+						fields.probe_file_id.trim(),
+					);
+					hosts = [hosts[0], ...preferred.filter((h) => h !== hosts[0])];
+				}
+
+				const upload = await tryUpload(
+					fields.access_token,
+					fields.project_id,
+					fields.parent_folder_id,
+					fields.target_name,
+					fields.file,
+					hosts,
+				);
+				const metadataSaved = await trySaveMetadata(
+					fields.access_token,
+					upload.fileId,
+					fields.original_name,
+					hosts,
+				);
+				const versions = await tryLoadVersions(
+					fields.access_token,
+					fields.project_id,
+					upload.fileId,
+					hosts,
+				);
+				return reply.send({
+					fileId: upload.fileId,
+					versionId: upload.versionId,
+					metadataSaved,
+					versions,
+				});
+			} catch (err) {
+				const message =
+					err instanceof Error ? err.message : "Version upload failed";
+				request.log.warn({ err }, "version_upload_failed");
+				return reply.status(502).send({
+					error: "trimble_upload_failed",
+					message,
 				});
 			}
-			const fields = parsed.data;
-			const upload = await tryUpload(
-				fields.access_token,
-				fields.project_id,
-				fields.parent_folder_id,
-				fields.target_name,
-				fields.file,
-				fields.connect_origin,
-			);
-			const metadataSaved = await trySaveMetadata(
-				fields.access_token,
-				upload.fileId,
-				fields.original_name,
-				fields.connect_origin,
-			);
-			const versions = await tryLoadVersions(
-				fields.access_token,
-				fields.project_id,
-				upload.fileId,
-				fields.connect_origin,
-			);
-			return reply.send({
-				fileId: upload.fileId,
-				versionId: upload.versionId,
-				metadataSaved,
-				versions,
-			});
 		},
 	);
 }
-

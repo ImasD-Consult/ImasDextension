@@ -155,6 +155,24 @@ export async function uploadFileToTrimbleFolder(
 											`fs_upload_status_http_${detailsRes.status} @ ${host}${fsPath}`,
 										);
 									}
+								} else {
+									const directId = String(
+										initJson.fileId ??
+											initJson.id ??
+											(
+												initJson.file as Record<string, unknown> | undefined
+											)?.id ??
+											(
+												(initJson.contents as
+													| Array<Record<string, unknown>>
+													| undefined)?.[0] as Record<string, unknown> | undefined
+											)?.id ??
+											"",
+									);
+									if (directId) return directId;
+									attempts.push(
+										`fs_upload_put_ok_no_upload_id_no_direct_file_id @ ${host}${fsPath}`,
+									);
 								}
 							} else {
 								lastError = new Error(`HTTP ${putRes.status} at ${uploadUrl}`);
@@ -188,7 +206,9 @@ export async function uploadFileToTrimbleFolder(
 
 		for (const path of [
 			`/tc/api/2.0/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
+			`/tc/api/2.1/projects/${encodeURIComponent(projectId)}/files?parentId=${encodeURIComponent(parentFolderId)}`,
 			`/tc/api/2.0/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
+			`/tc/api/2.1/files?projectId=${encodeURIComponent(projectId)}&parentId=${encodeURIComponent(parentFolderId)}`,
 		]) {
 			try {
 				attempts.push(`legacy_upload @ ${host}${path}`);

@@ -142,6 +142,7 @@ async function uploadAsVersionName(
 	parentFolderId: string,
 	targetName: string,
 	localFile: File,
+	probeFileId: string,
 ): Promise<{
 	result: UploadResult;
 	metadataSaved: boolean;
@@ -162,6 +163,8 @@ async function uploadAsVersionName(
 	body.append("target_name", targetName);
 	body.append("original_name", localFile.name);
 	body.append("connect_origin", getRuntimeTrimbleConnectOrigin() ?? "");
+	// Helps the API pick the same regional host as Trimble for this file (matches batch QR host resolution).
+	body.append("probe_file_id", probeFileId);
 
 	const res = await fetch(url, {
 		method: "POST",
@@ -508,6 +511,7 @@ export async function renderVersionUploadPanel(
 					match.parentId,
 					match.name,
 					state.selectedLocalFile,
+					match.id,
 				);
 				state.lastUploadMessage = upload.metadataSaved
 					? "Original local name saved in file description metadata."
