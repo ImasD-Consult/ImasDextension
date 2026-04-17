@@ -28,6 +28,33 @@ function buildHosts(input?: string): string[] {
 	return [...set];
 }
 
+async function resolvePreferredHosts(
+	hosts: string[],
+	accessToken: string,
+	projectId: string,
+	probeObjectId: string,
+): Promise<string[]> {
+	const path = `/tc/api/2.0/tags?projectId=${encodeURIComponent(projectId)}&objectId=${encodeURIComponent(probeObjectId)}&objectType=FILE`;
+	for (const host of hosts) {
+		try {
+			const res = await fetch(`${host}${path}`, {
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					Accept: "application/json",
+				},
+			});
+			if (!res.ok) continue;
+			const ctype = (res.headers.get("content-type") || "").toLowerCase();
+			if (!ctype.includes("application/json")) continue;
+			// Host is valid for this project/object.
+			return [host, ...hosts.filter((h) => h !== host)];
+		} catch {
+			// try next host
+		}
+	}
+	return hosts;
+}
+
 function nowMs(): number {
 	return Date.now();
 }
@@ -173,6 +200,7 @@ async function downloadPdfFromTrimble(
 	];
 	const urls = hosts.flatMap((h) => paths.map((p) => `${h}${p}`));
 	let lastError: unknown;
+	const attempts: string[] = [];
 	for (const url of urls) {
 		try {
 			const res = await fetch(url, {
@@ -182,6 +210,7 @@ async function downloadPdfFromTrimble(
 				},
 			});
 			if (!res.ok) {
+				attempts.push(`HTTP ${res.status} @ ${url}`);
 				lastError = new Error(`HTTP ${res.status} at ${url}`);
 				continue;
 			}
@@ -197,16 +226,26 @@ async function downloadPdfFromTrimble(
 			if (isPdfByType || isPdfByMagic) {
 				return bytes;
 			}
+			attempts.push(
+				`Non-PDF content-type "${ctype || "unknown"}" @ ${url}`,
+			);
 			lastError = new Error(
 				`Non-PDF response at ${url} (content-type: ${ctype || "unknown"})`,
 			);
 		} catch (e) {
+			attempts.push(
+				`${e instanceof Error ? e.message : "request failed"} @ ${url}`,
+			);
 			lastError = e;
 		}
 	}
-	throw lastError instanceof Error
-		? lastError
-		: new Error("Could not download a valid PDF from Trimble.");
+	const details = attempts.slice(0, 8).join(" | ");
+	if (lastError instanceof Error) {
+		throw new Error(`${lastError.message}${details ? ` (attempts: ${details})` : ""}`);
+	}
+	throw new Error(
+		`Could not download a valid PDF from Trimble.${details ? ` Attempts: ${details}` : ""}`,
+	);
 }
 
 async function uploadPdfToTrimble(
@@ -283,7 +322,7 @@ export async function startTrimbleBatchJob(
 	await saveStatus(app, env, queued);
 
 	void (async () => {
-		const hosts = buildHosts(input.trimble.host);
+		let hosts = buildHosts(input.trimble.host);
 		const running: TrimbleBatchStatusResponse = {
 			...queued,
 			status: "running",
@@ -292,6 +331,12 @@ export async function startTrimbleBatchJob(
 		await saveStatus(app, env, running);
 		const results: FileResult[] = [];
 		try {
+			hosts = await resolvePreferredHosts(
+				hosts,
+				input.trimble.accessToken,
+				input.trimble.projectId,
+				input.items[0]?.pdfFileId ?? "",
+			);
 			const qrFolderId = await ensureSubfolder(
 				hosts,
 				input.trimble.accessToken,
