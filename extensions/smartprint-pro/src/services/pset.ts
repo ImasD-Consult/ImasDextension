@@ -747,17 +747,6 @@ export async function writeWbsPropertySetValues(
 				};
 			}
 
-			// Experimental fallback for hosts that only expose runtime entity ids:
-			// write using project/model/runtime entity FRN when a stable entity link is unavailable.
-			if (candidate && /^\d+$/.test(candidate) && item.modelId?.trim()) {
-				return {
-					link: `frn:tc:project:${project.id}:model:${item.modelId.trim()}:entity:${candidate}`,
-					libId,
-					defId,
-					props: { [propKey]: item.value },
-				};
-			}
-
 			throw new Error(
 				`Could not resolve stable entity link for selected object "${item.partId}". ` +
 					`Write aborted to avoid creating PSet on runtime id link. Select an assembly/object with a stable entity id.`,

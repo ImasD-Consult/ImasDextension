@@ -54,7 +54,7 @@ type IfcModelOption = {
 function isWritableLink(link: string | undefined): boolean {
 	const l = link?.trim();
 	if (!l) return false;
-	return l.startsWith("frn:entity:") || l.startsWith("frn:tc:project:");
+	return l.startsWith("frn:entity:");
 }
 
 export type RenderWbsOptions = {
@@ -258,12 +258,11 @@ function renderPartsList(
 	selectedPartIds: Set<string>,
 ): string {
 	if (!parts.length) {
-		return '<p class="text-sm text-gray-500 italic">No IFC objects available for this model.</p>';
+		return '<p class="text-sm text-gray-500 italic">No GUID-linked writable objects yet. Click "Load writable objects".</p>';
 	}
 	return parts
 		.map((part) => {
 			const hasStableLink = isWritableLink(part.link);
-			const isRuntimeLink = part.link?.trim().startsWith("frn:tc:project:") === true;
 			const isSelected = selectedPartIds.has(part.id);
 			return `
         <button
@@ -275,7 +274,7 @@ function renderPartsList(
           <span class="text-sm text-gray-800 min-w-0 flex-1 truncate" title="${escapeHtml(part.name)}">${escapeHtml(part.name)}</span>
           ${
 						hasStableLink
-							? `<span class="text-[10px] uppercase tracking-wide ${isRuntimeLink ? "text-amber-700" : "text-emerald-700"}">${isRuntimeLink ? "Runtime link" : "Ready"}</span>`
+							? '<span class="text-[10px] uppercase tracking-wide text-emerald-700">Ready</span>'
 							: '<span class="text-[10px] uppercase tracking-wide text-red-600">No stable link</span>'
 					}
           <span class="ml-auto text-xs text-gray-500">${escapeHtml(part.type)} | ${escapeHtml(part.material)}</span>
@@ -345,7 +344,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 4.4)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 4.5)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -400,7 +399,7 @@ export async function renderWbs(
           class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
           data-resolve-links
         >
-          Resolve writable links
+          Load writable objects
         </button>
         <button
           type="button"
@@ -465,7 +464,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 4.4)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 4.5)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1006,8 +1005,8 @@ export async function renderWbs(
 	}
 
 	function refreshAssignButton(): void {
-		const selectedCount = getAssignableParts().filter((p) =>
-			selectedPartIds.has(p.id),
+		const selectedCount = getAssignableParts().filter(
+			(p) => isWritableLink(p.link) && selectedPartIds.has(p.id),
 		).length;
 		assignButtonEl.disabled =
 			selectedWbsRowIndex === null ||
@@ -1399,9 +1398,11 @@ export async function renderWbs(
 			refreshAssignButton();
 			return;
 		}
-
+		const writableOnly = getAssignableParts().filter((p) =>
+			isWritableLink(p.link),
+		);
 		partsListEl.innerHTML = renderPartsList(
-			getAssignableParts(),
+			writableOnly,
 			selectedPartIds,
 		);
 		refreshAssignButton();
@@ -1755,12 +1756,12 @@ export async function renderWbs(
 	resolveLinksButtonEl?.addEventListener("click", async () => {
 		const assignable = getAssignableParts();
 		if (!assignable.length) {
-			setStatus("No IFC objects loaded to resolve stable links.", "error");
+			setStatus("No IFC objects loaded to resolve stable GUID links.", "error");
 			return;
 		}
 		const before = countReadyParts(assignable);
 		setStatus(
-			`Resolving stable links for ${assignable.length} IFC object(s)...`,
+			`Resolving GUID-based writable links for ${assignable.length} IFC object(s)...`,
 		);
 		const resolved = await resolveStableLinksForParts(assignable);
 		const byId = new Map(resolved.map((p) => [p.id, p]));
@@ -1769,11 +1770,11 @@ export async function renderWbs(
 		refreshPartsList();
 		if (after > before) {
 			setStatus(
-				`Resolved writable links for ${after - before} additional object(s). Ready: ${after}/${getAssignableParts().length}.`,
+				`Resolved ${after - before} additional GUID-linked object(s). Writable: ${after}/${getAssignableParts().length}.`,
 			);
 		} else {
 			setStatus(
-				`No additional stable links found. Ready: ${after}/${getAssignableParts().length}.`,
+				`No additional GUID-linked objects found. Writable: ${after}/${getAssignableParts().length}.`,
 				"error",
 			);
 		}
@@ -1855,21 +1856,15 @@ export async function renderWbs(
 			if (idx >= 0) parts[idx] = resolved;
 		}
 		refreshPartsList();
-		const runtimeCount = selectedParts.filter(
-			(part) => part.link?.trim().startsWith("frn:tc:project:"),
-		).length;
 		const selectedPartsWithStableLinks = selectedParts.filter((part) =>
 			isWritableLink(part.link),
 		);
-		const selectedPartsForWrite =
-			selectedPartsWithStableLinks.length > 0
-				? selectedPartsWithStableLinks
-				: selectedParts;
+		const selectedPartsForWrite = selectedPartsWithStableLinks;
 		if (!selectedPartsForWrite.length) {
 			const firstSelected = selectedParts[0];
 			const rawLink = firstSelected?.link?.trim() || "(none)";
 			setStatus(
-				`No writable links found for ${selectedParts.length} selected object(s). First selected link: ${rawLink}.`,
+				`No GUID-based writable links found for ${selectedParts.length} selected object(s). First selected link: ${rawLink}.`,
 				"error",
 			);
 			return;
@@ -1915,16 +1910,16 @@ export async function renderWbs(
 				);
 				if (verified === true) {
 					setStatus(
-						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s) and verified value on selected object. First target: ${firstLink}${runtimeCount > 0 ? " (runtime FRN used)" : ""}`,
+						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s) and verified value on selected object. First target: ${firstLink}`,
 					);
 				} else if (verified === false) {
 					setStatus(
-						`Write API returned success, but value was not found on selected object properties. Likely target link mismatch. First target: ${firstLink}${runtimeCount > 0 ? " (runtime FRN used)" : ""}`,
+						`Write API returned success, but value was not found on selected object properties. Likely target link mismatch. First target: ${firstLink}`,
 						"error",
 					);
 				} else {
 					setStatus(
-						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s). Could not verify object payload after write. First target: ${firstLink}${runtimeCount > 0 ? " (runtime FRN used)" : ""}`,
+						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s). Could not verify object payload after write. First target: ${firstLink}`,
 					);
 				}
 			})
