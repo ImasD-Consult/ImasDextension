@@ -345,7 +345,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 4.3)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 4.4)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -465,7 +465,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 4.3)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 4.4)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1861,7 +1861,11 @@ export async function renderWbs(
 		const selectedPartsWithStableLinks = selectedParts.filter((part) =>
 			isWritableLink(part.link),
 		);
-		if (!selectedPartsWithStableLinks.length) {
+		const selectedPartsForWrite =
+			selectedPartsWithStableLinks.length > 0
+				? selectedPartsWithStableLinks
+				: selectedParts;
+		if (!selectedPartsForWrite.length) {
 			const firstSelected = selectedParts[0];
 			const rawLink = firstSelected?.link?.trim() || "(none)";
 			setStatus(
@@ -1872,7 +1876,7 @@ export async function renderWbs(
 		}
 		const now = new Date().toISOString();
 
-		selectedPartsWithStableLinks.forEach((part) => {
+		selectedPartsForWrite.forEach((part) => {
 			assignments = assignments.filter((item) => item.partId !== part.id);
 			const propertySetValue = buildWbsPropertyValue(selectedRow);
 			assignments.push({
@@ -1889,7 +1893,7 @@ export async function renderWbs(
 			});
 		});
 
-		const psetWriteItems = selectedPartsWithStableLinks.map((part) => {
+		const psetWriteItems = selectedPartsForWrite.map((part) => {
 			const propertySetValue = buildWbsPropertyValue(selectedRow);
 			return {
 				modelId: part.modelId ?? getActiveModelId(),
@@ -1911,7 +1915,7 @@ export async function renderWbs(
 				);
 				if (verified === true) {
 					setStatus(
-						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsWithStableLinks.length} part(s) and verified value on selected object. First target: ${firstLink}${runtimeCount > 0 ? " (runtime FRN used)" : ""}`,
+						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s) and verified value on selected object. First target: ${firstLink}${runtimeCount > 0 ? " (runtime FRN used)" : ""}`,
 					);
 				} else if (verified === false) {
 					setStatus(
@@ -1920,7 +1924,7 @@ export async function renderWbs(
 					);
 				} else {
 					setStatus(
-						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsWithStableLinks.length} part(s). Could not verify object payload after write. First target: ${firstLink}${runtimeCount > 0 ? " (runtime FRN used)" : ""}`,
+						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s). Could not verify object payload after write. First target: ${firstLink}${runtimeCount > 0 ? " (runtime FRN used)" : ""}`,
 					);
 				}
 			})
