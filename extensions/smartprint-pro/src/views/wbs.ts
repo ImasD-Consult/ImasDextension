@@ -64,6 +64,26 @@ function isWritableLink(link: string | undefined): boolean {
 	return l.startsWith("frn:entity:");
 }
 
+function normalizeKnownLink(raw: string | undefined): string {
+	const value = raw?.trim() ?? "";
+	if (!value) return "";
+	if (!value.startsWith("frn:entity:")) return value;
+	const prefix = "frn:entity:";
+	let entity = value.slice(prefix.length).trim();
+	// Some sources return percent-encoded entity ids (e.g. %24 for '$').
+	// Decode a couple of times defensively to match viewer/fileId forms.
+	for (let i = 0; i < 2; i += 1) {
+		try {
+			const decoded = decodeURIComponent(entity);
+			if (decoded === entity) break;
+			entity = decoded;
+		} catch {
+			break;
+		}
+	}
+	return `${prefix}${entity}`;
+}
+
 export type RenderWbsOptions = {
 	/** 3D manifest: only models open in the viewer (no project folder IFC list). */
 	useViewerModelOnly?: boolean;
@@ -365,7 +385,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.6)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.8)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -481,7 +501,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.6)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.8)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -757,7 +777,7 @@ export async function renderWbs(
 	async function syncViewerSelectionFromKnownLink(link: string): Promise<void> {
 		const v = api.viewer;
 		if (!viewerOnly || !v?.setSelection) return;
-		const trimmed = link.trim();
+		const trimmed = normalizeKnownLink(link);
 		if (!trimmed) return;
 
 		let modelId: string | undefined;
@@ -774,7 +794,7 @@ export async function renderWbs(
 
 		// Stable entity link: try to map against loaded IFC rows by exact link.
 		if ((!modelId || runtimeId == null || Number.isNaN(runtimeId)) && trimmed.startsWith("frn:entity:")) {
-			const match = parts.find((p) => p.link?.trim() === trimmed);
+			const match = parts.find((p) => normalizeKnownLink(p.link) === trimmed);
 			if (match) {
 				modelId = match.modelId ?? getActiveModelId();
 				const rid = Number(match.id);
@@ -1936,7 +1956,7 @@ export async function renderWbs(
 		setStatus("Loading known links from PSet library...");
 		try {
 			const res = await loadKnownLibraryLinks(api);
-			knownLibraryLinks = res.links;
+			knownLibraryLinks = [...new Set(res.links.map((l) => normalizeKnownLink(l)).filter(Boolean))];
 			refreshKnownLinkOptions();
 			refreshKnownLinkHint();
 			if (res.links.length > 0) {
@@ -1952,7 +1972,10 @@ export async function renderWbs(
 	knownLinkSelectEl?.addEventListener("change", () => {
 		refreshKnownLinkHint();
 		refreshAssignButton();
-		const selected = knownLinkSelectEl.value?.trim();
+		const selected = normalizeKnownLink(knownLinkSelectEl.value);
+		if (selected && knownLinkSelectEl.value !== selected) {
+			knownLinkSelectEl.value = selected;
+		}
 		if (selected) {
 			void syncViewerSelectionFromKnownLink(selected);
 		}
@@ -2064,7 +2087,7 @@ export async function renderWbs(
 		const assignedRowIndex = selectedWbsRowIndex;
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
 		if (!selectedRow) return;
-		const fallbackKnownLink = knownLinkSelectEl?.value?.trim();
+		const fallbackKnownLink = normalizeKnownLink(knownLinkSelectEl?.value);
 		if (!fallbackKnownLink) {
 			setStatus("Select a Known link target to enable Assign.", "error");
 			return;
@@ -2079,18 +2102,17 @@ export async function renderWbs(
 			if (idx >= 0) parts[idx] = resolved;
 		}
 		refreshPartsList();
-		const selectedPartsForWrite = selectedPartsResolved.length
-			? [selectedPartsResolved[0]]
-			: [
-					{
-						id: "known-link-target",
-						name: "Known Link Target",
-						type: "N/A",
-						material: "N/A",
-						modelId: getActiveModelId(),
-						link: fallbackKnownLink,
-					} as IfcPart,
-				];
+		const selectedPartsForWrite = [
+			{
+				id: selectedPartsResolved[0]?.id ?? "known-link-target",
+				name: selectedPartsResolved[0]?.name ?? "Known Link Target",
+				type: selectedPartsResolved[0]?.type ?? "N/A",
+				material: selectedPartsResolved[0]?.material ?? "N/A",
+				modelId: selectedPartsResolved[0]?.modelId ?? getActiveModelId(),
+				// Always write to the explicit known-link target chosen in the UI.
+				link: fallbackKnownLink,
+			} as IfcPart,
+		];
 		const now = new Date().toISOString();
 
 		selectedPartsForWrite.forEach((part) => {
