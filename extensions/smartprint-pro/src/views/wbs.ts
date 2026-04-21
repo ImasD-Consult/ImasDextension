@@ -1224,6 +1224,14 @@ export async function renderWbs(
 		): string | undefined => {
 			let foundFrnEntity: string | undefined;
 			let foundStableId: string | undefined;
+			const guidKeys = new Set([
+				"guid",
+				"globalid",
+				"ifcguid",
+				"fileid",
+				"entityid",
+				"objectid",
+			]);
 			const walk = (node: unknown, depth: number): void => {
 				if (depth > 18 || node == null) return;
 				if (Array.isArray(node)) {
@@ -1232,6 +1240,21 @@ export async function renderWbs(
 				}
 				if (typeof node !== "object") return;
 				const o = node as Record<string, unknown>;
+				const nvName =
+					typeof o.name === "string"
+						? o.name.toLowerCase().trim()
+						: typeof o.key === "string"
+							? o.key.toLowerCase().trim()
+							: undefined;
+				const nvValue =
+					typeof o.value === "string"
+						? o.value.trim()
+						: typeof o.val === "string"
+							? o.val.trim()
+							: undefined;
+				if (nvName && nvValue && guidKeys.has(nvName) && isLikelyStableEntityId(nvValue)) {
+					foundStableId = nvValue;
+				}
 				for (const [k, v] of Object.entries(o)) {
 					if (typeof v === "string") {
 						const sv = v.trim();
@@ -1243,9 +1266,7 @@ export async function renderWbs(
 							foundFrnEntity = sv;
 						}
 						if (
-							["guid", "globalid", "fileid", "entityid"].includes(
-								k.toLowerCase(),
-							) &&
+							guidKeys.has(k.toLowerCase()) &&
 							isLikelyStableEntityId(sv)
 						) {
 							foundStableId = sv;
@@ -1392,6 +1413,14 @@ export async function renderWbs(
 		};
 		const pickFromPayload = (root: unknown): string | undefined => {
 			let found: string | undefined;
+			const guidKeys = new Set([
+				"guid",
+				"globalid",
+				"ifcguid",
+				"fileid",
+				"entityid",
+				"objectid",
+			]);
 			const walk = (node: unknown, depth: number): void => {
 				if (found || depth > 18 || node == null) return;
 				if (Array.isArray(node)) {
@@ -1400,6 +1429,22 @@ export async function renderWbs(
 				}
 				if (typeof node !== "object") return;
 				const o = node as Record<string, unknown>;
+				const nvName =
+					typeof o.name === "string"
+						? o.name.toLowerCase().trim()
+						: typeof o.key === "string"
+							? o.key.toLowerCase().trim()
+							: undefined;
+				const nvValue =
+					typeof o.value === "string"
+						? o.value.trim()
+						: typeof o.val === "string"
+							? o.val.trim()
+							: undefined;
+				if (nvName && nvValue && guidKeys.has(nvName) && isLikelyEntityToken(nvValue)) {
+					found = `frn:entity:${nvValue}`;
+					return;
+				}
 				for (const [k, v] of Object.entries(o)) {
 					if (typeof v === "string") {
 						const sv = v.trim();
@@ -1410,14 +1455,7 @@ export async function renderWbs(
 							return;
 						}
 						if (
-							[
-								"guid",
-								"globalid",
-								"ifcguid",
-								"fileid",
-								"entityid",
-								"objectid",
-							].includes(lk) &&
+							guidKeys.has(lk) &&
 							isLikelyEntityToken(sv)
 						) {
 							found = `frn:entity:${sv}`;
