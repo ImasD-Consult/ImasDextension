@@ -348,7 +348,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 5.8)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 5.9)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -457,7 +457,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 5.8)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 5.9)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1380,12 +1380,15 @@ export async function renderWbs(
 		return found;
 	}
 
-	function summarizeWriteTargets(source: IfcPart[]): string {
+	function summarizeWriteTargets(
+		source: IfcPart[],
+		fallbackKnownLink?: string,
+	): string {
 		if (!source.length) return "(none)";
 		const labels = source.map((part) => {
 			const rid = Number(part.id);
 			const ridText = Number.isNaN(rid) ? part.id : String(rid);
-			const linkText = part.link?.trim() || "(no link)";
+			const linkText = part.link?.trim() || fallbackKnownLink?.trim() || "(no link)";
 			return `${part.name} [rid:${ridText}] -> ${linkText}`;
 		});
 		const maxInline = 2;
@@ -2083,43 +2086,45 @@ export async function renderWbs(
 				link: part.link || fallbackKnownLink,
 			};
 		});
-		const targetSummary = summarizeWriteTargets(selectedPartsForWrite);
+		const targetSummary = summarizeWriteTargets(
+			selectedPartsForWrite,
+			fallbackKnownLink,
+		);
 
-		await writeWbsPropertySetValues(api, psetWriteItems)
-			.then(async () => {
-				saveAssignmentsToLocalStorage(assignments);
-				refreshAssignments();
-				const expectedValue = psetWriteItems[0]?.value ?? "";
-				const verified = await verifyValueOnSelectedObject(
-					selectedPartsWithStableLinks[0],
-					expectedValue,
-				);
-				if (verified === true) {
-					setStatus(
-						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s) and verified value on selected object. Targets: ${targetSummary}`,
-					);
-				} else if (verified === false) {
-					setStatus(
-						`Write API returned success, but value was not found on selected object properties. Likely target link mismatch. Targets: ${targetSummary}`,
-						"error",
-					);
-				} else {
-					setStatus(
-						`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s). Could not verify object payload after write. Targets: ${targetSummary}`,
-					);
-				}
-			})
-			.catch((error) => {
-				const message =
-					error instanceof Error ? error.message : "Failed to write property set.";
-				const firstLink = psetWriteItems[0]?.link ?? "(no link)";
+		try {
+			const writeResult = await writeWbsPropertySetValues(api, psetWriteItems);
+			saveAssignmentsToLocalStorage(assignments);
+			refreshAssignments();
+			const expectedValue = psetWriteItems[0]?.value ?? "";
+			const verified = await verifyValueOnSelectedObject(
+				selectedPartsWithStableLinks[0],
+				expectedValue,
+			);
+			if (verified === true) {
 				setStatus(
-					`Assignment saved locally, but Pset write failed: ${message}. Targets: ${targetSummary}. First target: ${firstLink}`,
+					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s) and verified value on selected object. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Targets: ${targetSummary}`,
+				);
+			} else if (verified === false) {
+				setStatus(
+					`Write API returned success, but value was not found on selected object properties. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Likely target link mismatch. Targets: ${targetSummary}`,
 					"error",
 				);
-				saveAssignmentsToLocalStorage(assignments);
-				refreshAssignments();
-			});
+			} else {
+				setStatus(
+					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s). Could not verify object payload after write. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Targets: ${targetSummary}`,
+				);
+			}
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "Failed to write property set.";
+			const firstLink = psetWriteItems[0]?.link ?? "(no link)";
+			setStatus(
+				`Assignment saved locally, but Pset write failed: ${message}. Targets: ${targetSummary}. First target: ${firstLink}`,
+				"error",
+			);
+			saveAssignmentsToLocalStorage(assignments);
+			refreshAssignments();
+		}
 		});
 		refreshAssignButton();
 	});

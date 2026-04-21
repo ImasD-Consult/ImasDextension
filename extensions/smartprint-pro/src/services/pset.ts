@@ -250,6 +250,12 @@ export interface WbsPsetWriteItem {
 	link?: string;
 }
 
+export interface WbsPsetWriteResult {
+	libId: string;
+	defId: string;
+	propertyName: string;
+}
+
 export interface WbsPsetDebugInfo {
 	ok: boolean;
 	serviceUri: string;
@@ -677,8 +683,10 @@ async function resolveCanonicalLibAndDefIds(
 export async function writeWbsPropertySetValues(
 	api: WorkspaceApi,
 	items: WbsPsetWriteItem[],
-): Promise<void> {
-	if (!items.length) return;
+): Promise<WbsPsetWriteResult> {
+	if (!items.length) {
+		return { libId: "", defId: "", propertyName: "" };
+	}
 
 	const project = await api.project.getProject();
 	if (!project?.id) {
@@ -781,7 +789,7 @@ export async function writeWbsPropertySetValues(
 			errors?: Array<{ message?: string }>;
 		};
 		if ((inline.errorCount ?? 0) === 0) {
-			return;
+			return { libId, defId, propertyName: key };
 		}
 
 		const firstError = inline.errors?.[0]?.message;
