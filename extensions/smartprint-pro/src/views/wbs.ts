@@ -368,6 +368,7 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(runtimeIdText)}" data-assignment-model-id="${escapeHtml(modelId)}" ${(hasLink || runtimeIdText) ? "" : "disabled"}>Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-part-id="${escapeHtml(part.id)}" ${canAssign ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : "Will try to resolve link on click") : "Select a WBS row first")}">Assign</button>
         </td>
       </tr>
@@ -2127,6 +2128,15 @@ export async function renderWbs(
 
 	container.addEventListener("click", (event) => {
 		const target = event.target as HTMLElement;
+		const diagnoseButton = target.closest<HTMLButtonElement>("[data-diagnose-part-id]");
+		if (diagnoseButton) {
+			const partId = diagnoseButton.dataset.diagnosePartId?.trim();
+			if (!partId) return;
+			void runWithButtonFeedback(diagnoseButton, "Diagnosing...", async () => {
+				await diagnoseStableLinkForPart(partId);
+			});
+			return;
+		}
 		const assignLinkButton = target.closest<HTMLButtonElement>("[data-assign-link]");
 		if (assignLinkButton) {
 			const link = assignLinkButton.dataset.assignLink?.trim();
@@ -2337,6 +2347,84 @@ export async function renderWbs(
 			saveAssignmentsToLocalStorage(assignments);
 			refreshAssignments();
 		}
+	}
+
+	async function diagnoseStableLinkForPart(partId: string): Promise<void> {
+		const part = getAssignableParts().find((p) => p.id === partId);
+		if (!part) {
+			setStatus(`Diagnose failed: part ${partId} not found in current model list.`, "error");
+			return;
+		}
+		const rid = Number(part.id);
+		if (Number.isNaN(rid)) {
+			setStatus(`Diagnose failed: part ${part.name} has invalid runtime id ${part.id}.`, "error");
+			return;
+		}
+		const activeModelId = getActiveModelId();
+		await ensureHierarchyCacheForActiveModel();
+		const chain: number[] = [rid];
+		let cur: number | null | undefined = rid;
+		let guard = 0;
+		while (typeof cur === "number" && !Number.isNaN(cur) && guard < 128) {
+			const parent = parentByRuntimeId.get(cur);
+			if (parent == null) break;
+			chain.push(parent);
+			cur = parent;
+			guard += 1;
+		}
+		const fileIds = chain
+			.map((id) => ({ id, fileId: fileIdByRuntimeId.get(id) ?? null }))
+			.filter((x) => x.fileId);
+
+		const viewer = api.viewer;
+		const payloadKeyHints: Array<{ rid: number; keys: string[] }> = [];
+		const candidateValues: Array<{ rid: number; key: string; value: string }> = [];
+		if (viewer?.getObjectProperties) {
+			try {
+				const payload = await viewer.getObjectProperties(activeModelId, chain);
+				if (Array.isArray(payload)) {
+					for (let i = 0; i < payload.length; i++) {
+						const row = payload[i];
+						if (!row || typeof row !== "object") continue;
+						const o = row as Record<string, unknown>;
+						const ridKey =
+							typeof o.id === "number" && !Number.isNaN(o.id) ? o.id : chain[i];
+						const keys = Object.keys(o).slice(0, 24);
+						payloadKeyHints.push({ rid: ridKey, keys });
+						for (const [k, v] of Object.entries(o)) {
+							if (typeof v !== "string") continue;
+							const sv = v.trim();
+							if (!sv) continue;
+							const lk = k.toLowerCase();
+							if (
+								["frn", "link", "guid", "globalid", "ifcguid", "fileid", "entityid", "objectid"].includes(
+									lk,
+								)
+							) {
+								candidateValues.push({ rid: ridKey, key: k, value: sv });
+							}
+						}
+					}
+				}
+			} catch {
+				/* ignore payload fetch errors in diagnostics */
+			}
+		}
+
+		const summary = [
+			`Part "${part.name}" rid=${rid}`,
+			`chain=${chain.join(" > ")}`,
+			`fileIds=${fileIds.length ? fileIds.map((f) => `${f.id}:${f.fileId}`).join(", ") : "(none)"}`,
+			`candidates=${candidateValues.length ? candidateValues.map((c) => `${c.rid}.${c.key}=${c.value}`).slice(0, 6).join(" | ") : "(none)"}`,
+		].join(" | ");
+		console.log("WBS link diagnose", {
+			part,
+			chain,
+			fileIds,
+			payloadKeyHints,
+			candidateValues,
+		});
+		setStatus(`Link diagnose: ${summary}`);
 	}
 
 	assignButtonEl.addEventListener("click", async () => {
