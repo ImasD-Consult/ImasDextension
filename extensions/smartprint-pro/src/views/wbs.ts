@@ -411,9 +411,32 @@ function renderAssignmentsList(
 		if (!link) continue;
 		if (!partByLink.has(link)) partByLink.set(link, part);
 	}
+	const knownLinkSet = new Set(knownLinks.map((l) => normalizeKnownLink(l)).filter(Boolean));
+	const usedKnownLinks = new Set<string>();
+	const knownBySignature = new Map<string, string[]>();
+	for (const item of assignments) {
+		const link = normalizeKnownLink(item.targetLink);
+		if (!link || !knownLinkSet.has(link)) continue;
+		const sig = `${(item.partName ?? "").trim().toUpperCase()}::${(item.partType ?? "")
+			.trim()
+			.toUpperCase()}`;
+		const bucket = knownBySignature.get(sig) ?? [];
+		bucket.push(link);
+		knownBySignature.set(sig, bucket);
+	}
 	const rowsFromParts = parts
 		.map((part) => {
-			const link = normalizeKnownLink(part.link);
+			const directLink = normalizeKnownLink(part.link);
+			const sig = `${(part.name ?? "").trim().toUpperCase()}::${(part.type ?? "")
+				.trim()
+				.toUpperCase()}`;
+			const bySigBucket = knownBySignature.get(sig) ?? [];
+			const mappedKnownLink =
+				!directLink
+					? bySigBucket.find((l) => !usedKnownLinks.has(l))
+					: undefined;
+			const link = directLink || mappedKnownLink || "";
+			if (link && knownLinkSet.has(link)) usedKnownLinks.add(link);
 			const latest = link ? latestByLink.get(link) : undefined;
 			const baseName = part.name || latest?.partName || "(unknown)";
 			const className = part.type || latest?.partType || "(unknown)";
@@ -440,9 +463,11 @@ function renderAssignmentsList(
 			const statusBadge = isAssigned
 				? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
 				: hasLink
-					? part.resolvedViaParent
-						? '<span class="inline-flex items-center rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">Assigns to parent</span>'
-						: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
+					? !directLink && mappedKnownLink
+						? '<span class="inline-flex items-center rounded bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">Mapped known target</span>'
+						: part.resolvedViaParent
+							? '<span class="inline-flex items-center rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">Assigns to parent</span>'
+							: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
 					: '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">No link</span>';
 			const canAssign = selectedWbsRowIndex !== null;
 			const assignTitle = canAssign
@@ -468,7 +493,10 @@ function renderAssignmentsList(
     `;
 		})
 		.join("");
-	const knownOnlyLinks = knownLinks.filter((link) => !partByLink.has(link));
+	const knownOnlyLinks = knownLinks
+		.map((l) => normalizeKnownLink(l))
+		.filter((link): link is string => Boolean(link))
+		.filter((link) => !partByLink.has(link) && !usedKnownLinks.has(link));
 	const rowsFromKnown = knownOnlyLinks
 		.map((link, i) => {
 			const latest = latestByLink.get(link);
