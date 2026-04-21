@@ -780,6 +780,20 @@ export async function writeWbsPropertySetValues(
 	const triedKeys: string[] = [];
 	const keysToTry = propertyRetryKeys(propertyName);
 	let lastErrorMessage = "Property set write failed for some items.";
+	const tryBestEffortVisibleGroupWrite = async (): Promise<void> => {
+		for (const visibleKey of ["Group", "group"]) {
+			try {
+				const res = await pset.changeset({ items: buildChangesetItems(visibleKey) });
+				const inline = res.data as {
+					errorCount?: number;
+					errors?: Array<{ message?: string }>;
+				};
+				if ((inline.errorCount ?? 0) === 0) return;
+			} catch {
+				/* best-effort only */
+			}
+		}
+	};
 
 	for (const key of keysToTry) {
 		triedKeys.push(key);
@@ -800,6 +814,9 @@ export async function writeWbsPropertySetValues(
 			errors?: Array<{ message?: string }>;
 		};
 		if ((inline.errorCount ?? 0) === 0) {
+			if (key !== "Group" && key !== "group") {
+				await tryBestEffortVisibleGroupWrite();
+			}
 			return { libId, defId, propertyName: key };
 		}
 
