@@ -547,6 +547,7 @@ function propertyRetryKeys(primary: string): string[] {
 	// Prefer the visible Trimble UI field first, then internal/schema keys.
 	const out = new Set<string>();
 	out.add("Group");
+	out.add("group");
 	if (primary.trim()) out.add(primary.trim());
 	if (primary.startsWith("Pset_") && primary.length > 5) {
 		out.add(primary.slice("Pset_".length));
