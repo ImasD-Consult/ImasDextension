@@ -365,7 +365,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.5)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.6)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -481,7 +481,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.5)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.6)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1448,11 +1448,10 @@ export async function renderWbs(
 	}
 
 	function buildWbsPropertyValue(row: string[]): string {
-		const groupOrArticle = (row[2] ?? "").trim();
-		if (groupOrArticle) return groupOrArticle;
 		const wbs = (row[1] ?? "").trim();
 		const description = (row[3] ?? "").trim();
-		return `${wbs} - ${description}`.trim();
+		if (wbs && description) return `${wbs} - ${description}`;
+		return wbs || description || "";
 	}
 
 	async function syncSelectedPartsFromViewerNative(): Promise<void> {
