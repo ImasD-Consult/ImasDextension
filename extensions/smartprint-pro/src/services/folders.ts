@@ -1413,6 +1413,12 @@ export async function fetchIfcAssembliesFromFile(
 		}
 
 		if (!tree) {
+			// In strict stable-id mode, REST tree reads can fail in browser due to CORS.
+			// Fall back to viewer hierarchy instead of hard-failing reload.
+			const viaViewerHierarchyFallback = await tryFetchAssembliesViaViewerHierarchy();
+			if (viaViewerHierarchyFallback?.length) {
+				return viaViewerHierarchyFallback;
+			}
 			const finalState = getFileProcessingStateShallow(fileObj);
 			const originHint =
 				"Set VITE_TRIMBLE_CONNECT_ORIGIN to the same origin as your Connect tab (NA: https://app.connect.trimble.com, EU: https://app21.connect.trimble.com, Asia: https://app31.connect.trimble.com), rebuild, and redeploy. Wrong region or cross-origin blocks look like this. In Folders mode, open the IFC in the 3D viewer once so the viewer model id is available, then Retry.";
