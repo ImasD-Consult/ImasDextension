@@ -262,7 +262,7 @@ function renderPartsList(
 	selectedPartIds: Set<string>,
 ): string {
 	if (!parts.length) {
-		return '<p class="text-sm text-gray-500 italic">No GUID-linked writable objects yet. Click "Load writable objects".</p>';
+		return '<p class="text-sm text-gray-500 italic">No IFC objects selected yet. Use current 3D selection, then choose known link fallback if needed.</p>';
 	}
 	return parts
 		.map((part) => {
@@ -348,7 +348,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 5.7)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 5.8)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -377,26 +377,6 @@ export async function renderWbs(
         </div>
       </div>
       <p class="shrink-0 text-xs text-gray-600" data-wbs-status>No file uploaded yet. Expected: Excel template (.xlsx / .xls).</p>
-      <div class="shrink-0 flex items-center gap-2">
-        <button
-          type="button"
-          class="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
-          data-pset-debug-check
-        >
-          Check PSet config
-        </button>
-        <p class="text-[11px] text-gray-500 truncate" data-pset-debug>PSet debug: not checked yet.</p>
-      </div>
-      <div class="shrink-0 flex items-center gap-2">
-        <button
-          type="button"
-          class="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
-          data-model-pset-check
-        >
-          Inspect model Psets
-        </button>
-        <p class="text-[11px] text-gray-500 truncate" data-model-pset-debug>Model Psets: not checked yet.</p>
-      </div>
       <div class="shrink-0 flex flex-wrap items-center gap-2 rounded border border-gray-200 bg-gray-50 p-2">
         <button
           type="button"
@@ -409,18 +389,11 @@ export async function renderWbs(
           class="min-w-[260px] rounded border border-gray-300 px-2 py-1 text-xs text-gray-700"
           data-known-link-select
         >
-          <option value="">Known link (optional fallback)</option>
+          <option value="">Known link fallback (required if selected object has no link)</option>
         </select>
         <p class="text-[11px] text-gray-500 truncate max-w-[520px]" data-known-link-hint>
           Known link fallback: none selected.
         </p>
-        <button
-          type="button"
-          class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-          data-resolve-links
-        >
-          Load writable objects
-        </button>
         <button
           type="button"
           class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
@@ -484,7 +457,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 5.7)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 5.8)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -506,26 +479,6 @@ export async function renderWbs(
         </div>
       </div>
       <p class="mt-2 text-sm text-gray-600" data-wbs-status>No file uploaded yet. Expected file type: Excel template (.xlsx).</p>
-      <div class="mt-1 flex items-center gap-2">
-        <button
-          type="button"
-          class="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
-          data-pset-debug-check
-        >
-          Check PSet config
-        </button>
-        <p class="text-[11px] text-gray-500 truncate" data-pset-debug>PSet debug: not checked yet.</p>
-      </div>
-      <div class="mt-1 flex items-center gap-2">
-        <button
-          type="button"
-          class="rounded border border-gray-300 px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-50"
-          data-model-pset-check
-        >
-          Inspect model Psets
-        </button>
-        <p class="text-[11px] text-gray-500 truncate" data-model-pset-debug>Model Psets: not checked yet.</p>
-      </div>
     </div>
 
     <div class="mt-3 space-y-3">
@@ -1114,7 +1067,7 @@ export async function renderWbs(
 	function refreshKnownLinkOptions(): void {
 		if (!knownLinkSelectEl) return;
 		knownLinkSelectEl.innerHTML =
-			'<option value="">Known link (optional fallback)</option>' +
+			'<option value="">Known link fallback (required if selected object has no link)</option>' +
 			knownLibraryLinks
 				.map((l, i) => {
 					const suffix = l.length > 56 ? `${l.slice(0, 28)}...${l.slice(-22)}` : l;
@@ -1140,12 +1093,14 @@ export async function renderWbs(
 	}
 
 	function refreshAssignButton(): void {
-		const selectedCount = getAssignableParts().filter(
-			(p) => selectedPartIds.has(p.id),
-		).length;
+		const selectedParts = getAssignableParts().filter((p) => selectedPartIds.has(p.id));
+		const selectedCount = selectedParts.length;
+		const hasWritableSelected = selectedParts.some((p) => isWritableLink(p.link));
+		const hasKnownFallback = Boolean(knownLinkSelectEl?.value?.trim());
 		assignButtonEl.disabled =
 			selectedWbsRowIndex === null ||
 			selectedCount === 0 ||
+			(!hasWritableSelected && !hasKnownFallback) ||
 			!tableData.rows.length;
 	}
 
@@ -1595,8 +1550,12 @@ export async function renderWbs(
 				"error",
 			);
 		} else {
+			const selected = getAssignableParts().filter((p) => selectedPartIds.has(p.id));
+			const writableSelected = selected.filter((p) => isWritableLink(p.link)).length;
 			setStatus(
-				`Matched ${selectedPartIds.size} of ${runtimeIds.size} selected object(s) to this list. You can also click IFC rows below to select manually.`,
+				writableSelected > 0
+					? `Matched ${selectedPartIds.size} of ${runtimeIds.size} selected object(s) to this list.`
+					: `Matched ${selectedPartIds.size} of ${runtimeIds.size} selected object(s), but none has a writable link yet. Select a Known link fallback to enable Assign.`,
 			);
 		}
 	}
