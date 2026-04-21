@@ -93,6 +93,10 @@ function getEntityIdFromFrn(link: string | undefined): string | undefined {
 	return token || undefined;
 }
 
+function isValidRuntimeId(value: number): boolean {
+	return Number.isFinite(value) && !Number.isNaN(value) && value > 0;
+}
+
 function extractStableEntityLinkFromUnknownPayload(root: unknown): string | undefined {
 	let foundFrnEntity: string | undefined;
 	let foundStableId: string | undefined;
@@ -413,8 +417,11 @@ function renderAssignmentsList(
 			const baseName = part.name || latest?.partName || "(unknown)";
 			const className = part.type || latest?.partType || "(unknown)";
 			const runtimeId = Number(part.id);
-			const runtimeIdText = Number.isNaN(runtimeId) ? "" : String(runtimeId);
-			const targetRuntimeIdRaw = part.targetRuntimeId?.trim() || runtimeIdText;
+			const runtimeIdText = isValidRuntimeId(runtimeId) ? String(runtimeId) : "";
+			const targetRuntimeIdNum = Number(part.targetRuntimeId?.trim() || runtimeIdText);
+			const targetRuntimeIdRaw = isValidRuntimeId(targetRuntimeIdNum)
+				? String(targetRuntimeIdNum)
+				: "";
 			const targetName = part.targetName?.trim() || baseName;
 			const displayName =
 				part.resolvedViaParent && targetName !== baseName
@@ -451,7 +458,7 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" data-assignment-part-id="${escapeHtml(part.id)}" ${(hasLink || targetRuntimeIdRaw) ? "" : "disabled"}>Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" data-assignment-part-id="${escapeHtml(part.id)}" ${(hasLink || Boolean(targetRuntimeIdRaw)) ? "" : "disabled"}>Select in 3D</button>
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && hasLink) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : "Geometry only, no data properties found") : "Select a WBS row first")}">Assign</button>
         </td>
@@ -851,7 +858,7 @@ export async function renderWbs(
 		const runtimeIds = getAssignableParts()
 			.filter((p) => selectedPartIds.has(p.id))
 			.map((p) => Number(p.id))
-			.filter((n) => !Number.isNaN(n));
+			.filter((n) => isValidRuntimeId(n));
 		// Avoid setSelection with an empty list — some hosts treat it like "all" or reset badly.
 		if (runtimeIds.length === 0) return;
 		try {
@@ -885,17 +892,23 @@ export async function renderWbs(
 		}
 
 		// Stable entity link: try to map against loaded IFC rows by exact link.
-		if ((!modelId || runtimeId == null || Number.isNaN(runtimeId)) && trimmed.startsWith("frn:entity:")) {
+		if (
+			(!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) &&
+			trimmed.startsWith("frn:entity:")
+		) {
 			const match = parts.find((p) => normalizeKnownLink(p.link) === trimmed);
 			if (match) {
 				modelId = match.modelId ?? getActiveModelId();
 				const rid = Number(match.id);
-				if (!Number.isNaN(rid)) runtimeId = rid;
+				if (isValidRuntimeId(rid)) runtimeId = rid;
 			}
 		}
 
 		// Stable entity link: fallback via hierarchy fileId mapping.
-		if ((!modelId || runtimeId == null || Number.isNaN(runtimeId)) && trimmed.startsWith("frn:entity:")) {
+		if (
+			(!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) &&
+			trimmed.startsWith("frn:entity:")
+		) {
 			const entityId = trimmed.slice("frn:entity:".length).trim();
 			await ensureHierarchyCacheForActiveModel();
 			for (const [rid, fid] of fileIdByRuntimeId.entries()) {
@@ -907,7 +920,7 @@ export async function renderWbs(
 			}
 		}
 
-		if (!modelId || runtimeId == null || Number.isNaN(runtimeId)) {
+		if (!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) {
 			setStatus(
 				`Known link selected. Viewer highlight is unavailable for this model/runtime mapping, but Assign can still write to: ${trimmed}`,
 			);
@@ -1523,7 +1536,7 @@ export async function renderWbs(
 								: typeof o.runtimeId === "number"
 									? o.runtimeId
 									: NaN;
-					if (Number.isNaN(rid)) continue;
+					if (!isValidRuntimeId(rid)) continue;
 					const name =
 						typeof o.name === "string"
 							? o.name.trim()
@@ -1905,7 +1918,7 @@ export async function renderWbs(
 				for (const row of sel?.modelObjectIds ?? []) {
 					if (!modelMatchesActive(row?.modelId)) continue;
 					for (const rid of row?.objectRuntimeIds ?? []) {
-						if (typeof rid === "number" && !Number.isNaN(rid)) runtimeIds.add(rid);
+						if (typeof rid === "number" && isValidRuntimeId(rid)) runtimeIds.add(rid);
 					}
 				}
 			}
@@ -1924,6 +1937,7 @@ export async function renderWbs(
 					if (!Array.isArray(objects)) continue;
 					for (const item of objects) {
 						if (typeof item === "number" && !Number.isNaN(item)) {
+							if (!isValidRuntimeId(item)) continue;
 							runtimeIds.add(item);
 							continue;
 						}
@@ -1937,7 +1951,7 @@ export async function renderWbs(
 									: typeof o.runtimeId === "number"
 										? o.runtimeId
 										: null;
-						if (typeof rid === "number" && !Number.isNaN(rid)) runtimeIds.add(rid);
+						if (typeof rid === "number" && isValidRuntimeId(rid)) runtimeIds.add(rid);
 					}
 				}
 			} catch {
@@ -1957,6 +1971,7 @@ export async function renderWbs(
 					if (!Array.isArray(objects)) continue;
 					for (const item of objects) {
 						if (typeof item === "number" && !Number.isNaN(item)) {
+							if (!isValidRuntimeId(item)) continue;
 							runtimeIds.add(item);
 							continue;
 						}
@@ -1970,7 +1985,7 @@ export async function renderWbs(
 									: typeof o.runtimeId === "number"
 										? o.runtimeId
 										: null;
-						if (typeof rid === "number" && !Number.isNaN(rid)) runtimeIds.add(rid);
+						if (typeof rid === "number" && isValidRuntimeId(rid)) runtimeIds.add(rid);
 					}
 				}
 			} catch {
@@ -1981,7 +1996,7 @@ export async function renderWbs(
 		selectedPartIds.clear();
 		for (const p of getAssignableParts()) {
 			const rid = Number(p.id);
-			if (!Number.isNaN(rid) && runtimeIds.has(rid)) selectedPartIds.add(p.id);
+			if (isValidRuntimeId(rid) && runtimeIds.has(rid)) selectedPartIds.add(p.id);
 		}
 		refreshPartsList();
 		if (runtimeIds.size === 0) {
@@ -2466,8 +2481,7 @@ export async function renderWbs(
 			if (
 				viewerOnly &&
 				api.viewer?.setSelection &&
-				!Number.isNaN(runtimeId) &&
-				runtimeId >= 0
+				isValidRuntimeId(runtimeId)
 			) {
 				const activeModelId = getActiveModelId();
 				const modelCandidates = [rowModelId, activeModelId].filter(
