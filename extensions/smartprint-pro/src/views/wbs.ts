@@ -1390,6 +1390,101 @@ export async function renderWbs(
 		});
 	}
 
+	async function hydratePartsFromViewerObjectRegistry(
+		input: IfcPart[],
+	): Promise<IfcPart[]> {
+		if (!input.length) return input;
+		const viewer = api.viewer as WorkspaceApi["viewer"] & {
+			getObjects?: (
+				selector?: {
+					modelObjectIds?: Array<{
+						modelId: string;
+						objectRuntimeIds?: number[];
+					}>;
+				},
+			) => Promise<Array<{ modelId?: string; objects?: unknown }>>;
+		};
+		if (typeof viewer?.getObjects !== "function") return input;
+		const modelId = getActiveModelId();
+		if (!modelId) return input;
+
+		type ObjRow = { rid: number; name: string; cls: string; link?: string };
+		const rows: ObjRow[] = [];
+		try {
+			const modelRows = await viewer.getObjects({ modelObjectIds: [{ modelId }] });
+			for (const row of modelRows ?? []) {
+				const objects = row?.objects;
+				if (!Array.isArray(objects)) continue;
+				for (const item of objects) {
+					if (!item || typeof item !== "object") continue;
+					const o = item as Record<string, unknown>;
+					const rid =
+						typeof o.objectRuntimeId === "number"
+							? o.objectRuntimeId
+							: typeof o.id === "number"
+								? o.id
+								: typeof o.runtimeId === "number"
+									? o.runtimeId
+									: NaN;
+					if (Number.isNaN(rid)) continue;
+					const name =
+						typeof o.name === "string"
+							? o.name.trim()
+							: typeof o.displayName === "string"
+								? o.displayName.trim()
+								: "";
+					const cls =
+						typeof o.class === "string"
+							? o.class.trim().toUpperCase()
+							: typeof o.type === "string"
+								? o.type.trim().toUpperCase()
+								: "";
+					const linkDirect =
+						typeof o.frn === "string" && o.frn.trim().startsWith("frn:entity:")
+							? o.frn.trim()
+							: typeof o.link === "string" && o.link.trim().startsWith("frn:entity:")
+								? o.link.trim()
+								: undefined;
+					const stableId =
+						typeof o.fileId === "string" && o.fileId.trim()
+							? o.fileId.trim()
+							: typeof o.globalId === "string" && o.globalId.trim()
+								? o.globalId.trim()
+								: typeof o.guid === "string" && o.guid.trim()
+									? o.guid.trim()
+									: undefined;
+					const link = linkDirect ?? (stableId ? `frn:entity:${stableId}` : undefined);
+					rows.push({ rid, name, cls, link });
+				}
+			}
+		} catch {
+			return input;
+		}
+		if (!rows.length) return input;
+
+		const bySignature = new Map<string, ObjRow[]>();
+		for (const r of rows) {
+			const key = `${r.name}::${r.cls}`;
+			const bucket = bySignature.get(key) ?? [];
+			bucket.push(r);
+			bySignature.set(key, bucket);
+		}
+		const used = new Set<number>();
+		return input.map((part) => {
+			const key = `${(part.name ?? "").trim()}::${(part.type ?? "").trim().toUpperCase()}`;
+			const bucket = bySignature.get(key) ?? [];
+			const candidate = bucket.find((b) => !used.has(b.rid)) ?? bucket[0];
+			if (!candidate) return part;
+			used.add(candidate.rid);
+			const currentRid = Number(part.id);
+			const nextId =
+				Number.isNaN(currentRid) || currentRid === 0 ? String(candidate.rid) : part.id;
+			const nextLink = part.link?.trim() ? part.link : candidate.link;
+			if (nextId === part.id && nextLink === part.link) return part;
+			return { ...part, id: nextId, link: nextLink };
+		});
+	}
+
 	async function resolveStableLinkForPartAggressive(
 		part: IfcPart,
 	): Promise<string | undefined> {
@@ -1938,6 +2033,7 @@ export async function renderWbs(
 		}
 
 		parts = partsByModelId.get(selectedModelId) ?? [];
+		parts = await hydratePartsFromViewerObjectRegistry(parts);
 		parts = await resolveStableLinksForParts(parts);
 		const assignableIds = new Set(getAssignableParts().map((p) => p.id));
 		for (const id of [...selectedPartIds]) {
