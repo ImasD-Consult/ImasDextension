@@ -336,6 +336,9 @@ function renderAssignmentsList(
 			const latest = link ? latestByLink.get(link) : undefined;
 			const name = part.name || latest?.partName || "(unknown)";
 			const className = part.type || latest?.partType || "(unknown)";
+			const runtimeId = Number(part.id);
+			const runtimeIdText = Number.isNaN(runtimeId) ? "" : String(runtimeId);
+			const modelId = part.modelId?.trim() || latest?.modelId?.trim() || "";
 			const guid = link.startsWith("frn:entity:") ? link.slice("frn:entity:".length) : "-";
 			const modelLabel = part.modelName?.trim() || part.modelId?.trim() || latest?.modelId?.trim() || "-";
 			const assignedValue = latest?.propertySetValue || "-";
@@ -364,7 +367,7 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" ${hasLink ? "" : "disabled"}>Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(runtimeIdText)}" data-assignment-model-id="${escapeHtml(modelId)}" ${(hasLink || runtimeIdText) ? "" : "disabled"}>Select in 3D</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" ${(canAssign && hasLink) ? "" : "disabled"} title="${escapeHtml(hasLink ? assignTitle : "Part has no writable link")}">Assign</button>
         </td>
       </tr>
@@ -409,7 +412,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.18)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.19)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -505,7 +508,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.18)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.19)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -2000,6 +2003,37 @@ export async function renderWbs(
 		);
 		if (assignmentLinkButton) {
 			const link = assignmentLinkButton.dataset.assignmentLink?.trim();
+			const runtimeIdRaw = assignmentLinkButton.dataset.assignmentRuntimeId?.trim();
+			const rowModelId = assignmentLinkButton.dataset.assignmentModelId?.trim();
+			const runtimeId =
+				runtimeIdRaw && /^\d+$/.test(runtimeIdRaw) ? Number(runtimeIdRaw) : NaN;
+			if (
+				viewerOnly &&
+				api.viewer?.setSelection &&
+				!Number.isNaN(runtimeId) &&
+				runtimeId >= 0
+			) {
+				const activeModelId = getActiveModelId();
+				const modelCandidates = [rowModelId, activeModelId].filter(
+					(v): v is string => typeof v === "string" && v.trim().length > 0,
+				);
+				for (const modelId of [...new Set(modelCandidates)]) {
+					try {
+						void api.viewer.setSelection(
+							{
+								modelObjectIds: [{ modelId, objectRuntimeIds: [runtimeId] }],
+							},
+							"set",
+						);
+						setStatus(
+							`Viewer selected from row runtime mapping (model ${modelId}, runtime ${runtimeId}).`,
+						);
+						return;
+					} catch {
+						/* try next */
+					}
+				}
+			}
 			if (!link || !link.startsWith("frn:")) return;
 			void syncViewerSelectionFromKnownLink(link);
 			return;
