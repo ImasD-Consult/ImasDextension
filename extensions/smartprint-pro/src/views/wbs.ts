@@ -336,6 +336,8 @@ function renderAssignmentsList(
 			const latest = link ? latestByLink.get(link) : undefined;
 			const name = part.name || latest?.partName || "(unknown)";
 			const className = part.type || latest?.partType || "(unknown)";
+			const guid = link.startsWith("frn:entity:") ? link.slice("frn:entity:".length) : "-";
+			const modelLabel = part.modelName?.trim() || part.modelId?.trim() || latest?.modelId?.trim() || "-";
 			const assignedValue = latest?.propertySetValue || "-";
 			const assignedAt = latest?.assignedAt || "-";
 			const wbsRow = typeof latest?.wbsRowIndex === "number" ? String(latest.wbsRowIndex + 4) : "-";
@@ -354,6 +356,8 @@ function renderAssignmentsList(
       <tr class="hover:bg-gray-50">
         <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(name)}</td>
         <td class="px-2 py-2 text-xs text-gray-700 border-b border-gray-100">${escapeHtml(className)}</td>
+        <td class="px-2 py-2 text-[11px] text-gray-700 border-b border-gray-100 max-w-[220px] truncate" title="${escapeHtml(guid)}">${escapeHtml(guid)}</td>
+        <td class="px-2 py-2 text-[11px] text-gray-700 border-b border-gray-100 max-w-[220px] truncate" title="${escapeHtml(modelLabel)}">${escapeHtml(modelLabel)}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100">${statusBadge}</td>
         <td class="px-2 py-2 text-xs text-gray-800 border-b border-gray-100">${escapeHtml(assignedValue)}</td>
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(assignedAt)}</td>
@@ -375,6 +379,8 @@ function renderAssignmentsList(
             <tr>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Name</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Class</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">GUID</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Model</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Status</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Last Assigned Value</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Assigned At</th>
@@ -403,7 +409,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.17)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.18)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -499,7 +505,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.17)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.18)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
