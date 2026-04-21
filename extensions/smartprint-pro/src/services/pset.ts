@@ -992,55 +992,43 @@ export async function loadKnownLibraryLinks(
 		definitionName,
 		explicitDefId,
 	);
-
-	const extractLinks = (payload: unknown, out: Set<string>): void => {
-		if (payload == null) return;
-		if (Array.isArray(payload)) {
-			for (const item of payload) extractLinks(item, out);
-			return;
-		}
-		if (typeof payload !== "object") return;
-		const o = payload as Record<string, unknown>;
-		const direct = o.link;
-		if (typeof direct === "string" && direct.trim().startsWith("frn:")) {
-			out.add(direct.trim());
-		}
-		for (const v of Object.values(o)) extractLinks(v, out);
-	};
-
 	const links = new Set<string>();
-	const tryGetJson = async (url: string): Promise<unknown | null> => {
+	const seenNext = new Set<string>();
+	let page = await pset.listPSetsByDefinition(libId, defId, { top: 500 });
+	for (;;) {
+		const items =
+			(page.data as { items?: Array<{ link?: string }> })?.items ?? [];
+		for (const item of items) {
+			if (typeof item?.link === "string" && item.link.trim().startsWith("frn:")) {
+				links.add(item.link.trim());
+			}
+		}
+		const next =
+			(page.data as { next?: string })?.next ??
+			undefined;
+		if (!next || seenNext.has(next)) break;
+		seenNext.add(next);
 		try {
-			const res = await fetch(url, {
+			// SDK exposes raw next-page URL in `next`; follow with authenticated fetch.
+			const res = await fetch(next, {
 				headers: {
 					Authorization: `Bearer ${token}`,
 					Accept: "application/json",
 				},
 			});
-			if (!res.ok) return null;
-			return res.json();
+			if (!res.ok) break;
+			const data = (await res.json()) as unknown;
+			page = { ...page, data } as typeof page;
 		} catch {
-			return null;
+			break;
 		}
-	};
-
-	const base = ensureTrailingSlash(serviceUri);
-	const urls = [
-		`${base}libs/${encodeURIComponent(libId)}/psets?top=1000`,
-		`${base}libs/${encodeURIComponent(libId)}/defs/${encodeURIComponent(defId)}/psets?top=1000`,
-		`${base}psets?libId=${encodeURIComponent(libId)}&top=1000`,
-		`${base}psets?libId=${encodeURIComponent(libId)}&defId=${encodeURIComponent(defId)}&top=1000`,
-	];
-	for (const url of urls) {
-		const data = await tryGetJson(url);
-		if (data) extractLinks(data, links);
 	}
 
 	return {
 		links: [...links],
 		message:
 			links.size > 0
-				? `Loaded ${links.size} known link(s) from library.`
-				: "No known links found from queried PSet endpoints.",
+				? `Loaded ${links.size} known link(s) from PSet listPSetsByDefinition.`
+				: "No known links found from PSet listPSetsByDefinition.",
 	};
 }

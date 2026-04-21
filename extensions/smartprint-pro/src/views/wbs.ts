@@ -348,7 +348,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 4.7)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 4.9)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -481,7 +481,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 4.7)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 4.9)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1015,6 +1015,9 @@ export async function renderWbs(
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
 	let assignments = loadAssignmentsFromLocalStorage();
+	const parentByRuntimeId = new Map<number, number | null>();
+	const fileIdByRuntimeId = new Map<number, string>();
+	let hierarchyCacheModelId = "";
 	let knownLibraryLinks: string[] = [];
 
 	function refreshKnownLinkOptions(): void {
@@ -1232,6 +1235,148 @@ export async function renderWbs(
 			if (Number.isNaN(rid)) return part;
 			const stable = stableByRuntime.get(rid);
 			return stable ? { ...part, link: stable } : part;
+		});
+	}
+
+	async function ensureHierarchyCacheForActiveModel(): Promise<void> {
+		const viewer = api.viewer;
+		if (!viewer?.getHierarchyChildren) return;
+		const activeModelId = getActiveModelId();
+		if (!activeModelId) return;
+		if (hierarchyCacheModelId === activeModelId && parentByRuntimeId.size > 0) return;
+		parentByRuntimeId.clear();
+		fileIdByRuntimeId.clear();
+		hierarchyCacheModelId = activeModelId;
+
+		const queue: Array<{ parent: number; childrenOf: number[] }> = [
+			{ parent: 0, childrenOf: [0] },
+		];
+		const visitedParents = new Set<number>();
+		const MAX_NODES = 20000;
+		let seenNodes = 0;
+		while (queue.length > 0 && seenNodes < MAX_NODES) {
+			const cur = queue.shift();
+			if (!cur) break;
+			for (const pid of cur.childrenOf) {
+				if (visitedParents.has(pid)) continue;
+				visitedParents.add(pid);
+				let children: Array<{ id: number; fileId: string; name: string }> = [];
+				try {
+					children = await viewer.getHierarchyChildren(activeModelId, [pid], undefined, false);
+				} catch {
+					continue;
+				}
+				for (const child of children ?? []) {
+					if (typeof child?.id !== "number" || Number.isNaN(child.id)) continue;
+					if (!parentByRuntimeId.has(child.id)) {
+						parentByRuntimeId.set(child.id, pid === 0 ? null : pid);
+						if (typeof child.fileId === "string" && child.fileId.trim()) {
+							fileIdByRuntimeId.set(child.id, child.fileId.trim());
+						}
+						seenNodes += 1;
+						queue.push({ parent: child.id, childrenOf: [child.id] });
+					}
+				}
+			}
+		}
+	}
+
+	async function resolveAssemblyLinksForParts(input: IfcPart[]): Promise<IfcPart[]> {
+		if (input.length === 0) return input;
+		const viewer = api.viewer;
+		if (!viewer?.getObjectProperties) return input;
+		await ensureHierarchyCacheForActiveModel();
+		if (parentByRuntimeId.size === 0) return input;
+
+		const activeModelId = getActiveModelId();
+		const openModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelCandidates = [openModel?.id, openModel?.versionId, activeModelId].filter(
+			(v): v is string => typeof v === "string" && v.trim().length > 0,
+		);
+		if (modelCandidates.length === 0) return input;
+
+		const UUID_RE =
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+		const byRuntime = new Map<number, string>();
+
+		const pickStableLinkFromPayload = (
+			payload: Record<string, unknown>,
+			rid: number,
+		): string | undefined => {
+			const frn =
+				typeof payload.frn === "string" && payload.frn.trim().startsWith("frn:entity:")
+					? payload.frn.trim()
+					: undefined;
+			if (frn) return frn;
+			const entityCandidate =
+				typeof payload.fileId === "string" && payload.fileId.trim()
+					? payload.fileId.trim()
+					: typeof payload.entityId === "string" && payload.entityId.trim()
+						? payload.entityId.trim()
+						: typeof payload.guid === "string" && payload.guid.trim()
+							? payload.guid.trim()
+							: typeof payload.globalId === "string" && payload.globalId.trim()
+								? payload.globalId.trim()
+								: fileIdByRuntimeId.get(rid);
+			if (
+				entityCandidate &&
+				(UUID_RE.test(entityCandidate) ||
+					(!/^\d+$/.test(entityCandidate) && entityCandidate.length >= 10))
+			) {
+				return `frn:entity:${entityCandidate}`;
+			}
+			return undefined;
+		};
+
+		for (const part of input) {
+			const rid = Number(part.id);
+			if (Number.isNaN(rid) || byRuntime.has(rid)) continue;
+
+			const ancestors: number[] = [];
+			let cur: number | null | undefined = rid;
+			let guard = 0;
+			while (typeof cur === "number" && !Number.isNaN(cur) && guard < 256) {
+				const parent = parentByRuntimeId.get(cur);
+				if (parent == null) break;
+				ancestors.push(parent);
+				cur = parent;
+				guard += 1;
+			}
+			if (ancestors.length === 0) continue;
+
+			for (const mid of modelCandidates) {
+				let props: Array<Record<string, unknown>> = [];
+				try {
+					props = (await viewer.getObjectProperties(mid, ancestors)) as Array<
+						Record<string, unknown>
+					>;
+				} catch {
+					continue;
+				}
+				for (let i = 0; i < ancestors.length; i++) {
+					const p = props[i];
+					if (!p || typeof p !== "object") continue;
+					const cls = typeof p.class === "string" ? p.class.toUpperCase() : "";
+					if (!cls.includes("ASSEMBLY")) continue;
+					const link = pickStableLinkFromPayload(p, ancestors[i]);
+					if (link) {
+						byRuntime.set(rid, link);
+						break;
+					}
+				}
+				if (byRuntime.has(rid)) break;
+			}
+		}
+
+		if (byRuntime.size === 0) return input;
+		return input.map((part) => {
+			if (isWritableLink(part.link)) return part;
+			const rid = Number(part.id);
+			if (Number.isNaN(rid)) return part;
+			const link = byRuntime.get(rid);
+			return link ? { ...part, link } : part;
 		});
 	}
 
@@ -1604,11 +1749,9 @@ export async function renderWbs(
 		for (const id of [...selectedPartIds]) {
 			if (!assignableIds.has(id)) selectedPartIds.delete(id);
 		}
-		for (const p of getAssignableParts()) {
-			if (!p.link?.trim().startsWith("frn:entity:")) {
-				selectedPartIds.delete(p.id);
-			}
-		}
+		parentByRuntimeId.clear();
+		fileIdByRuntimeId.clear();
+		hierarchyCacheModelId = "";
 		refreshPartFilters();
 		refreshPartsList();
 		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
@@ -1901,7 +2044,11 @@ export async function renderWbs(
 		const selectedPartsRaw = getAssignableParts().filter((part) =>
 			selectedPartIds.has(part.id),
 		);
-		const selectedParts = await resolveStableLinksForParts(selectedPartsRaw);
+		const selectedPartsWithDirectLinks =
+			await resolveStableLinksForParts(selectedPartsRaw);
+		const selectedParts = await resolveAssemblyLinksForParts(
+			selectedPartsWithDirectLinks,
+		);
 		for (const resolved of selectedParts) {
 			const idx = parts.findIndex((p) => p.id === resolved.id);
 			if (idx >= 0) parts[idx] = resolved;
