@@ -317,7 +317,7 @@ function renderAssignmentsList(
 	selectedWbsRowIndex: number | null,
 ): string {
 	if (!knownLinks.length && !assignments.length) {
-		return '<p class="text-sm text-gray-500 italic">No known targets loaded yet. Click "Load known links".</p>';
+		return '<p class="text-sm text-gray-500 italic">No known targets loaded yet. Targets load automatically after model load.</p>';
 	}
 	const latestByLink = new Map<string, WbsAssignment>();
 	for (const item of assignments) {
@@ -331,7 +331,13 @@ function renderAssignmentsList(
 		if (!link) continue;
 		if (!partByLink.has(link)) partByLink.set(link, part);
 	}
-	const links = knownLinks.length ? knownLinks : [...latestByLink.keys()];
+	const knownLinksFiltered = knownLinks.filter((raw) => {
+		const link = normalizeKnownLink(raw);
+		return partByLink.has(link) || latestByLink.has(link);
+	});
+	const links = knownLinksFiltered.length
+		? knownLinksFiltered
+		: [...latestByLink.keys()];
 	const rows = links
 		.map((rawLink) => normalizeKnownLink(rawLink))
 		.filter((link) => link.length > 0)
@@ -404,7 +410,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.13)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.14)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -434,21 +440,8 @@ export async function renderWbs(
       </div>
       <p class="shrink-0 text-xs text-gray-600" data-wbs-status>No file uploaded yet. Expected: Excel template (.xlsx / .xls).</p>
       <div class="shrink-0 flex flex-wrap items-center gap-2 rounded border border-gray-200 bg-gray-50 p-2">
-        <button
-          type="button"
-          class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-          data-load-known-links
-        >
-          Load known links
-        </button>
-        <select
-          class="min-w-[260px] rounded border border-gray-300 px-2 py-1 text-xs text-gray-700"
-          data-known-link-select
-        >
-          <option value="">Known link target (required for Assign)</option>
-        </select>
         <p class="text-[11px] text-gray-500 truncate max-w-[520px]" data-known-link-hint>
-          Known link fallback: none selected.
+          Known targets load automatically for the current model.
         </p>
         <button
           type="button"
@@ -513,7 +506,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.13)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.14)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1137,7 +1130,7 @@ export async function renderWbs(
 		const selected = knownLinkSelectEl?.value?.trim();
 		knownLinkHintEl.textContent = selected
 			? `Known link fallback selected: ${selected}`
-			: "Known link fallback: none selected.";
+			: `Known targets loaded: ${knownLibraryLinks.length}`;
 	}
 
 	function getAssignableParts(): IfcPart[] {
@@ -1732,6 +1725,7 @@ export async function renderWbs(
 		}
 
 		parts = partsByModelId.get(selectedModelId) ?? [];
+		parts = await resolveStableLinksForParts(parts);
 		const assignableIds = new Set(getAssignableParts().map((p) => p.id));
 		for (const id of [...selectedPartIds]) {
 			if (!assignableIds.has(id)) selectedPartIds.delete(id);
@@ -1759,6 +1753,27 @@ export async function renderWbs(
 		setStatus(
 			`Loaded ${parts.length} IFC part/object(s) for ${selectedModel?.name ?? "selected IFC model"}. Writable links ready: ${readyCount}/${getAssignableParts().length}.`,
 		);
+	}
+
+	let knownLinksLoading = false;
+	async function autoLoadKnownLinks(silent = true): Promise<void> {
+		if (knownLinksLoading) return;
+		knownLinksLoading = true;
+		try {
+			const res = await loadKnownLibraryLinks(api);
+			knownLibraryLinks = [...new Set(res.links.map((l) => normalizeKnownLink(l)).filter(Boolean))];
+			refreshKnownLinkOptions();
+			refreshKnownLinkHint();
+			refreshAssignments();
+			if (!silent && res.links.length === 0) {
+				setStatus(res.message, "error");
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			if (!silent) setStatus(`Failed to load known links: ${msg}`, "error");
+		} finally {
+			knownLinksLoading = false;
+		}
 	}
 
 	function refreshModelOptions(): void {
@@ -1896,6 +1911,7 @@ export async function renderWbs(
 				const changed = await rebindViewerModelIfSceneChanged();
 				if (changed) {
 					await loadAssembliesForSelectedModel(true);
+					await autoLoadKnownLinks(true);
 				}
 			})();
 		}, 3000);
@@ -1905,40 +1921,20 @@ export async function renderWbs(
 
 	modelFilterEl?.addEventListener("change", async () => {
 		await loadAssembliesForSelectedModel(false);
+		await autoLoadKnownLinks(true);
 	});
 
 	retryAssembliesButtonEl.addEventListener("click", async () => {
 		await loadAssembliesForSelectedModel(true);
+		await autoLoadKnownLinks(true);
 	});
 	loadKnownLinksButtonEl?.addEventListener("click", async () => {
-		setStatus("Loading known links from PSet library...");
-		try {
-			const res = await loadKnownLibraryLinks(api);
-			knownLibraryLinks = [...new Set(res.links.map((l) => normalizeKnownLink(l)).filter(Boolean))];
-			refreshKnownLinkOptions();
-			refreshKnownLinkHint();
-			refreshAssignments();
-			if (res.links.length > 0) {
-				setStatus(`${res.message} Select one in dropdown to use as fallback link.`);
-			} else {
-				setStatus(res.message, "error");
-			}
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			setStatus(`Failed to load known links: ${msg}`, "error");
-		}
+		await autoLoadKnownLinks(false);
 	});
 	knownLinkSelectEl?.addEventListener("change", () => {
 		refreshKnownLinkHint();
 		refreshAssignButton();
 		refreshAssignments();
-		const selected = normalizeKnownLink(knownLinkSelectEl.value);
-		if (selected && knownLinkSelectEl.value !== selected) {
-			knownLinkSelectEl.value = selected;
-		}
-		if (selected) {
-			void syncViewerSelectionFromKnownLink(selected);
-		}
 	});
 	resolveLinksButtonEl?.addEventListener("click", async () => {
 		const assignable = getAssignableParts();
@@ -2176,4 +2172,5 @@ export async function renderWbs(
 	});
 
 	void refreshPsetDebugInfo();
+	void autoLoadKnownLinks(true);
 }
