@@ -422,6 +422,7 @@ function renderAssignmentsList(
 			const targetRuntimeIdRaw = isValidRuntimeId(targetRuntimeIdNum)
 				? String(targetRuntimeIdNum)
 				: "";
+			const canHarvestFromRuntime = Boolean(targetRuntimeIdRaw);
 			const targetName = part.targetName?.trim() || baseName;
 			const displayName =
 				part.resolvedViaParent && targetName !== baseName
@@ -458,9 +459,9 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" data-assignment-part-id="${escapeHtml(part.id)}" ${(hasLink || Boolean(targetRuntimeIdRaw)) ? "" : "disabled"}>Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" data-assignment-part-id="${escapeHtml(part.id)}" ${(hasLink || canHarvestFromRuntime) ? "" : "disabled"}>Select in 3D</button>
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
-          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && hasLink) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : "Geometry only, no data properties found") : "Select a WBS row first")}">Assign</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assign-model-id="${escapeHtml(modelId)}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && (hasLink || canHarvestFromRuntime)) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : (canHarvestFromRuntime ? "Will resolve link from runtime target before assign" : "Geometry only, no data properties found")) : "Select a WBS row first")}">Assign</button>
         </td>
       </tr>
     `;
@@ -2461,9 +2462,25 @@ export async function renderWbs(
 		}
 		const assignLinkButton = target.closest<HTMLButtonElement>("[data-assign-link]");
 		if (assignLinkButton) {
-			const link = assignLinkButton.dataset.assignLink?.trim();
+			let link = assignLinkButton.dataset.assignLink?.trim() ?? "";
 			const partId = assignLinkButton.dataset.assignPartId?.trim();
+			const runtimeRaw = assignLinkButton.dataset.assignRuntimeId?.trim();
+			const modelIdRaw = assignLinkButton.dataset.assignModelId?.trim();
 			void runWithButtonFeedback(assignButtonEl, "Assigning...", async () => {
+				if (!link && partId && runtimeRaw && modelIdRaw && /^\d+$/.test(runtimeRaw)) {
+					const runtimeId = Number(runtimeRaw);
+					if (isValidRuntimeId(runtimeId)) {
+						const harvested = await backfillLinkFromRuntimeSelection(
+							partId,
+							modelIdRaw,
+							runtimeId,
+						);
+						if (harvested) {
+							const updated = getAssignableParts().find((p) => p.id === partId);
+							link = normalizeKnownLink(updated?.link);
+						}
+					}
+				}
 				await assignToTargetLink(link ?? "", partId);
 			});
 			return;
