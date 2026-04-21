@@ -348,7 +348,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 5.4)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 5.5)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -484,7 +484,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 5.4)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 5.5)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1131,13 +1131,8 @@ export async function renderWbs(
 			: "Known link fallback: none selected.";
 	}
 
-	function getAssemblyCandidates(source: IfcPart[]): IfcPart[] {
-		return source.filter((p) => p.type.toUpperCase().includes("ASSEMBLY"));
-	}
-
 	function getAssignableParts(): IfcPart[] {
-		const assemblies = getAssemblyCandidates(parts);
-		return assemblies.length > 0 ? assemblies : parts;
+		return parts;
 	}
 
 	function refreshAssignments(): void {
@@ -1381,105 +1376,6 @@ export async function renderWbs(
 				}
 			}
 		}
-	}
-
-	async function resolveAssemblyLinksForParts(input: IfcPart[]): Promise<IfcPart[]> {
-		if (input.length === 0) return input;
-		const viewer = api.viewer;
-		if (!viewer?.getObjectProperties) return input;
-		await ensureHierarchyCacheForActiveModel();
-		if (parentByRuntimeId.size === 0) return input;
-
-		const activeModelId = getActiveModelId();
-		const openModel = allIfcModels.find(
-			(m) => activeModelId === m.id || activeModelId === m.versionId,
-		);
-		const modelCandidates = [openModel?.id, openModel?.versionId, activeModelId].filter(
-			(v): v is string => typeof v === "string" && v.trim().length > 0,
-		);
-		if (modelCandidates.length === 0) return input;
-
-		const UUID_RE =
-			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-		const byRuntime = new Map<number, string>();
-
-		const pickStableLinkFromPayload = (
-			payload: Record<string, unknown>,
-			rid: number,
-		): string | undefined => {
-			const frn =
-				typeof payload.frn === "string" && payload.frn.trim().startsWith("frn:entity:")
-					? payload.frn.trim()
-					: undefined;
-			if (frn) return frn;
-			const entityCandidate =
-				typeof payload.fileId === "string" && payload.fileId.trim()
-					? payload.fileId.trim()
-					: typeof payload.entityId === "string" && payload.entityId.trim()
-						? payload.entityId.trim()
-						: typeof payload.guid === "string" && payload.guid.trim()
-							? payload.guid.trim()
-							: typeof payload.globalId === "string" && payload.globalId.trim()
-								? payload.globalId.trim()
-								: fileIdByRuntimeId.get(rid);
-			if (
-				entityCandidate &&
-				(UUID_RE.test(entityCandidate) ||
-					(!/^\d+$/.test(entityCandidate) && entityCandidate.length >= 10))
-			) {
-				return `frn:entity:${entityCandidate}`;
-			}
-			return undefined;
-		};
-
-		for (const part of input) {
-			const rid = Number(part.id);
-			if (Number.isNaN(rid) || byRuntime.has(rid)) continue;
-
-			const ancestors: number[] = [];
-			let cur: number | null | undefined = rid;
-			let guard = 0;
-			while (typeof cur === "number" && !Number.isNaN(cur) && guard < 256) {
-				const parent = parentByRuntimeId.get(cur);
-				if (parent == null) break;
-				ancestors.push(parent);
-				cur = parent;
-				guard += 1;
-			}
-			if (ancestors.length === 0) continue;
-
-			for (const mid of modelCandidates) {
-				let props: Array<Record<string, unknown>> = [];
-				try {
-					props = (await viewer.getObjectProperties(mid, ancestors)) as Array<
-						Record<string, unknown>
-					>;
-				} catch {
-					continue;
-				}
-				for (let i = 0; i < ancestors.length; i++) {
-					const p = props[i];
-					if (!p || typeof p !== "object") continue;
-					const cls = typeof p.class === "string" ? p.class.toUpperCase() : "";
-					if (!cls.includes("ASSEMBLY")) continue;
-					const link = pickStableLinkFromPayload(p, ancestors[i]);
-					if (link) {
-						byRuntime.set(rid, link);
-						break;
-					}
-				}
-				if (byRuntime.has(rid)) break;
-			}
-		}
-
-		if (byRuntime.size === 0) return input;
-		return input.map((part) => {
-			if (isWritableLink(part.link)) return part;
-			const rid = Number(part.id);
-			if (Number.isNaN(rid)) return part;
-			const link = byRuntime.get(rid);
-			return link ? { ...part, link } : part;
-		});
 	}
 
 	function payloadContainsExpectedValue(root: unknown, expected: string): boolean {
@@ -1806,23 +1702,14 @@ export async function renderWbs(
 				'<p class="text-sm text-gray-400 italic animate-pulse">Loading objects from IFC (waiting for model tree if processing)…</p>';
 			retryAssembliesButtonEl.disabled = true;
 			try {
-				// Prefer IFC assemblies first; if none are found, fall back to all IFC objects/parts.
-				let assemblyPartsRaw = await fetchIfcAssembliesFromFile(
+				// Part-first mode: load IFC objects/parts directly.
+				const assemblyPartsRaw = await fetchIfcAssembliesFromFile(
 					api,
 					selectedModelId,
 					selectedModel?.versionId,
 					selectedModel?.name,
-					{ listAllIfcObjects: false, preferStableEntityIds: true },
+					{ listAllIfcObjects: true, preferStableEntityIds: true },
 				);
-				if (!assemblyPartsRaw.length) {
-					assemblyPartsRaw = await fetchIfcAssembliesFromFile(
-						api,
-						selectedModelId,
-						selectedModel?.versionId,
-						selectedModel?.name,
-						{ listAllIfcObjects: true, preferStableEntityIds: true },
-					);
-				}
 				const assemblyParts = assemblyPartsRaw.map((item) => ({
 					id: item.id,
 					name: item.name,
@@ -1870,18 +1757,10 @@ export async function renderWbs(
 			return;
 		}
 
-		const assemblyCount = getAssemblyCandidates(parts).length;
 		const readyCount = countReadyParts(getAssignableParts());
-		if (assemblyCount > 0) {
-			setStatus(
-				`Loaded ${assemblyCount} assembly object(s) for ${selectedModel?.name ?? "selected IFC model"}. Writable links ready: ${readyCount}/${getAssignableParts().length}.`,
-			);
-		} else {
-			setStatus(
-				`No assemblies found for ${selectedModel?.name ?? "selected IFC model"}. Falling back to ${parts.length} IFC part/object(s). Writable links ready: ${readyCount}/${getAssignableParts().length}.`,
-				"error",
-			);
-		}
+		setStatus(
+			`Loaded ${parts.length} IFC part/object(s) for ${selectedModel?.name ?? "selected IFC model"}. Writable links ready: ${readyCount}/${getAssignableParts().length}.`,
+		);
 	}
 
 	function refreshModelOptions(): void {
@@ -2154,11 +2033,7 @@ export async function renderWbs(
 		const selectedPartsRaw = getAssignableParts().filter((part) =>
 			selectedPartIds.has(part.id),
 		);
-		const selectedPartsWithDirectLinks =
-			await resolveStableLinksForParts(selectedPartsRaw);
-		const selectedParts = await resolveAssemblyLinksForParts(
-			selectedPartsWithDirectLinks,
-		);
+		const selectedParts = await resolveStableLinksForParts(selectedPartsRaw);
 		for (const resolved of selectedParts) {
 			const idx = parts.findIndex((p) => p.id === resolved.id);
 			if (idx >= 0) parts[idx] = resolved;
