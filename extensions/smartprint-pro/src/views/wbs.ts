@@ -83,6 +83,13 @@ function normalizeKnownLink(raw: string | undefined): string {
 	return `${prefix}${entity}`;
 }
 
+function getEntityIdFromFrn(link: string | undefined): string | undefined {
+	const normalized = normalizeKnownLink(link);
+	if (!normalized.startsWith("frn:entity:")) return undefined;
+	const token = normalized.slice("frn:entity:".length).trim();
+	return token || undefined;
+}
+
 export type RenderWbsOptions = {
 	/** 3D manifest: only models open in the viewer (no project folder IFC list). */
 	useViewerModelOnly?: boolean;
@@ -1512,6 +1519,43 @@ export async function renderWbs(
 		});
 	}
 
+	async function hydrateLinksFromKnownRegistry(input: IfcPart[]): Promise<IfcPart[]> {
+		if (!input.length) return input;
+		await ensureHierarchyCacheForActiveModel();
+		const knownEntityIds = new Set(
+			knownLibraryLinks.map((l) => getEntityIdFromFrn(l)).filter((v): v is string => Boolean(v)),
+		);
+		const isValidEntityToken = (value: string): boolean => {
+			const v = value.trim();
+			if (!v) return false;
+			if (/^\d+$/.test(v)) return false;
+			return /^[0-9A-Za-z_$-]{8,64}$/.test(v);
+		};
+		return input.map((part) => {
+			if (isWritableLink(part.link)) return part;
+			let cur = Number(part.id);
+			if (Number.isNaN(cur)) return part;
+			const candidates: string[] = [];
+			let guard = 0;
+			while (!Number.isNaN(cur) && guard < 256) {
+				const fileId = fileIdByRuntimeId.get(cur);
+				if (fileId && isValidEntityToken(fileId)) {
+					candidates.push(fileId.trim());
+				}
+				const parent = parentByRuntimeId.get(cur);
+				if (parent == null) break;
+				cur = parent;
+				guard += 1;
+			}
+			if (!candidates.length) return part;
+			const preferred =
+				candidates.find((id) => knownEntityIds.has(id)) ??
+				(knownEntityIds.size === 0 ? candidates[0] : undefined);
+			if (!preferred) return part;
+			return { ...part, link: `frn:entity:${preferred}` };
+		});
+	}
+
 	async function ensureHierarchyCacheForActiveModel(): Promise<void> {
 		const viewer = api.viewer;
 		if (!viewer?.getHierarchyChildren) return;
@@ -1811,6 +1855,7 @@ export async function renderWbs(
 
 	async function loadAssembliesForSelectedModel(forceRefetch: boolean): Promise<void> {
 		selectedPartIds.clear();
+		await autoLoadKnownLinks(true);
 		let sceneChanged = false;
 		if (viewerOnly && api.viewer?.getModels) {
 			sceneChanged = await rebindViewerModelIfSceneChanged();
@@ -1880,7 +1925,9 @@ export async function renderWbs(
 
 		parts = partsByModelId.get(selectedModelId) ?? [];
 		parts = await hydratePartsFromViewerObjectRegistry(parts);
+		parts = await hydrateLinksFromKnownRegistry(parts);
 		parts = await resolveStableLinksForParts(parts);
+		parts = await hydrateLinksFromKnownRegistry(parts);
 		parts = await applyParentFallbackLinks(parts);
 		const assignableIds = new Set(getAssignableParts().map((p) => p.id));
 		for (const id of [...selectedPartIds]) {
