@@ -415,7 +415,8 @@ function renderAssignmentsList(
 	knownLinks: string[],
 	selectedWbsRowIndex: number | null,
 ): string {
-	if (!parts.length && !assignments.length) {
+	const hasKnownPsetLinks = knownLinks.some((l) => Boolean(normalizeKnownLink(l)));
+	if (!parts.length && !assignments.length && !hasKnownPsetLinks) {
 		return '<p class="text-sm text-gray-500 italic">No IFC parts loaded for current model.</p>';
 	}
 	const latestByLink = new Map<string, WbsAssignment>();
@@ -443,19 +444,38 @@ function renderAssignmentsList(
 		bucket.push(link);
 		knownBySignature.set(sig, bucket);
 	}
-	const rowsFromParts = parts
-		.map((part) => {
-			const directLink = normalizeKnownLink(part.link);
-			const sig = `${(part.name ?? "").trim().toUpperCase()}::${(part.type ?? "")
-				.trim()
-				.toUpperCase()}`;
-			const bySigBucket = knownBySignature.get(sig) ?? [];
-			const mappedKnownLink =
-				!directLink
-					? bySigBucket.find((l) => !usedKnownLinks.has(l))
-					: undefined;
-			const link = directLink || mappedKnownLink || "";
-			if (link && knownLinkSet.has(link)) usedKnownLinks.add(link);
+	type PartRowResolved = {
+		part: IfcPart;
+		directLink: string;
+		mappedKnownLink: string | undefined;
+		link: string;
+	};
+	const resolvedPartRows: PartRowResolved[] = [];
+	for (const part of parts) {
+		const directLink = normalizeKnownLink(part.link);
+		const sig = `${(part.name ?? "").trim().toUpperCase()}::${(part.type ?? "")
+			.trim()
+			.toUpperCase()}`;
+		const bySigBucket = knownBySignature.get(sig) ?? [];
+		const mappedKnownLink =
+			!directLink
+				? bySigBucket.find((l) => !usedKnownLinks.has(l))
+				: undefined;
+		const link = directLink || mappedKnownLink || "";
+		if (link && knownLinkSet.has(link)) usedKnownLinks.add(link);
+		const runtimeId = Number(part.id);
+		const runtimeIdText = isValidRuntimeId(runtimeId) ? String(runtimeId) : "";
+		const targetRuntimeIdNum = Number(part.targetRuntimeId?.trim() || runtimeIdText);
+		const targetRuntimeIdRaw = isValidRuntimeId(targetRuntimeIdNum)
+			? String(targetRuntimeIdNum)
+			: "";
+		const canHarvestFromRuntime = Boolean(targetRuntimeIdRaw);
+		const actionable = Boolean(link) || canHarvestFromRuntime;
+		if (!actionable) continue;
+		resolvedPartRows.push({ part, directLink, mappedKnownLink, link });
+	}
+	const rowsFromParts = resolvedPartRows
+		.map(({ part, directLink, mappedKnownLink, link }) => {
 			const latest = link ? latestByLink.get(link) : undefined;
 			const baseName = part.name || latest?.partName || "(unknown)";
 			const className = part.type || latest?.partType || "(unknown)";
@@ -555,6 +575,9 @@ function renderAssignmentsList(
 		})
 		.join("");
 	const rows = `${rowsFromParts}${rowsFromKnown}`;
+	if (!rows.trim()) {
+		return '<p class="text-sm text-gray-500 italic">No actionable targets: IFC rows with no link and no valid 3D runtime are hidden. Wait for known PSet links to load, or reload the model.</p>';
+	}
 	return `
     <div class="rounded border border-gray-200 overflow-hidden">
       <div class="max-h-[32vh] overflow-auto">
