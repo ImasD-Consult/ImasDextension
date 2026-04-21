@@ -369,7 +369,7 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(runtimeIdText)}" data-assignment-model-id="${escapeHtml(modelId)}" ${(hasLink || runtimeIdText) ? "" : "disabled"}>Select in 3D</button>
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
-          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-part-id="${escapeHtml(part.id)}" ${canAssign ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : "Will try to resolve link on click") : "Select a WBS row first")}">Assign</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && hasLink) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : "Geometry only, no data properties found") : "Select a WBS row first")}">Assign</button>
         </td>
       </tr>
     `;
@@ -1489,6 +1489,29 @@ export async function renderWbs(
 		});
 	}
 
+	async function applyParentFallbackLinks(input: IfcPart[]): Promise<IfcPart[]> {
+		if (!input.length) return input;
+		await ensureHierarchyCacheForActiveModel();
+		if (parentByRuntimeId.size === 0) return input;
+		return input.map((part) => {
+			if (isWritableLink(part.link)) return part;
+			let cur = Number(part.id);
+			if (Number.isNaN(cur)) return part;
+			let guard = 0;
+			while (!Number.isNaN(cur) && guard < 256) {
+				const parent = parentByRuntimeId.get(cur);
+				if (parent == null) break;
+				const fileId = fileIdByRuntimeId.get(parent);
+				if (fileId && !/^\d+$/.test(fileId) && fileId.trim().length >= 8) {
+					return { ...part, link: `frn:entity:${fileId.trim()}` };
+				}
+				cur = parent;
+				guard += 1;
+			}
+			return part;
+		});
+	}
+
 	async function resolveStableLinkForPartAggressive(
 		part: IfcPart,
 	): Promise<string | undefined> {
@@ -2039,6 +2062,7 @@ export async function renderWbs(
 		parts = partsByModelId.get(selectedModelId) ?? [];
 		parts = await hydratePartsFromViewerObjectRegistry(parts);
 		parts = await resolveStableLinksForParts(parts);
+		parts = await applyParentFallbackLinks(parts);
 		const assignableIds = new Set(getAssignableParts().map((p) => p.id));
 		for (const id of [...selectedPartIds]) {
 			if (!assignableIds.has(id)) selectedPartIds.delete(id);
@@ -2409,32 +2433,12 @@ export async function renderWbs(
 		const assignedRowIndex = selectedWbsRowIndex;
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
 		if (!selectedRow) return;
-		let fallbackKnownLink = normalizeKnownLink(targetLinkRaw);
+		const fallbackKnownLink = normalizeKnownLink(targetLinkRaw);
 		const preferredPart = preferredPartId
 			? getAssignableParts().find((part) => part.id === preferredPartId)
 			: undefined;
-		if (!fallbackKnownLink && preferredPart) {
-			const resolvedOne = await resolveStableLinksForParts([preferredPart]);
-			const resolved = resolvedOne[0];
-			if (resolved?.link) {
-				fallbackKnownLink = normalizeKnownLink(resolved.link);
-				const idx = parts.findIndex((p) => p.id === resolved.id);
-				if (idx >= 0) parts[idx] = resolved;
-			}
-			if (!fallbackKnownLink) {
-				const aggressive = await resolveStableLinkForPartAggressive(preferredPart);
-				if (aggressive) {
-					fallbackKnownLink = normalizeKnownLink(aggressive);
-					const idx = parts.findIndex((p) => p.id === preferredPart.id);
-					if (idx >= 0) parts[idx] = { ...parts[idx], link: fallbackKnownLink };
-				}
-			}
-		}
 		if (!fallbackKnownLink) {
-			setStatus(
-				"This row has no writable stable link yet. Try another part or reload model links.",
-				"error",
-			);
+			setStatus("This row is non-writable (no stable link). Use a READY row.", "error");
 			return;
 		}
 		const targetPartMatch = getAssignableParts().find(
