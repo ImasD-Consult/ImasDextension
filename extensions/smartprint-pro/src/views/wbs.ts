@@ -9,7 +9,6 @@ import { resolveViewerModelsForWbs } from "../services/viewer-model";
 import {
 	inspectWbsPsetConfig,
 	loadKnownLibraryLinks,
-	verifyWbsValueByLink,
 	writeWbsPropertySetValues,
 } from "../services/pset";
 
@@ -311,61 +310,70 @@ function renderPartsList(
 		.join("");
 }
 
-function renderAssignmentsList(assignments: WbsAssignment[]): string {
-	if (!assignments.length) {
-		return '<p class="text-sm text-gray-500 italic">No assignments yet.</p>';
+function renderAssignmentsList(
+	assignments: WbsAssignment[],
+	knownLinks: string[],
+	parts: IfcPart[],
+): string {
+	if (!knownLinks.length && !assignments.length) {
+		return '<p class="text-sm text-gray-500 italic">No known targets loaded yet. Click "Load known links".</p>';
 	}
-
-	const rows = assignments
-		.slice()
-		.reverse()
-		.map((item) => {
-			const fallbackValue = `${item.wbsValues?.[1] ?? ""} - ${item.wbsValues?.[3] ?? ""}`;
-			const assignedValue = item.propertySetValue || fallbackValue;
-			const targetLink = item.targetLink?.trim() || "(no link)";
+	const latestByLink = new Map<string, WbsAssignment>();
+	for (const item of assignments) {
+		const link = normalizeKnownLink(item.targetLink);
+		if (!link) continue;
+		if (!latestByLink.has(link)) latestByLink.set(link, item);
+	}
+	const partByLink = new Map<string, IfcPart>();
+	for (const part of parts) {
+		const link = normalizeKnownLink(part.link);
+		if (!link) continue;
+		if (!partByLink.has(link)) partByLink.set(link, part);
+	}
+	const links = knownLinks.length ? knownLinks : [...latestByLink.keys()];
+	const rows = links
+		.map((rawLink) => normalizeKnownLink(rawLink))
+		.filter((link) => link.length > 0)
+		.map((link) => {
+			const matchPart = partByLink.get(link);
+			const latest = latestByLink.get(link);
+			const name = latest?.partName || matchPart?.name || "(unknown)";
+			const className = latest?.partType || matchPart?.type || "(unknown)";
+			const assignedValue = latest?.propertySetValue || "-";
+			const assignedAt = latest?.assignedAt || "-";
+			const wbsRow = typeof latest?.wbsRowIndex === "number" ? String(latest.wbsRowIndex + 4) : "-";
 			return `
       <tr class="hover:bg-gray-50">
-        <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(item.partName)}</td>
-        <td class="px-2 py-2 text-xs text-gray-700 border-b border-gray-100">${escapeHtml(item.propertySetName)}</td>
-        <td class="px-2 py-2 text-xs text-gray-700 border-b border-gray-100">${escapeHtml(item.propertyName ?? item.propertySetName)}</td>
+        <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(name)}</td>
+        <td class="px-2 py-2 text-xs text-gray-700 border-b border-gray-100">${escapeHtml(className)}</td>
         <td class="px-2 py-2 text-xs text-gray-800 border-b border-gray-100">${escapeHtml(assignedValue)}</td>
-        <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[300px] truncate" title="${escapeHtml(targetLink)}">${escapeHtml(targetLink)}</td>
-        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(item.assignedAt)}</td>
-        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${item.wbsRowIndex + 4}</td>
-        <td class="px-2 py-2 text-xs border-b border-gray-100">
-          <button
-            type="button"
-            class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-assignment-link="${escapeHtml(targetLink)}"
-            ${targetLink.startsWith("frn:") ? "" : "disabled"}
-          >
-            Select in model
-          </button>
+        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(assignedAt)}</td>
+        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
+        <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link)}">${escapeHtml(link)}</td>
+        <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-assignment-link="${escapeHtml(link)}">Select in 3D</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50" data-assign-link="${escapeHtml(link)}">Assign</button>
         </td>
       </tr>
     `;
 		})
 		.join("");
-
 	return `
     <div class="rounded border border-gray-200 overflow-hidden">
-      <div class="max-h-[24vh] overflow-auto">
+      <div class="max-h-[32vh] overflow-auto">
         <table class="min-w-full border-collapse">
           <thead class="sticky top-0 bg-gray-50 z-10">
             <tr>
-              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Part</th>
-              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Pset</th>
-              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Property</th>
-              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Assigned Value</th>
-              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Target Link</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Name</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Class</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Last Assigned Value</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Assigned At</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">WBS Row</th>
-              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Action</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Target Link</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Actions</th>
             </tr>
           </thead>
-          <tbody>
-            ${rows}
-          </tbody>
+          <tbody>${rows}</tbody>
         </table>
       </div>
     </div>
@@ -385,7 +393,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.10)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.11)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -433,14 +441,7 @@ export async function renderWbs(
         </p>
         <button
           type="button"
-          class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-          data-use-viewer-selection
-        >
-          Use current 3D selection
-        </button>
-        <button
-          type="button"
-          class="rounded px-3 py-1 text-xs font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          class="hidden rounded px-3 py-1 text-xs font-medium bg-brand-600 text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
           data-assign
           disabled
         >
@@ -486,11 +487,11 @@ export async function renderWbs(
         </div>
       </div>
 
-      <div class="shrink-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
+      <div class="flex-1 min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
         <div class="px-2 py-1.5 bg-gray-100 border-b border-gray-200">
-          <span class="text-xs font-semibold text-gray-700">Assigned values</span>
+          <span class="text-xs font-semibold text-gray-700">Known targets and assignments</span>
         </div>
-        <div class="max-h-[24vh] overflow-auto p-2" data-assignments-list>
+        <div class="h-full overflow-auto p-2" data-assignments-list>
           <p class="text-sm text-gray-400 italic">No assignments yet.</p>
         </div>
       </div>
@@ -501,7 +502,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.10)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.11)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1133,7 +1134,11 @@ export async function renderWbs(
 	}
 
 	function refreshAssignments(): void {
-		assignmentsListEl.innerHTML = renderAssignmentsList(assignments);
+		assignmentsListEl.innerHTML = renderAssignmentsList(
+			assignments,
+			knownLibraryLinks,
+			getAssignableParts(),
+		);
 	}
 
 	function refreshAssignButton(): void {
@@ -1392,34 +1397,6 @@ export async function renderWbs(
 		}
 	}
 
-	function payloadContainsExpectedValue(root: unknown, expected: string): boolean {
-		const needle = expected.trim().toLowerCase();
-		if (!needle) return false;
-		let found = false;
-		const walk = (node: unknown, depth: number): void => {
-			if (found || depth > 16 || node == null) return;
-			if (typeof node === "string") {
-				if (node.trim().toLowerCase() === needle) found = true;
-				return;
-			}
-			if (typeof node === "number" || typeof node === "boolean") {
-				if (String(node).trim().toLowerCase() === needle) found = true;
-				return;
-			}
-			if (Array.isArray(node)) {
-				for (const item of node) walk(item, depth + 1);
-				return;
-			}
-			if (typeof node === "object") {
-				for (const v of Object.values(node as Record<string, unknown>)) {
-					walk(v, depth + 1);
-				}
-			}
-		};
-		walk(root, 0);
-		return found;
-	}
-
 	function summarizeWriteTargets(
 		source: IfcPart[],
 		fallbackKnownLink?: string,
@@ -1434,36 +1411,6 @@ export async function renderWbs(
 		const maxInline = 2;
 		if (labels.length <= maxInline) return labels.join(" | ");
 		return `${labels.slice(0, maxInline).join(" | ")} | +${labels.length - maxInline} more`;
-	}
-
-	async function verifyValueOnSelectedObject(
-		part: IfcPart | undefined,
-		expectedValue: string,
-	): Promise<boolean | "unknown"> {
-		if (!part) return "unknown";
-		const viewer = api.viewer;
-		if (!viewer?.getObjectProperties) return "unknown";
-		const rid = Number(part.id);
-		if (Number.isNaN(rid)) return "unknown";
-		const activeModelId = getActiveModelId();
-		const openModel = allIfcModels.find(
-			(m) => activeModelId === m.id || activeModelId === m.versionId,
-		);
-		const modelCandidates = [openModel?.id, openModel?.versionId, activeModelId].filter(
-			(v): v is string => typeof v === "string" && v.trim().length > 0,
-		);
-		for (const modelId of modelCandidates) {
-			try {
-				const payload = await viewer.getObjectProperties(modelId, [rid]);
-				const firstPayload = Array.isArray(payload) ? payload[0] : undefined;
-				if (payloadContainsExpectedValue(firstPayload, expectedValue)) {
-					return true;
-				}
-			} catch {
-				/* try next model id */
-			}
-		}
-		return false;
 	}
 
 	function buildWbsPropertyValue(row: string[]): string {
@@ -2023,6 +1970,15 @@ export async function renderWbs(
 
 	container.addEventListener("click", (event) => {
 		const target = event.target as HTMLElement;
+		const assignLinkButton = target.closest<HTMLButtonElement>("[data-assign-link]");
+		if (assignLinkButton) {
+			const link = assignLinkButton.dataset.assignLink?.trim();
+			if (!link) return;
+			void runWithButtonFeedback(assignButtonEl, "Assigning...", async () => {
+				await assignToTargetLink(link);
+			});
+			return;
+		}
 		const assignmentLinkButton = target.closest<HTMLButtonElement>(
 			"[data-assignment-link]",
 		);
@@ -2079,19 +2035,19 @@ export async function renderWbs(
 		}
 	});
 
-	assignButtonEl.addEventListener("click", async () => {
-		if (assignButtonEl.disabled) return;
-		await runWithButtonFeedback(assignButtonEl, "Assigning...", async () => {
-		if (selectedWbsRowIndex === null) return;
+	async function assignToTargetLink(targetLinkRaw: string): Promise<void> {
+		if (selectedWbsRowIndex === null) {
+			setStatus("Select a WBS row first.", "error");
+			return;
+		}
 		const assignedRowIndex = selectedWbsRowIndex;
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
 		if (!selectedRow) return;
-		const fallbackKnownLink = normalizeKnownLink(knownLinkSelectEl?.value);
+		const fallbackKnownLink = normalizeKnownLink(targetLinkRaw);
 		if (!fallbackKnownLink) {
-			setStatus("Select a Known link target to enable Assign.", "error");
+			setStatus("Select a Known link target to assign.", "error");
 			return;
 		}
-
 		const selectedPartsRaw = getAssignableParts().filter((part) =>
 			selectedPartIds.has(part.id),
 		);
@@ -2135,74 +2091,39 @@ export async function renderWbs(
 			});
 		});
 
-		const psetWriteItems = selectedPartsForWrite.map((part) => {
-			const propertySetValue = buildWbsPropertyValue(selectedRow);
-			return {
-				modelId: part.modelId ?? getActiveModelId(),
-				partId: part.id,
-				value: propertySetValue,
-				link: part.link || fallbackKnownLink,
-			};
-		});
-		const targetSummary = summarizeWriteTargets(
-			selectedPartsForWrite,
-			fallbackKnownLink,
-		);
-
+		const psetWriteItems = selectedPartsForWrite.map((part) => ({
+			modelId: part.modelId ?? getActiveModelId(),
+			partId: part.id,
+			value: buildWbsPropertyValue(selectedRow),
+			link: part.link || fallbackKnownLink,
+		}));
+		const targetSummary = summarizeWriteTargets(selectedPartsForWrite, fallbackKnownLink);
 		try {
 			const writeResult = await writeWbsPropertySetValues(api, psetWriteItems);
 			for (const part of selectedPartsForWrite) {
 				const idx = assignments.findIndex((item) => item.partId === part.id);
 				if (idx >= 0) {
-					assignments[idx] = {
-						...assignments[idx],
-						propertyName: writeResult.propertyName,
-					};
+					assignments[idx] = { ...assignments[idx], propertyName: writeResult.propertyName };
 				}
 			}
 			saveAssignmentsToLocalStorage(assignments);
 			refreshAssignments();
-			const expectedValue = psetWriteItems[0]?.value ?? "";
-			const verifyLink = psetWriteItems[0]?.link?.trim() ?? "";
-			const apiVerification =
-				verifyLink && verifyLink.startsWith("frn:")
-					? await verifyWbsValueByLink(api, verifyLink, expectedValue)
-					: null;
-			const verifiedOnViewer = await verifyValueOnSelectedObject(selectedPartsForWrite[0], expectedValue);
-			if (apiVerification?.matchedValue) {
-				setStatus(
-					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s). Verified in PSet API (def=${apiVerification.defId}, prop=${apiVerification.propertyName}). Targets: ${targetSummary}`,
-				);
-			} else if (verifiedOnViewer === true) {
-				setStatus(
-					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s) and verified value on selected object. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Targets: ${targetSummary}`,
-				);
-			} else if (apiVerification?.foundLink) {
-				setStatus(
-					`Write API returned success and target link exists in PSet API, but expected value was not found yet. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Targets: ${targetSummary}`,
-					"error",
-				);
-			} else if (verifiedOnViewer === false) {
-				setStatus(
-					`Write API returned success, but value was not found on selected object properties. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Likely target link mismatch. Targets: ${targetSummary}`,
-					"error",
-				);
-			} else {
-				setStatus(
-					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s). Could not verify object payload after write. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Targets: ${targetSummary}`,
-				);
-			}
+			setStatus(
+				`Assigned WBS row ${assignedRowIndex + 4}. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Target: ${targetSummary}`,
+			);
 		} catch (error) {
 			const message =
 				error instanceof Error ? error.message : "Failed to write property set.";
-			const firstLink = psetWriteItems[0]?.link ?? "(no link)";
-			setStatus(
-				`Assignment saved locally, but Pset write failed: ${message}. Targets: ${targetSummary}. First target: ${firstLink}`,
-				"error",
-			);
+			setStatus(`Assignment failed: ${message}. Target: ${targetSummary}`, "error");
 			saveAssignmentsToLocalStorage(assignments);
 			refreshAssignments();
 		}
+	}
+
+	assignButtonEl.addEventListener("click", async () => {
+		if (assignButtonEl.disabled) return;
+		await runWithButtonFeedback(assignButtonEl, "Assigning...", async () => {
+			await assignToTargetLink(knownLinkSelectEl?.value ?? "");
 		});
 		refreshAssignButton();
 	});
