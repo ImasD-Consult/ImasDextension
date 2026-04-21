@@ -93,6 +93,72 @@ function getEntityIdFromFrn(link: string | undefined): string | undefined {
 	return token || undefined;
 }
 
+function extractStableEntityLinkFromUnknownPayload(root: unknown): string | undefined {
+	let foundFrnEntity: string | undefined;
+	let foundStableId: string | undefined;
+	const UUID_RE =
+		/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+	const IFC_COMPRESSED_GUID_RE = /^[0-9A-Za-z_$]{22}$/;
+	const isLikelyStableEntityId = (value: string): boolean => {
+		const v = value.trim();
+		if (!v) return false;
+		if (UUID_RE.test(v)) return true;
+		if (IFC_COMPRESSED_GUID_RE.test(v)) return true;
+		return false;
+	};
+	const guidKeys = new Set([
+		"guid",
+		"globalid",
+		"ifcguid",
+		"fileid",
+		"entityid",
+		"objectid",
+	]);
+	const walk = (node: unknown, depth: number): void => {
+		if (depth > 18 || node == null) return;
+		if (Array.isArray(node)) {
+			for (const item of node) walk(item, depth + 1);
+			return;
+		}
+		if (typeof node !== "object") return;
+		const o = node as Record<string, unknown>;
+		const nvName =
+			typeof o.name === "string"
+				? o.name.toLowerCase().trim()
+				: typeof o.key === "string"
+					? o.key.toLowerCase().trim()
+					: undefined;
+		const nvValue =
+			typeof o.value === "string"
+				? o.value.trim()
+				: typeof o.val === "string"
+					? o.val.trim()
+					: undefined;
+		if (nvName && nvValue && guidKeys.has(nvName) && isLikelyStableEntityId(nvValue)) {
+			foundStableId = nvValue;
+		}
+		for (const [k, v] of Object.entries(o)) {
+			if (typeof v === "string") {
+				const sv = v.trim();
+				const lk = k.toLowerCase();
+				if (!sv) continue;
+				if ((lk === "frn" || lk === "link") && sv.startsWith("frn:entity:")) {
+					foundFrnEntity = sv;
+				}
+				if (guidKeys.has(lk) && isLikelyStableEntityId(sv)) {
+					foundStableId = sv;
+				}
+			} else if (v && typeof v === "object") {
+				walk(v, depth + 1);
+			}
+		}
+	};
+	walk(root, 0);
+	if (foundFrnEntity) return normalizeKnownLink(foundFrnEntity);
+	if (foundStableId) return `frn:entity:${foundStableId}`;
+	return undefined;
+}
+
 export type RenderWbsOptions = {
 	/** 3D manifest: only models open in the viewer (no project folder IFC list). */
 	useViewerModelOnly?: boolean;
@@ -385,7 +451,7 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" ${(hasLink || targetRuntimeIdRaw) ? "" : "disabled"}>Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" data-assignment-part-id="${escapeHtml(part.id)}" ${(hasLink || targetRuntimeIdRaw) ? "" : "disabled"}>Select in 3D</button>
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && hasLink) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : "Geometry only, no data properties found") : "Select a WBS row first")}">Assign</button>
         </td>
@@ -2394,6 +2460,7 @@ export async function renderWbs(
 			const link = assignmentLinkButton.dataset.assignmentLink?.trim();
 			const runtimeIdRaw = assignmentLinkButton.dataset.assignmentRuntimeId?.trim();
 			const rowModelId = assignmentLinkButton.dataset.assignmentModelId?.trim();
+			const partId = assignmentLinkButton.dataset.assignmentPartId?.trim();
 			const runtimeId =
 				runtimeIdRaw && /^\d+$/.test(runtimeIdRaw) ? Number(runtimeIdRaw) : NaN;
 			if (
@@ -2417,6 +2484,17 @@ export async function renderWbs(
 						setStatus(
 							`Viewer selected from row runtime mapping (model ${modelId}, runtime ${runtimeId}).`,
 						);
+						if (partId) {
+							void backfillLinkFromRuntimeSelection(partId, modelId, runtimeId).then(
+								(harvested) => {
+									if (harvested) {
+										setStatus(
+											`Viewer selected and link harvested from properties (model ${modelId}, runtime ${runtimeId}).`,
+										);
+									}
+								},
+							);
+						}
 						return;
 					} catch {
 						/* try next */
@@ -2646,6 +2724,38 @@ export async function renderWbs(
 			candidateValues,
 		});
 		setStatus(`Link diagnose: ${summary}`);
+	}
+
+	async function backfillLinkFromRuntimeSelection(
+		partId: string,
+		modelId: string,
+		runtimeId: number,
+	): Promise<boolean> {
+		const viewer = api.viewer;
+		if (!viewer?.getObjectProperties) return false;
+		try {
+			const payload = await viewer.getObjectProperties(modelId, [runtimeId]);
+			const rows = Array.isArray(payload) ? payload : [payload];
+			for (const row of rows) {
+				const link = extractStableEntityLinkFromUnknownPayload(row);
+				if (!isWritableLink(link)) continue;
+				const idx = parts.findIndex((p) => p.id === partId);
+				if (idx < 0) return false;
+				const current = parts[idx];
+				parts[idx] = {
+					...current,
+					link,
+					targetRuntimeId: current.targetRuntimeId?.trim() || String(runtimeId),
+					targetName: current.targetName?.trim() || current.name,
+				};
+				refreshAssignments();
+				refreshPartsList();
+				return true;
+			}
+		} catch {
+			/* ignore harvest errors */
+		}
+		return false;
 	}
 
 	assignButtonEl.addEventListener("click", async () => {
