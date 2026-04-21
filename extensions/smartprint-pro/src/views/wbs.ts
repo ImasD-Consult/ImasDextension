@@ -403,7 +403,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.16)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.17)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -499,7 +499,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.16)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.17)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1202,11 +1202,19 @@ export async function renderWbs(
 		const stableByRuntime = new Map<number, string>();
 		const UUID_RE =
 			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+		const IFC_COMPRESSED_GUID_RE = /^[0-9A-Za-z_$]{22}$/;
+		const isLikelyStableEntityId = (value: string): boolean => {
+			const v = value.trim();
+			if (!v) return false;
+			if (UUID_RE.test(v)) return true;
+			if (IFC_COMPRESSED_GUID_RE.test(v)) return true;
+			return false;
+		};
 		const extractStableEntityLinkFromPayload = (
 			root: unknown,
 		): string | undefined => {
 			let foundFrnEntity: string | undefined;
-			let foundUuid: string | undefined;
+			let foundStableId: string | undefined;
 			const walk = (node: unknown, depth: number): void => {
 				if (depth > 18 || node == null) return;
 				if (Array.isArray(node)) {
@@ -1229,9 +1237,9 @@ export async function renderWbs(
 							["guid", "globalid", "fileid", "entityid"].includes(
 								k.toLowerCase(),
 							) &&
-							UUID_RE.test(sv)
+							isLikelyStableEntityId(sv)
 						) {
-							foundUuid = sv;
+							foundStableId = sv;
 						}
 					} else if (v && typeof v === "object") {
 						walk(v, depth + 1);
@@ -1240,7 +1248,7 @@ export async function renderWbs(
 			};
 			walk(root, 0);
 			if (foundFrnEntity) return foundFrnEntity;
-			if (foundUuid) return `frn:entity:${foundUuid}`;
+			if (foundStableId) return `frn:entity:${foundStableId}`;
 			return undefined;
 		};
 		for (const modelId of modelCandidates) {
@@ -1273,7 +1281,7 @@ export async function renderWbs(
 										: undefined;
 					if (frn) {
 						stableByRuntime.set(rid, frn);
-					} else if (candidateStableId && UUID_RE.test(candidateStableId)) {
+					} else if (candidateStableId && isLikelyStableEntityId(candidateStableId)) {
 						// Safe fallback: only accept UUID-like stable ids (avoid runtime numeric ids).
 						stableByRuntime.set(rid, `frn:entity:${candidateStableId}`);
 					} else {
@@ -1332,7 +1340,7 @@ export async function renderWbs(
 												: undefined;
 							if (frn) {
 								stableByRuntime.set(rid, frn);
-							} else if (stableId && UUID_RE.test(stableId)) {
+							} else if (stableId && isLikelyStableEntityId(stableId)) {
 								stableByRuntime.set(rid, `frn:entity:${stableId}`);
 							}
 						}
