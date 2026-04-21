@@ -1393,7 +1393,18 @@ export async function renderWbs(
 	async function resolveStableLinkForPartAggressive(
 		part: IfcPart,
 	): Promise<string | undefined> {
-		const viewer = api.viewer;
+		const viewer = api.viewer as WorkspaceApi["viewer"] & {
+			getObjects?: (
+				selector?: {
+					modelObjectIds?: Array<{
+						modelId: string;
+						objectRuntimeIds?: number[];
+					}>;
+					selected?: boolean;
+				},
+				objectState?: Record<string, unknown>,
+			) => Promise<Array<{ modelId?: string; objects?: unknown }>>;
+		};
 		if (!viewer?.getObjectProperties) return undefined;
 		const rid = Number(part.id);
 		if (Number.isNaN(rid)) return undefined;
@@ -1501,6 +1512,60 @@ export async function renderWbs(
 				}
 			} catch {
 				/* try next model id */
+			}
+		}
+
+		// Final fallback: runtime id may be stale/placeholder in table row.
+		// Scan model objects and match by Name + Class, then recover frn/entity key.
+		if (typeof viewer.getObjects === "function") {
+			for (const modelId of modelCandidates) {
+				try {
+					const rows = await viewer.getObjects({
+						modelObjectIds: [{ modelId }],
+					});
+					for (const row of rows ?? []) {
+						const objects = row?.objects;
+						if (!Array.isArray(objects)) continue;
+						for (const item of objects) {
+							if (!item || typeof item !== "object") continue;
+							const o = item as Record<string, unknown>;
+							const name =
+								typeof o.name === "string"
+									? o.name.trim()
+									: typeof o.displayName === "string"
+										? o.displayName.trim()
+										: "";
+							const cls =
+								typeof o.class === "string"
+									? o.class.trim().toUpperCase()
+									: typeof o.type === "string"
+										? o.type.trim().toUpperCase()
+										: "";
+							if (!name || !cls) continue;
+							if (name !== part.name || cls !== (part.type ?? "").toUpperCase()) continue;
+							const frn =
+								typeof o.frn === "string" && o.frn.trim().startsWith("frn:entity:")
+									? o.frn.trim()
+									: typeof o.link === "string" && o.link.trim().startsWith("frn:entity:")
+										? o.link.trim()
+										: undefined;
+							if (frn) return frn;
+							const entityCandidate =
+								typeof o.fileId === "string" && o.fileId.trim()
+									? o.fileId.trim()
+									: typeof o.globalId === "string" && o.globalId.trim()
+										? o.globalId.trim()
+										: typeof o.guid === "string" && o.guid.trim()
+											? o.guid.trim()
+											: undefined;
+							if (entityCandidate && isLikelyEntityToken(entityCandidate)) {
+								return `frn:entity:${entityCandidate}`;
+							}
+						}
+					}
+				} catch {
+					/* ignore fallback errors */
+				}
 			}
 		}
 		return undefined;
