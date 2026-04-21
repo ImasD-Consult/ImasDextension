@@ -348,7 +348,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 4.9)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 5.0)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -411,6 +411,9 @@ export async function renderWbs(
         >
           <option value="">Known link (optional fallback)</option>
         </select>
+        <p class="text-[11px] text-gray-500 truncate max-w-[520px]" data-known-link-hint>
+          Known link fallback: none selected.
+        </p>
         <button
           type="button"
           class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
@@ -481,7 +484,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 4.9)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 5.0)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -664,6 +667,9 @@ export async function renderWbs(
 	const knownLinkSelect = container.querySelector<HTMLSelectElement>(
 		"[data-known-link-select]",
 	);
+	const knownLinkHint = container.querySelector<HTMLElement>(
+		"[data-known-link-hint]",
+	);
 	const resolveLinksButton = container.querySelector<HTMLButtonElement>(
 		"[data-resolve-links]",
 	);
@@ -715,6 +721,7 @@ export async function renderWbs(
 	const psetDebugCheckButtonEl = psetDebugCheckButton;
 	const loadKnownLinksButtonEl = loadKnownLinksButton;
 	const knownLinkSelectEl = knownLinkSelect;
+	const knownLinkHintEl = knownLinkHint;
 	const resolveLinksButtonEl = resolveLinksButton;
 	const psetDebugLabelEl = psetDebugLabel;
 	const modelPsetCheckButtonEl = modelPsetCheckButton;
@@ -1025,8 +1032,19 @@ export async function renderWbs(
 		knownLinkSelectEl.innerHTML =
 			'<option value="">Known link (optional fallback)</option>' +
 			knownLibraryLinks
-				.map((l) => `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`)
+				.map((l, i) => {
+					const suffix = l.length > 56 ? `${l.slice(0, 28)}...${l.slice(-22)}` : l;
+					return `<option value="${escapeHtml(l)}">#${i + 1} ${escapeHtml(suffix)}</option>`;
+				})
 				.join("");
+	}
+
+	function refreshKnownLinkHint(): void {
+		if (!knownLinkHintEl) return;
+		const selected = knownLinkSelectEl?.value?.trim();
+		knownLinkHintEl.textContent = selected
+			? `Known link fallback selected: ${selected}`
+			: "Known link fallback: none selected.";
 	}
 
 	function getAssemblyCandidates(source: IfcPart[]): IfcPart[] {
@@ -1937,6 +1955,7 @@ export async function renderWbs(
 			const res = await loadKnownLibraryLinks(api);
 			knownLibraryLinks = res.links;
 			refreshKnownLinkOptions();
+			refreshKnownLinkHint();
 			if (res.links.length > 0) {
 				setStatus(`${res.message} Select one in dropdown to use as fallback link.`);
 			} else {
@@ -1946,6 +1965,9 @@ export async function renderWbs(
 			const msg = error instanceof Error ? error.message : String(error);
 			setStatus(`Failed to load known links: ${msg}`, "error");
 		}
+	});
+	knownLinkSelectEl?.addEventListener("change", () => {
+		refreshKnownLinkHint();
 	});
 	resolveLinksButtonEl?.addEventListener("click", async () => {
 		const assignable = getAssignableParts();
@@ -2057,12 +2079,18 @@ export async function renderWbs(
 		const selectedPartsWithStableLinks = selectedParts.filter((part) =>
 			isWritableLink(part.link),
 		);
-		const selectedPartsForWrite = selectedPartsWithStableLinks;
+		const fallbackKnownLink = knownLinkSelectEl?.value?.trim();
+		const selectedPartsForWrite =
+			selectedPartsWithStableLinks.length > 0
+				? selectedPartsWithStableLinks
+				: fallbackKnownLink
+					? selectedParts
+					: [];
 		if (!selectedPartsForWrite.length) {
 			const firstSelected = selectedParts[0];
 			const rawLink = firstSelected?.link?.trim() || "(none)";
 			setStatus(
-				`No GUID-based writable links found for ${selectedParts.length} selected object(s). First selected link: ${rawLink}.`,
+				`No GUID-based writable links found for ${selectedParts.length} selected object(s). First selected link: ${rawLink}. Select a known link fallback from the dropdown, or load objects with stable links.`,
 				"error",
 			);
 			return;
@@ -2088,7 +2116,6 @@ export async function renderWbs(
 
 		const psetWriteItems = selectedPartsForWrite.map((part) => {
 			const propertySetValue = buildWbsPropertyValue(selectedRow);
-			const fallbackKnownLink = knownLinkSelectEl?.value?.trim();
 			return {
 				modelId: part.modelId ?? getActiveModelId(),
 				partId: part.id,
