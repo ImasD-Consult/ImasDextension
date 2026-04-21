@@ -368,7 +368,7 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(runtimeIdText)}" data-assignment-model-id="${escapeHtml(modelId)}" ${(hasLink || runtimeIdText) ? "" : "disabled"}>Select in 3D</button>
-          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" ${(canAssign && hasLink) ? "" : "disabled"} title="${escapeHtml(hasLink ? assignTitle : "Part has no writable link")}">Assign</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-part-id="${escapeHtml(part.id)}" ${canAssign ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : "Will try to resolve link on click") : "Select a WBS row first")}">Assign</button>
         </td>
       </tr>
     `;
@@ -1993,9 +1993,9 @@ export async function renderWbs(
 		const assignLinkButton = target.closest<HTMLButtonElement>("[data-assign-link]");
 		if (assignLinkButton) {
 			const link = assignLinkButton.dataset.assignLink?.trim();
-			if (!link) return;
+			const partId = assignLinkButton.dataset.assignPartId?.trim();
 			void runWithButtonFeedback(assignButtonEl, "Assigning...", async () => {
-				await assignToTargetLink(link);
+				await assignToTargetLink(link ?? "", partId);
 			});
 			return;
 		}
@@ -2086,7 +2086,10 @@ export async function renderWbs(
 		}
 	});
 
-	async function assignToTargetLink(targetLinkRaw: string): Promise<void> {
+	async function assignToTargetLink(
+		targetLinkRaw: string,
+		preferredPartId?: string,
+	): Promise<void> {
 		if (selectedWbsRowIndex === null) {
 			setStatus("Select a WBS row first.", "error");
 			return;
@@ -2094,17 +2097,32 @@ export async function renderWbs(
 		const assignedRowIndex = selectedWbsRowIndex;
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
 		if (!selectedRow) return;
-		const fallbackKnownLink = normalizeKnownLink(targetLinkRaw);
+		let fallbackKnownLink = normalizeKnownLink(targetLinkRaw);
+		const preferredPart = preferredPartId
+			? getAssignableParts().find((part) => part.id === preferredPartId)
+			: undefined;
+		if (!fallbackKnownLink && preferredPart) {
+			const resolvedOne = await resolveStableLinksForParts([preferredPart]);
+			const resolved = resolvedOne[0];
+			if (resolved?.link) {
+				fallbackKnownLink = normalizeKnownLink(resolved.link);
+				const idx = parts.findIndex((p) => p.id === resolved.id);
+				if (idx >= 0) parts[idx] = resolved;
+			}
+		}
 		if (!fallbackKnownLink) {
-			setStatus("Select a Known link target to assign.", "error");
+			setStatus(
+				"This row has no writable stable link yet. Try another part or reload model links.",
+				"error",
+			);
 			return;
 		}
 		const targetPartMatch = getAssignableParts().find(
 			(part) => normalizeKnownLink(part.link) === fallbackKnownLink,
 		);
-		const selectedPartsRaw = getAssignableParts().filter((part) =>
-			selectedPartIds.has(part.id),
-		);
+		const selectedPartsRaw = preferredPart
+			? [preferredPart]
+			: getAssignableParts().filter((part) => selectedPartIds.has(part.id));
 		const selectedPartsResolved = await resolveStableLinksForParts(selectedPartsRaw);
 		for (const resolved of selectedPartsResolved) {
 			const idx = parts.findIndex((p) => p.id === resolved.id);
