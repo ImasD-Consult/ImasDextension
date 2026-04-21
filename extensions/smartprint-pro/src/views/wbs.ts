@@ -1480,9 +1480,9 @@ export async function renderWbs(
 			const candidate = bucket.find((b) => !used.has(b.rid)) ?? bucket[0];
 			if (!candidate) return part;
 			used.add(candidate.rid);
-			const currentRid = Number(part.id);
-			const nextId =
-				Number.isNaN(currentRid) || currentRid === 0 ? String(candidate.rid) : part.id;
+			// Always prefer the viewer runtime id from the hydrated registry match.
+			// Some source lists return table-order ids (0..N) instead of runtime ids.
+			const nextId = String(candidate.rid);
 			const nextLink = part.link?.trim() ? part.link : candidate.link;
 			if (nextId === part.id && nextLink === part.link) return part;
 			return { ...part, id: nextId, link: nextLink };
