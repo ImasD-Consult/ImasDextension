@@ -1184,6 +1184,25 @@ export async function loadKnownLibraryLinks(
 	};
 }
 
+/** Aligns with WBS `normalizeKnownLink` so listPSetsByDefinition `link` matches user/viewer FRNs. */
+function normalizePsetTargetLink(raw: string | undefined): string {
+	const value = raw?.trim() ?? "";
+	if (!value) return "";
+	if (!value.startsWith("frn:entity:")) return value;
+	const prefix = "frn:entity:";
+	let entity = value.slice(prefix.length).trim();
+	for (let i = 0; i < 2; i += 1) {
+		try {
+			const decoded = decodeURIComponent(entity);
+			if (decoded === entity) break;
+			entity = decoded;
+		} catch {
+			break;
+		}
+	}
+	return `${prefix}${entity}`;
+}
+
 function payloadContainsExpectedValueAtProperty(
 	root: unknown,
 	propertyName: string,
@@ -1217,7 +1236,7 @@ export async function verifyWbsValueByLink(
 	link: string,
 	expectedValue: string,
 ): Promise<WbsPsetLinkVerificationResult> {
-	const normalizedLink = link.trim();
+	const normalizedLink = normalizePsetTargetLink(link.trim());
 	if (!normalizedLink.startsWith("frn:")) {
 		return {
 			ok: false,
@@ -1281,25 +1300,27 @@ export async function verifyWbsValueByLink(
 			configuredPropertyName,
 			definitionName,
 		);
+		const keysToRead = propertyRetryKeys(propertyName);
 
 		let foundLink = false;
 		let matchedValue = false;
 		const seenNext = new Set<string>();
+		const wantLink = normalizePsetTargetLink(normalizedLink);
 		let page = await pset.listPSetsByDefinition(libId, defId, { top: 500 });
 		for (;;) {
 			const items =
 				(page.data as { items?: Array<{ link?: string; props?: unknown }> })?.items ?? [];
 			for (const item of items) {
 				const itemLink = item?.link?.trim();
-				if (!itemLink || itemLink !== normalizedLink) continue;
+				if (!itemLink || normalizePsetTargetLink(itemLink) !== wantLink) continue;
 				foundLink = true;
-				if (
-					payloadContainsExpectedValueAtProperty(
-						item.props,
-						propertyName,
-						expectedValue,
-					)
-				) {
+				const got = readWbsValueFromPropsObject(item.props, keysToRead);
+				const expected = expectedValue.trim().toLowerCase();
+				const flatOk = got.trim().toLowerCase() === expected;
+				const deepOk = keysToRead.some((k) =>
+					payloadContainsExpectedValueAtProperty(item.props, k, expectedValue),
+				);
+				if (flatOk || deepOk) {
 					matchedValue = true;
 					break;
 				}

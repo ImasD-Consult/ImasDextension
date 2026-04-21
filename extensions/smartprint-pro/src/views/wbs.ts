@@ -10,6 +10,7 @@ import {
 	fetchWbsPsetAssignmentsFromModel,
 	inspectWbsPsetConfig,
 	loadKnownLibraryLinks,
+	verifyWbsValueByLink,
 	writeWbsPropertySetValues,
 	type WbsPsetModelAssignmentRow,
 } from "../services/pset";
@@ -280,28 +281,56 @@ function loadFileFromLocalStorage(): StoredWbsFile | null {
 	}
 }
 
-function loadAssignmentsFromLocalStorage(): WbsAssignment[] {
+type WbsAssignmentsStoreV1 = {
+	v: 1;
+	projectId: string;
+	items: WbsAssignment[];
+};
+
+function migrateKnownLinkTargetPartIds(rows: WbsAssignment[]): WbsAssignment[] {
+	return rows.map((item) => {
+		if (item.partId === "known-link-target" && item.targetLink) {
+			const nl = normalizeKnownLink(item.targetLink);
+			if (nl) return { ...item, partId: nl };
+		}
+		return item;
+	});
+}
+
+/** Scoped by Connect project id so another project cannot reuse cached rows. */
+function loadAssignmentsFromLocalStorage(projectId: string): WbsAssignment[] {
 	try {
 		const raw = localStorage.getItem(WBS_ASSIGNMENTS_STORAGE_KEY);
 		if (!raw) return [];
-		const parsed = JSON.parse(raw) as WbsAssignment[];
-		if (!Array.isArray(parsed)) return [];
-		// Legacy: PSet-only assigns used the same synthetic partId for every target, so each
-		// new assign cleared all others. Migrate to one stable id per target link.
-		return parsed.map((item) => {
-			if (item.partId === "known-link-target" && item.targetLink) {
-				const nl = normalizeKnownLink(item.targetLink);
-				if (nl) return { ...item, partId: nl };
-			}
-			return item;
-		});
+		const parsed = JSON.parse(raw) as unknown;
+		// Legacy flat array (no project): do not apply to a real project id (cross-project bleed).
+		if (Array.isArray(parsed)) {
+			if (projectId) return [];
+			return migrateKnownLinkTargetPartIds(parsed as WbsAssignment[]);
+		}
+		if (!parsed || typeof parsed !== "object") return [];
+		const rec = parsed as Partial<WbsAssignmentsStoreV1>;
+		if (rec.v !== 1 || !Array.isArray(rec.items)) return [];
+		const storedPid = (rec.projectId ?? "").trim();
+		if (projectId) {
+			if (!storedPid || storedPid !== projectId) return [];
+		} else if (storedPid) {
+			// Scoped rows for a project, but we could not read the current project id yet.
+			return [];
+		}
+		return migrateKnownLinkTargetPartIds(rec.items);
 	} catch {
 		return [];
 	}
 }
 
-function saveAssignmentsToLocalStorage(assignments: WbsAssignment[]): void {
-	localStorage.setItem(WBS_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(assignments));
+function saveAssignmentsToLocalStorage(projectId: string, assignments: WbsAssignment[]): void {
+	const payload: WbsAssignmentsStoreV1 = {
+		v: 1,
+		projectId: projectId.trim(),
+		items: assignments,
+	};
+	localStorage.setItem(WBS_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(payload));
 }
 
 function renderTable(
@@ -425,7 +454,15 @@ function renderAssignmentsList(
 	parts: IfcPart[],
 	knownLinks: string[],
 	selectedWbsRowIndex: number | null,
+	activeModelScopeIds: string[],
 ): string {
+	const scope = [...new Set(activeModelScopeIds.map((s) => s.trim()).filter(Boolean))];
+	function assignmentMatchesCurrentModel(item: WbsAssignment): boolean {
+		if (scope.length === 0) return true;
+		const mid = item.modelId?.trim();
+		if (!mid) return true;
+		return scope.includes(mid);
+	}
 	const hasKnownPsetLinks = knownLinks.some((l) => Boolean(normalizeKnownLink(l)));
 	if (!parts.length && !assignments.length && !hasKnownPsetLinks) {
 		return '<p class="text-sm text-gray-500 italic">No IFC parts loaded for current model.</p>';
@@ -446,6 +483,7 @@ function renderAssignmentsList(
 	const usedKnownLinks = new Set<string>();
 	const knownBySignature = new Map<string, string[]>();
 	for (const item of assignments) {
+		if (!assignmentMatchesCurrentModel(item)) continue;
 		const link = normalizeKnownLink(item.targetLink);
 		if (!link || !knownLinkSet.has(link)) continue;
 		const sig = `${(item.partName ?? "").trim().toUpperCase()}::${(item.partType ?? "")
@@ -482,8 +520,14 @@ function renderAssignmentsList(
 	}
 	const rowsFromParts = resolvedPartRows
 		.map(({ part, directLink, mappedKnownLink, link }) => {
-			const latest = link ? latestByLink.get(link) : undefined;
-			const baseName = part.name || latest?.partName || "(unknown)";
+			const latestRaw = link ? latestByLink.get(link) : undefined;
+			const latest =
+				latestRaw && assignmentMatchesCurrentModel(latestRaw) ? latestRaw : undefined;
+			const staleOtherModel =
+				Boolean(latestRaw) &&
+				Boolean(link) &&
+				!assignmentMatchesCurrentModel(latestRaw as WbsAssignment);
+			const baseName = part.name || latest?.partName || latestRaw?.partName || "(unknown)";
 			const className = part.type || latest?.partType || "(unknown)";
 			const runtimeId = Number(part.id);
 			const runtimeIdText = isValidRuntimeId(runtimeId) ? String(runtimeId) : "";
@@ -500,23 +544,29 @@ function renderAssignmentsList(
 			const modelId = part.modelId?.trim() || latest?.modelId?.trim() || "";
 			const guid = link.startsWith("frn:entity:") ? link.slice("frn:entity:".length) : "-";
 			const modelLabel = part.modelName?.trim() || part.modelId?.trim() || latest?.modelId?.trim() || "-";
-			const assignedValue = latest?.propertySetValue || "-";
-			const assignedAt = latest?.assignedAt || "-";
+			const assignedValue = staleOtherModel
+				? "(other IFC / cached)"
+				: latest?.propertySetValue || "-";
+			const assignedAt = staleOtherModel ? "-" : latest?.assignedAt || "-";
 			const wbsRow =
-				typeof latest?.wbsRowIndex === "number" && latest.wbsRowIndex >= 0
+				!staleOtherModel &&
+				typeof latest?.wbsRowIndex === "number" &&
+				latest.wbsRowIndex >= 0
 					? String(latest.wbsRowIndex + 4)
 					: "-";
 			const isAssigned = Boolean(latest) && Boolean(link);
 			const hasLink = Boolean(link);
-			const statusBadge = isAssigned
-				? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
-				: hasLink
-					? !directLink && mappedKnownLink
-						? '<span class="inline-flex items-center rounded bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">Mapped known target</span>'
-						: part.resolvedViaParent
-							? '<span class="inline-flex items-center rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">Assigns to parent</span>'
-							: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
-					: '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">No link</span>';
+			const statusBadge = staleOtherModel
+				? '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">Other IFC</span>'
+				: isAssigned
+					? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
+					: hasLink
+						? !directLink && mappedKnownLink
+							? '<span class="inline-flex items-center rounded bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">Mapped known target</span>'
+							: part.resolvedViaParent
+								? '<span class="inline-flex items-center rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">Assigns to parent</span>'
+								: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
+						: '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">No link</span>';
 			const canAssign = selectedWbsRowIndex !== null;
 			const assignTitle = canAssign
 				? "Assign selected WBS row to this target"
@@ -547,21 +597,31 @@ function renderAssignmentsList(
 		.filter((link) => !partByLink.has(link) && !usedKnownLinks.has(link));
 	const rowsFromKnown = knownOnlyLinks
 		.map((link, i) => {
-			const latest = latestByLink.get(link);
-			const name = latest?.partName || `PSet target #${i + 1}`;
-			const className = latest?.partType || "PSET";
+			const latestRaw = latestByLink.get(link);
+			const latest =
+				latestRaw && assignmentMatchesCurrentModel(latestRaw) ? latestRaw : undefined;
+			const staleOtherModel =
+				Boolean(latestRaw) && !assignmentMatchesCurrentModel(latestRaw as WbsAssignment);
+			const name = latest?.partName || latestRaw?.partName || `PSet target #${i + 1}`;
+			const className = latest?.partType || latestRaw?.partType || "PSET";
 			const guid = link.startsWith("frn:entity:") ? link.slice("frn:entity:".length) : "-";
-			const modelLabel = latest?.modelId?.trim() || "-";
-			const assignedValue = latest?.propertySetValue || "-";
-			const assignedAt = latest?.assignedAt || "-";
+			const modelLabel = latest?.modelId?.trim() || latestRaw?.modelId?.trim() || "-";
+			const assignedValue = staleOtherModel
+				? "(other IFC / cached)"
+				: latest?.propertySetValue || "-";
+			const assignedAt = staleOtherModel ? "-" : latest?.assignedAt || "-";
 			const wbsRow =
-				typeof latest?.wbsRowIndex === "number" && latest.wbsRowIndex >= 0
+				!staleOtherModel &&
+				typeof latest?.wbsRowIndex === "number" &&
+				latest.wbsRowIndex >= 0
 					? String(latest.wbsRowIndex + 4)
 					: "-";
 			const isAssigned = Boolean(latest);
-			const statusBadge = isAssigned
-				? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
-				: '<span class="inline-flex items-center rounded bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">Known target</span>';
+			const statusBadge = staleOtherModel
+				? '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">Other IFC</span>'
+				: isAssigned
+					? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
+					: '<span class="inline-flex items-center rounded bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">Known target</span>';
 			const canAssign = selectedWbsRowIndex !== null;
 			const assignTitle = canAssign
 				? "Assign selected WBS row to this known target"
@@ -620,6 +680,13 @@ export async function renderWbs(
 	api: WorkspaceApi,
 	options?: RenderWbsOptions,
 ): Promise<void> {
+	let wbsProjectId = "";
+	try {
+		wbsProjectId = (await api.project.getProject())?.id?.trim() ?? "";
+	} catch {
+		wbsProjectId = "";
+	}
+
 	const viewerOnly = options?.useViewerModelOnly === true;
 	const dockLayout = viewerOnly && options?.horizontalDockLayout === true;
 
@@ -628,7 +695,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.23)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.25)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -724,7 +791,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.23)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.25)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1241,7 +1308,7 @@ export async function renderWbs(
 	const partsByModelId = new Map<string, IfcPart[]>();
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
-	let assignments = loadAssignmentsFromLocalStorage();
+	let assignments = loadAssignmentsFromLocalStorage(wbsProjectId);
 	let assignmentsModelId = "";
 	const parentByRuntimeId = new Map<number, number | null>();
 	const fileIdByRuntimeId = new Map<number, string>();
@@ -1279,11 +1346,19 @@ export async function renderWbs(
 	}
 
 	function refreshAssignments(): void {
+		const active = getActiveModelId();
+		const open = allIfcModels.find(
+			(m) => active && (m.id === active || m.versionId === active),
+		);
+		const modelScope = [active, open?.versionId, open?.id].filter(
+			(x): x is string => typeof x === "string" && x.trim().length > 0,
+		);
 		assignmentsListEl.innerHTML = renderAssignmentsList(
 			assignments,
 			getAssignableParts(),
 			knownLibraryLinks,
 			selectedWbsRowIndex,
+			modelScope,
 		);
 	}
 
@@ -2437,7 +2512,7 @@ export async function renderWbs(
 		}
 		if (assignmentsModelId && assignmentsModelId !== selectedModelId) {
 			assignments = [];
-			saveAssignmentsToLocalStorage(assignments);
+			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		}
 		assignmentsModelId = selectedModelId;
@@ -2566,7 +2641,7 @@ export async function renderWbs(
 		try {
 			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
 			mergeAssignmentsFromPsetApi(hydrated.items);
-			saveAssignmentsToLocalStorage(assignments);
+			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		} catch (hydrateErr) {
 			if (!silent) {
@@ -2994,21 +3069,35 @@ export async function renderWbs(
 					assignments[idx] = { ...assignments[idx], propertyName: writeResult.propertyName };
 				}
 			}
-			saveAssignmentsToLocalStorage(assignments);
+			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 			void resolveRuntimeForEntityLink(fallbackKnownLink).then((hit) => {
 				if (hit) {
 					entityLinkToRuntimeCache.set(normalizeKnownLink(fallbackKnownLink), hit);
 				}
 			});
-			setStatus(
-				`Assigned WBS row ${assignedRowIndex + 4}. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Target: ${targetSummary}`,
+			const writtenValue = buildWbsPropertyValue(selectedRow);
+			const verify = await verifyWbsValueByLink(
+				api,
+				normalizeKnownLink(fallbackKnownLink),
+				writtenValue,
 			);
+			const baseMsg = `Assigned WBS row ${assignedRowIndex + 4}. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Target: ${targetSummary}`;
+			if (!verify.matchedValue) {
+				setStatus(
+					`${baseMsg} · PSet API check: ${verify.message} (The 3D object list often shows IFC groups only; Connect Property Sets live on the project link and may not appear there.)`,
+					"error",
+				);
+			} else {
+				setStatus(
+					`${baseMsg} · Confirmed on Property Set API for this link.`,
+				);
+			}
 		} catch (error) {
 			const message =
 				error instanceof Error ? error.message : "Failed to write property set.";
 			setStatus(`Assignment failed: ${message}. Target: ${targetSummary}`, "error");
-			saveAssignmentsToLocalStorage(assignments);
+			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		}
 	}
