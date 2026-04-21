@@ -97,6 +97,25 @@ function isValidRuntimeId(value: number): boolean {
 	return Number.isFinite(value) && !Number.isNaN(value) && value > 0;
 }
 
+/** Normalize entity id / fileId for comparisons (encoding + case). */
+function normalizeEntityIdToken(raw: string): string {
+	let t = raw.trim();
+	for (let i = 0; i < 2; i += 1) {
+		try {
+			const d = decodeURIComponent(t);
+			if (d === t) break;
+			t = d;
+		} catch {
+			break;
+		}
+	}
+	return t.toLowerCase();
+}
+
+function entityIdTokensMatch(a: string, b: string): boolean {
+	return normalizeEntityIdToken(a) === normalizeEntityIdToken(b);
+}
+
 function extractStableEntityLinkFromUnknownPayload(root: unknown): string | undefined {
 	let foundFrnEntity: string | undefined;
 	let foundStableId: string | undefined;
@@ -943,95 +962,6 @@ export async function renderWbs(
 		}
 	}
 
-	async function syncViewerSelectionFromKnownLink(link: string): Promise<void> {
-		const v = api.viewer;
-		if (!viewerOnly || !v?.setSelection) return;
-		const trimmed = normalizeKnownLink(link);
-		if (!trimmed) return;
-
-		let modelId: string | undefined;
-		let runtimeId: number | undefined;
-
-		// Runtime-style FRN can be applied directly.
-		const runtimeMatch = trimmed.match(
-			/^frn:tc:project:[^:]+:model:([^:]+):entity:(\d+)$/i,
-		);
-		if (runtimeMatch) {
-			modelId = runtimeMatch[1];
-			runtimeId = Number(runtimeMatch[2]);
-		}
-
-		// Stable entity link: try to map against loaded IFC rows by exact link.
-		if (
-			(!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) &&
-			trimmed.startsWith("frn:entity:")
-		) {
-			const match = parts.find((p) => normalizeKnownLink(p.link) === trimmed);
-			if (match) {
-				modelId = match.modelId ?? getActiveModelId();
-				const rid = Number(match.id);
-				if (isValidRuntimeId(rid)) runtimeId = rid;
-			}
-		}
-
-		// Stable entity link: fallback via hierarchy fileId mapping.
-		if (
-			(!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) &&
-			trimmed.startsWith("frn:entity:")
-		) {
-			const entityId = trimmed.slice("frn:entity:".length).trim();
-			await ensureHierarchyCacheForActiveModel();
-			for (const [rid, fid] of fileIdByRuntimeId.entries()) {
-				if (fid === entityId) {
-					modelId = getActiveModelId();
-					runtimeId = rid;
-					break;
-				}
-			}
-		}
-
-		if (!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) {
-			setStatus(
-				`Known link selected. Viewer highlight is unavailable for this model/runtime mapping, but Assign can still write to: ${trimmed}`,
-			);
-			return;
-		}
-
-		const activeModelId = getActiveModelId();
-		const currentOpenModel = allIfcModels.find(
-			(m) => activeModelId === m.id || activeModelId === m.versionId,
-		);
-		const modelCandidates = [
-			modelId,
-			activeModelId,
-			currentOpenModel?.id,
-			currentOpenModel?.versionId,
-		].filter((m): m is string => typeof m === "string" && m.trim().length > 0);
-
-		for (const candidateModelId of [...new Set(modelCandidates)]) {
-			try {
-				await v.setSelection(
-					{
-						modelObjectIds: [
-							{ modelId: candidateModelId, objectRuntimeIds: [runtimeId] },
-						],
-					},
-					"set",
-				);
-				setStatus(
-					`Viewer selected from known link: ${trimmed} (model ${candidateModelId}, runtime ${runtimeId})`,
-				);
-				return;
-			} catch {
-				/* try next model id alias */
-			}
-		}
-		setStatus(
-			`Failed to apply viewer selection for known link: ${trimmed}`,
-			"error",
-		);
-	}
-
 	function setStatus(
 		message: string,
 		tone: "info" | "error" = "info",
@@ -1283,6 +1213,11 @@ export async function renderWbs(
 	const nameByRuntimeId = new Map<number, string>();
 	let hierarchyCacheModelId = "";
 	let knownLibraryLinks: string[] = [];
+	/** Stable `frn:entity:*` → viewer runtime for highlights (rebuilt per model load). */
+	const entityLinkToRuntimeCache = new Map<
+		string,
+		{ modelId: string; runtimeId: number }
+	>();
 
 	function refreshKnownLinkOptions(): void {
 		if (!knownLinkSelectEl) return;
@@ -1932,6 +1867,205 @@ export async function renderWbs(
 		}
 	}
 
+	/**
+	 * Map `frn:entity:*` to a viewer runtime id so Select in 3D can highlight the object.
+	 * Uses hierarchy fileIds, object registry scan, and a small in-memory cache.
+	 */
+	async function resolveRuntimeForEntityLink(
+		entityLink: string,
+	): Promise<{ modelId: string; runtimeId: number } | undefined> {
+		const trimmed = normalizeKnownLink(entityLink);
+		if (!trimmed.startsWith("frn:entity:")) return undefined;
+
+		const cached = entityLinkToRuntimeCache.get(trimmed);
+		if (cached) return cached;
+
+		const entityId = getEntityIdFromFrn(trimmed);
+		if (!entityId) return undefined;
+
+		const activeModelId = getActiveModelId();
+		if (!activeModelId) return undefined;
+
+		const partMatch = parts.find((p) => normalizeKnownLink(p.link) === trimmed);
+		if (partMatch) {
+			const rid = Number(partMatch.id);
+			if (isValidRuntimeId(rid)) {
+				const hit = {
+					modelId: partMatch.modelId ?? activeModelId,
+					runtimeId: rid,
+				};
+				entityLinkToRuntimeCache.set(trimmed, hit);
+				return hit;
+			}
+		}
+
+		await ensureHierarchyCacheForActiveModel();
+		for (const [rid, fid] of fileIdByRuntimeId.entries()) {
+			if (fid && entityIdTokensMatch(fid, entityId)) {
+				const hit = { modelId: activeModelId, runtimeId: rid };
+				entityLinkToRuntimeCache.set(trimmed, hit);
+				return hit;
+			}
+		}
+
+		const viewer = api.viewer as WorkspaceApi["viewer"] & {
+			getObjects?: (
+				selector?: {
+					modelObjectIds?: Array<{
+						modelId: string;
+						objectRuntimeIds?: number[];
+					}>;
+				},
+			) => Promise<Array<{ modelId?: string; objects?: unknown }>>;
+		};
+
+		const tryMatchObject = (o: Record<string, unknown>): number | undefined => {
+			const rid =
+				typeof o.objectRuntimeId === "number"
+					? o.objectRuntimeId
+					: typeof o.id === "number"
+						? o.id
+						: typeof o.runtimeId === "number"
+							? o.runtimeId
+							: NaN;
+			if (!isValidRuntimeId(rid)) return undefined;
+			for (const k of [
+				"fileId",
+				"frn",
+				"link",
+				"guid",
+				"globalId",
+				"globalid",
+				"entityId",
+			]) {
+				const v = o[k];
+				if (typeof v !== "string" || !v.trim()) continue;
+				const sv = v.trim();
+				if (sv.startsWith("frn:entity:")) {
+					const inner = sv.slice("frn:entity:".length);
+					if (entityIdTokensMatch(inner, entityId)) return rid;
+				} else if (entityIdTokensMatch(sv, entityId)) {
+					return rid;
+				}
+			}
+			return undefined;
+		};
+
+		if (typeof viewer?.getObjects === "function") {
+			try {
+				const rows = await viewer.getObjects({
+					modelObjectIds: [{ modelId: activeModelId }],
+				});
+				for (const row of rows ?? []) {
+					const rowMid = typeof row?.modelId === "string" ? row.modelId : "";
+					if (rowMid && rowMid !== activeModelId) continue;
+					const objects = row?.objects;
+					if (!Array.isArray(objects)) continue;
+					for (const item of objects) {
+						if (!item || typeof item !== "object") continue;
+						const rid = tryMatchObject(item as Record<string, unknown>);
+						if (rid != null) {
+							const hit = { modelId: activeModelId, runtimeId: rid };
+							entityLinkToRuntimeCache.set(trimmed, hit);
+							return hit;
+						}
+					}
+				}
+			} catch {
+				/* ignore */
+			}
+			try {
+				const modelRows = await viewer.getObjects();
+				for (const row of modelRows ?? []) {
+					const rowMid = typeof row?.modelId === "string" ? row.modelId : "";
+					if (rowMid && rowMid !== activeModelId) continue;
+					const objects = row?.objects;
+					if (!Array.isArray(objects)) continue;
+					for (const item of objects) {
+						if (!item || typeof item !== "object") continue;
+						const rid = tryMatchObject(item as Record<string, unknown>);
+						if (rid != null) {
+							const hit = { modelId: activeModelId, runtimeId: rid };
+							entityLinkToRuntimeCache.set(trimmed, hit);
+							return hit;
+						}
+					}
+				}
+			} catch {
+				/* ignore */
+			}
+		}
+
+		return undefined;
+	}
+
+	async function syncViewerSelectionFromKnownLink(link: string): Promise<void> {
+		const v = api.viewer;
+		if (!viewerOnly || !v?.setSelection) return;
+		const trimmed = normalizeKnownLink(link);
+		if (!trimmed) return;
+
+		let modelId: string | undefined;
+		let runtimeId: number | undefined;
+
+		const runtimeMatch = trimmed.match(
+			/^frn:tc:project:[^:]+:model:([^:]+):entity:(\d+)$/i,
+		);
+		if (runtimeMatch) {
+			modelId = runtimeMatch[1];
+			runtimeId = Number(runtimeMatch[2]);
+		}
+
+		if (
+			(!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) &&
+			trimmed.startsWith("frn:entity:")
+		) {
+			const resolved = await resolveRuntimeForEntityLink(trimmed);
+			if (resolved) {
+				modelId = resolved.modelId;
+				runtimeId = resolved.runtimeId;
+			}
+		}
+
+		if (!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) {
+			setStatus(
+				`Could not map this link to a 3D runtime id yet (try Reload model). Assign/write still targets: ${trimmed}`,
+			);
+			return;
+		}
+
+		const activeModelId = getActiveModelId();
+		const currentOpenModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelCandidates = [
+			modelId,
+			activeModelId,
+			currentOpenModel?.id,
+			currentOpenModel?.versionId,
+		].filter((m): m is string => typeof m === "string" && m.trim().length > 0);
+
+		for (const candidateModelId of [...new Set(modelCandidates)]) {
+			try {
+				await v.setSelection(
+					{
+						modelObjectIds: [
+							{ modelId: candidateModelId, objectRuntimeIds: [runtimeId] },
+						],
+					},
+					"set",
+				);
+				setStatus(
+					`Viewer selected from link: ${trimmed} (model ${candidateModelId}, runtime ${runtimeId})`,
+				);
+				return;
+			} catch {
+				/* try next model id alias */
+			}
+		}
+		setStatus(`Failed to apply viewer selection for link: ${trimmed}`, "error");
+	}
+
 	function summarizeWriteTargets(
 		source: IfcPart[],
 		fallbackKnownLink?: string,
@@ -1939,7 +2073,12 @@ export async function renderWbs(
 		if (!source.length) return "(none)";
 		const labels = source.map((part) => {
 			const rid = Number(part.id);
-			const ridText = Number.isNaN(rid) ? part.id : String(rid);
+			const ridText =
+				part.id === "known-link-target"
+					? "link-only"
+					: Number.isNaN(rid)
+						? part.id
+						: String(rid);
 			const linkText = part.link?.trim() || fallbackKnownLink?.trim() || "(no link)";
 			return `${part.name} [rid:${ridText}] -> ${linkText}`;
 		});
@@ -2210,6 +2349,7 @@ export async function renderWbs(
 			refreshAssignments();
 		}
 		assignmentsModelId = selectedModelId;
+		entityLinkToRuntimeCache.clear();
 
 		let loadMessage: string | null = null;
 		const cachedParts = partsByModelId.get(selectedModelId);
@@ -2265,6 +2405,14 @@ export async function renderWbs(
 		parts = await hydrateLinksFromObjectPropertiesStrict(parts);
 		parts = await hydrateLinksFromKnownRegistry(parts);
 		parts = await applyParentFallbackLinks(parts);
+		for (const p of parts) {
+			const l = normalizeKnownLink(p.link);
+			if (!l.startsWith("frn:entity:")) continue;
+			const rid = Number(p.id);
+			if (!isValidRuntimeId(rid)) continue;
+			const mid = p.modelId ?? selectedModelId;
+			entityLinkToRuntimeCache.set(l, { modelId: mid, runtimeId: rid });
+		}
 		const assignableIds = new Set(getAssignableParts().map((p) => p.id));
 		for (const id of [...selectedPartIds]) {
 			if (!assignableIds.has(id)) selectedPartIds.delete(id);
@@ -2737,6 +2885,11 @@ export async function renderWbs(
 			}
 			saveAssignmentsToLocalStorage(assignments);
 			refreshAssignments();
+			void resolveRuntimeForEntityLink(fallbackKnownLink).then((hit) => {
+				if (hit) {
+					entityLinkToRuntimeCache.set(normalizeKnownLink(fallbackKnownLink), hit);
+				}
+			});
 			setStatus(
 				`Assigned WBS row ${assignedRowIndex + 4}. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Target: ${targetSummary}`,
 			);
