@@ -365,7 +365,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.3)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.4)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -406,7 +406,7 @@ export async function renderWbs(
           class="min-w-[260px] rounded border border-gray-300 px-2 py-1 text-xs text-gray-700"
           data-known-link-select
         >
-          <option value="">Known link fallback (required if selected object has no link)</option>
+          <option value="">Known link target (required for Assign)</option>
         </select>
         <p class="text-[11px] text-gray-500 truncate max-w-[520px]" data-known-link-hint>
           Known link fallback: none selected.
@@ -438,7 +438,7 @@ export async function renderWbs(
             <p class="text-sm text-gray-400 italic">Upload a WBS file to preview and select a row.</p>
           </div>
         </div>
-        <div class="flex-1 flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
+        <div class="hidden flex-1 flex flex-col min-h-0 rounded-lg border border-gray-200 bg-white overflow-hidden">
           <div class="px-2 py-1.5 bg-gray-100 border-b border-gray-200 shrink-0">
             <span class="text-xs font-semibold text-gray-700">IFC objects</span>
             <p class="text-xs text-gray-500 mt-0.5" data-viewer-hint>From the model open in 3D (not the project folder).</p>
@@ -481,7 +481,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.3)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.4)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1092,7 +1092,7 @@ export async function renderWbs(
 	function refreshKnownLinkOptions(): void {
 		if (!knownLinkSelectEl) return;
 		knownLinkSelectEl.innerHTML =
-			'<option value="">Known link fallback (required if selected object has no link)</option>' +
+			'<option value="">Known link target (required for Assign)</option>' +
 			knownLibraryLinks
 				.map((l, i) => {
 					const suffix = l.length > 56 ? `${l.slice(0, 28)}...${l.slice(-22)}` : l;
@@ -1118,14 +1118,10 @@ export async function renderWbs(
 	}
 
 	function refreshAssignButton(): void {
-		const selectedParts = getAssignableParts().filter((p) => selectedPartIds.has(p.id));
-		const selectedCount = selectedParts.length;
-		const hasWritableSelected = selectedParts.some((p) => isWritableLink(p.link));
 		const hasKnownFallback = Boolean(knownLinkSelectEl?.value?.trim());
 		assignButtonEl.disabled =
 			selectedWbsRowIndex === null ||
-			selectedCount === 0 ||
-			(!hasWritableSelected && !hasKnownFallback) ||
+			!hasKnownFallback ||
 			!tableData.rows.length;
 	}
 
@@ -2069,44 +2065,33 @@ export async function renderWbs(
 		const assignedRowIndex = selectedWbsRowIndex;
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
 		if (!selectedRow) return;
+		const fallbackKnownLink = knownLinkSelectEl?.value?.trim();
+		if (!fallbackKnownLink) {
+			setStatus("Select a Known link target to enable Assign.", "error");
+			return;
+		}
 
 		const selectedPartsRaw = getAssignableParts().filter((part) =>
 			selectedPartIds.has(part.id),
 		);
-		const selectedParts = await resolveStableLinksForParts(selectedPartsRaw);
-		for (const resolved of selectedParts) {
+		const selectedPartsResolved = await resolveStableLinksForParts(selectedPartsRaw);
+		for (const resolved of selectedPartsResolved) {
 			const idx = parts.findIndex((p) => p.id === resolved.id);
 			if (idx >= 0) parts[idx] = resolved;
 		}
 		refreshPartsList();
-		const selectedPartsWithStableLinks = selectedParts.filter((part) =>
-			isWritableLink(part.link),
-		);
-		const fallbackKnownLink = knownLinkSelectEl?.value?.trim();
-		let selectedPartsForWrite =
-			selectedPartsWithStableLinks.length > 0
-				? selectedPartsWithStableLinks
-				: fallbackKnownLink
-					? selectedParts
-					: [];
-		// If using fallback link, it represents one explicit target link.
-		// Do not duplicate writes for many runtime-selected parts to the same link.
-		if (
-			selectedPartsWithStableLinks.length === 0 &&
-			fallbackKnownLink &&
-			selectedPartsForWrite.length > 1
-		) {
-			selectedPartsForWrite = [selectedPartsForWrite[0]];
-		}
-		if (!selectedPartsForWrite.length) {
-			const firstSelected = selectedParts[0];
-			const rawLink = firstSelected?.link?.trim() || "(none)";
-			setStatus(
-				`No GUID-based writable links found for ${selectedParts.length} selected object(s). First selected link: ${rawLink}. Select a known link fallback from the dropdown, or load objects with stable links.`,
-				"error",
-			);
-			return;
-		}
+		const selectedPartsForWrite = selectedPartsResolved.length
+			? [selectedPartsResolved[0]]
+			: [
+					{
+						id: "known-link-target",
+						name: "Known Link Target",
+						type: "N/A",
+						material: "N/A",
+						modelId: getActiveModelId(),
+						link: fallbackKnownLink,
+					} as IfcPart,
+				];
 		const now = new Date().toISOString();
 
 		selectedPartsForWrite.forEach((part) => {
@@ -2162,10 +2147,7 @@ export async function renderWbs(
 				verifyLink && verifyLink.startsWith("frn:")
 					? await verifyWbsValueByLink(api, verifyLink, expectedValue)
 					: null;
-			const verifiedOnViewer = await verifyValueOnSelectedObject(
-				selectedPartsWithStableLinks[0],
-				expectedValue,
-			);
+			const verifiedOnViewer = await verifyValueOnSelectedObject(selectedPartsForWrite[0], expectedValue);
 			if (apiVerification?.matchedValue) {
 				setStatus(
 					`Assigned WBS row ${assignedRowIndex + 4} to ${selectedPartsForWrite.length} part(s). Verified in PSet API (def=${apiVerification.defId}, prop=${apiVerification.propertyName}). Targets: ${targetSummary}`,
