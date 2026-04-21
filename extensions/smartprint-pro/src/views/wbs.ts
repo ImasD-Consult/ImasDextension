@@ -1411,8 +1411,12 @@ export async function renderWbs(
 		type ObjRow = { rid: number; name: string; cls: string; link?: string };
 		const rows: ObjRow[] = [];
 		try {
-			const modelRows = await viewer.getObjects({ modelObjectIds: [{ modelId }] });
+			// Host compatibility: selector-based getObjects can return empty in some environments.
+			// Use full getObjects() and filter by model id locally.
+			const modelRows = await viewer.getObjects();
 			for (const row of modelRows ?? []) {
+				const rowModelId = typeof row?.modelId === "string" ? row.modelId : "";
+				if (rowModelId && rowModelId !== modelId) continue;
 				const objects = row?.objects;
 				if (!Array.isArray(objects)) continue;
 				for (const item of objects) {
