@@ -2732,28 +2732,109 @@ export async function renderWbs(
 		runtimeId: number,
 	): Promise<boolean> {
 		const viewer = api.viewer;
-		if (!viewer?.getObjectProperties) return false;
+		if (!viewer) return false;
 		try {
-			const payload = await viewer.getObjectProperties(modelId, [runtimeId]);
-			const rows = Array.isArray(payload) ? payload : [payload];
-			for (const row of rows) {
-				const link = extractStableEntityLinkFromUnknownPayload(row);
-				if (!isWritableLink(link)) continue;
-				const idx = parts.findIndex((p) => p.id === partId);
-				if (idx < 0) return false;
-				const current = parts[idx];
-				parts[idx] = {
-					...current,
-					link,
-					targetRuntimeId: current.targetRuntimeId?.trim() || String(runtimeId),
-					targetName: current.targetName?.trim() || current.name,
-				};
-				refreshAssignments();
-				refreshPartsList();
-				return true;
+			if (viewer.getObjectProperties) {
+				const payload = await viewer.getObjectProperties(modelId, [runtimeId]);
+				const rows = Array.isArray(payload) ? payload : [payload];
+				for (const row of rows) {
+					const link = extractStableEntityLinkFromUnknownPayload(row);
+					if (!isWritableLink(link)) continue;
+					const idx = parts.findIndex((p) => p.id === partId);
+					if (idx < 0) return false;
+					const current = parts[idx];
+					parts[idx] = {
+						...current,
+						link,
+						targetRuntimeId: current.targetRuntimeId?.trim() || String(runtimeId),
+						targetName: current.targetName?.trim() || current.name,
+					};
+					refreshAssignments();
+					refreshPartsList();
+					return true;
+				}
 			}
 		} catch {
 			/* ignore harvest errors */
+		}
+		type ViewerWithObjects = WorkspaceApi["viewer"] & {
+			getObjects?: (
+				selector?: {
+					modelObjectIds?: Array<{
+						modelId: string;
+						objectRuntimeIds?: number[];
+					}>;
+					selected?: boolean;
+				},
+			) => Promise<Array<{ modelId?: string; objects?: unknown }>>;
+		};
+		const viewerWithObjects = viewer as ViewerWithObjects;
+		if (typeof viewerWithObjects.getObjects === "function") {
+			try {
+				const rows = await viewerWithObjects.getObjects({
+					modelObjectIds: [{ modelId, objectRuntimeIds: [runtimeId] }],
+				});
+				for (const row of rows ?? []) {
+					const objects = row?.objects;
+					if (!Array.isArray(objects)) continue;
+					for (const obj of objects) {
+						const link = extractStableEntityLinkFromUnknownPayload(obj);
+						if (!isWritableLink(link)) continue;
+						const idx = parts.findIndex((p) => p.id === partId);
+						if (idx < 0) return false;
+						const current = parts[idx];
+						parts[idx] = {
+							...current,
+							link,
+							targetRuntimeId: current.targetRuntimeId?.trim() || String(runtimeId),
+							targetName: current.targetName?.trim() || current.name,
+						};
+						refreshAssignments();
+						refreshPartsList();
+						return true;
+					}
+				}
+			} catch {
+				/* ignore */
+			}
+			try {
+				const selectedRows = await viewerWithObjects.getObjects({ selected: true });
+				for (const row of selectedRows ?? []) {
+					const rowModelId = typeof row?.modelId === "string" ? row.modelId.trim() : "";
+					if (rowModelId && rowModelId !== modelId) continue;
+					const objects = row?.objects;
+					if (!Array.isArray(objects)) continue;
+					for (const obj of objects) {
+						if (!obj || typeof obj !== "object") continue;
+						const o = obj as Record<string, unknown>;
+						const objRid =
+							typeof o.objectRuntimeId === "number"
+								? o.objectRuntimeId
+								: typeof o.id === "number"
+									? o.id
+									: typeof o.runtimeId === "number"
+										? o.runtimeId
+										: NaN;
+						if (Number.isNaN(objRid) || objRid !== runtimeId) continue;
+						const link = extractStableEntityLinkFromUnknownPayload(o);
+						if (!isWritableLink(link)) continue;
+						const idx = parts.findIndex((p) => p.id === partId);
+						if (idx < 0) return false;
+						const current = parts[idx];
+						parts[idx] = {
+							...current,
+							link,
+							targetRuntimeId: current.targetRuntimeId?.trim() || String(runtimeId),
+							targetName: current.targetName?.trim() || current.name,
+						};
+						refreshAssignments();
+						refreshPartsList();
+						return true;
+					}
+				}
+			} catch {
+				/* ignore */
+			}
 		}
 		return false;
 	}
