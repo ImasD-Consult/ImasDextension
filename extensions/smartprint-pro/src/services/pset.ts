@@ -545,11 +545,11 @@ function normalizePropertyKeyCandidates(
 }
 
 function propertyRetryKeys(primary: string): string[] {
-	// Prefer the visible Trimble UI field first, then internal/schema keys.
+	// Prefer the schema-resolved key first (manual PATCH-proven), then fallbacks.
 	const out = new Set<string>();
+	if (primary.trim()) out.add(primary.trim());
 	out.add("Group");
 	out.add("group");
-	if (primary.trim()) out.add(primary.trim());
 	if (primary.startsWith("Pset_") && primary.length > 5) {
 		out.add(primary.slice("Pset_".length));
 	}
@@ -781,21 +781,6 @@ export async function writeWbsPropertySetValues(
 	const triedKeys: string[] = [];
 	const keysToTry = propertyRetryKeys(propertyName);
 	let lastErrorMessage = "Property set write failed for some items.";
-	const tryBestEffortVisibleGroupWrite = async (): Promise<void> => {
-		for (const visibleKey of ["Group", "group"]) {
-			try {
-				const res = await pset.changeset({ items: buildChangesetItems(visibleKey) });
-				const inline = res.data as {
-					errorCount?: number;
-					errors?: Array<{ message?: string }>;
-				};
-				if ((inline.errorCount ?? 0) === 0) return;
-			} catch {
-				/* best-effort only */
-			}
-		}
-	};
-
 	for (const key of keysToTry) {
 		triedKeys.push(key);
 		let response: Awaited<ReturnType<PSet["changeset"]>>;
@@ -815,9 +800,6 @@ export async function writeWbsPropertySetValues(
 			errors?: Array<{ message?: string }>;
 		};
 		if ((inline.errorCount ?? 0) === 0) {
-			if (key !== "Group" && key !== "group") {
-				await tryBestEffortVisibleGroupWrite();
-			}
 			return { libId, defId, propertyName: key };
 		}
 
