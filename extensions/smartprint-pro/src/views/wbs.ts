@@ -34,6 +34,9 @@ type IfcPart = {
 	modelId?: string;
 	modelName?: string;
 	link?: string;
+	targetRuntimeId?: string;
+	targetName?: string;
+	resolvedViaParent?: boolean;
 };
 
 type WbsAssignment = {
@@ -341,10 +344,16 @@ function renderAssignmentsList(
 		.map((part) => {
 			const link = normalizeKnownLink(part.link);
 			const latest = link ? latestByLink.get(link) : undefined;
-			const name = part.name || latest?.partName || "(unknown)";
+			const baseName = part.name || latest?.partName || "(unknown)";
 			const className = part.type || latest?.partType || "(unknown)";
 			const runtimeId = Number(part.id);
 			const runtimeIdText = Number.isNaN(runtimeId) ? "" : String(runtimeId);
+			const targetRuntimeIdRaw = part.targetRuntimeId?.trim() || runtimeIdText;
+			const targetName = part.targetName?.trim() || baseName;
+			const displayName =
+				part.resolvedViaParent && targetName !== baseName
+					? `${baseName} (via ${targetName})`
+					: baseName;
 			const modelId = part.modelId?.trim() || latest?.modelId?.trim() || "";
 			const guid = link.startsWith("frn:entity:") ? link.slice("frn:entity:".length) : "-";
 			const modelLabel = part.modelName?.trim() || part.modelId?.trim() || latest?.modelId?.trim() || "-";
@@ -356,7 +365,9 @@ function renderAssignmentsList(
 			const statusBadge = isAssigned
 				? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
 				: hasLink
-					? '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
+					? part.resolvedViaParent
+						? '<span class="inline-flex items-center rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">Assigns to parent</span>'
+						: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
 					: '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">No link</span>';
 			const canAssign = selectedWbsRowIndex !== null;
 			const assignTitle = canAssign
@@ -364,7 +375,7 @@ function renderAssignmentsList(
 				: "Select a WBS row first";
 			return `
       <tr class="hover:bg-gray-50">
-        <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(name)}</td>
+        <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(displayName)}</td>
         <td class="px-2 py-2 text-xs text-gray-700 border-b border-gray-100">${escapeHtml(className)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-700 border-b border-gray-100 max-w-[220px] truncate" title="${escapeHtml(guid)}">${escapeHtml(guid)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-700 border-b border-gray-100 max-w-[220px] truncate" title="${escapeHtml(modelLabel)}">${escapeHtml(modelLabel)}</td>
@@ -374,7 +385,7 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(runtimeIdText)}" data-assignment-model-id="${escapeHtml(modelId)}" ${(hasLink || runtimeIdText) ? "" : "disabled"}>Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" ${(hasLink || targetRuntimeIdRaw) ? "" : "disabled"}>Select in 3D</button>
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && hasLink) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : "Geometry only, no data properties found") : "Select a WBS row first")}">Assign</button>
         </td>
@@ -1120,6 +1131,7 @@ export async function renderWbs(
 	let assignmentsModelId = "";
 	const parentByRuntimeId = new Map<number, number | null>();
 	const fileIdByRuntimeId = new Map<number, string>();
+	const nameByRuntimeId = new Map<number, string>();
 	let hierarchyCacheModelId = "";
 	let knownLibraryLinks: string[] = [];
 
@@ -1393,7 +1405,15 @@ export async function renderWbs(
 			const rid = Number(part.id);
 			if (Number.isNaN(rid)) return part;
 			const stable = stableByRuntime.get(rid);
-			return stable ? { ...part, link: stable } : part;
+			return stable
+				? {
+						...part,
+						link: stable,
+						targetRuntimeId: part.targetRuntimeId?.trim() || part.id,
+						targetName: part.targetName?.trim() || part.name,
+						resolvedViaParent: part.resolvedViaParent ?? false,
+				  }
+				: part;
 		});
 	}
 
@@ -1491,8 +1511,24 @@ export async function renderWbs(
 			// Some source lists return table-order ids (0..N) instead of runtime ids.
 			const nextId = String(candidate.rid);
 			const nextLink = part.link?.trim() ? part.link : candidate.link;
-			if (nextId === part.id && nextLink === part.link) return part;
-			return { ...part, id: nextId, link: nextLink };
+			const nextTargetRuntimeId = part.targetRuntimeId?.trim() || nextId;
+			const nextTargetName = part.targetName?.trim() || part.name;
+			if (
+				nextId === part.id &&
+				nextLink === part.link &&
+				nextTargetRuntimeId === (part.targetRuntimeId?.trim() || "") &&
+				nextTargetName === (part.targetName?.trim() || "")
+			) {
+				return part;
+			}
+			return {
+				...part,
+				id: nextId,
+				link: nextLink,
+				targetRuntimeId: nextTargetRuntimeId,
+				targetName: nextTargetName,
+				resolvedViaParent: part.resolvedViaParent ?? false,
+			};
 		});
 	}
 
@@ -1510,7 +1546,13 @@ export async function renderWbs(
 				if (parent == null) break;
 				const fileId = fileIdByRuntimeId.get(parent);
 				if (fileId && !/^\d+$/.test(fileId) && fileId.trim().length >= 8) {
-					return { ...part, link: `frn:entity:${fileId.trim()}` };
+					return {
+						...part,
+						link: `frn:entity:${fileId.trim()}`,
+						targetRuntimeId: String(parent),
+						targetName: nameByRuntimeId.get(parent) ?? part.name,
+						resolvedViaParent: true,
+					};
 				}
 				cur = parent;
 				guard += 1;
@@ -1535,12 +1577,12 @@ export async function renderWbs(
 			if (isWritableLink(part.link)) return part;
 			let cur = Number(part.id);
 			if (Number.isNaN(cur)) return part;
-			const candidates: string[] = [];
+			const candidates: Array<{ runtimeId: number; entityId: string }> = [];
 			let guard = 0;
 			while (!Number.isNaN(cur) && guard < 256) {
 				const fileId = fileIdByRuntimeId.get(cur);
 				if (fileId && isValidEntityToken(fileId)) {
-					candidates.push(fileId.trim());
+					candidates.push({ runtimeId: cur, entityId: fileId.trim() });
 				}
 				const parent = parentByRuntimeId.get(cur);
 				if (parent == null) break;
@@ -1549,10 +1591,16 @@ export async function renderWbs(
 			}
 			if (!candidates.length) return part;
 			const preferred =
-				candidates.find((id) => knownEntityIds.has(id)) ??
+				candidates.find((c) => knownEntityIds.has(c.entityId)) ??
 				(knownEntityIds.size === 0 ? candidates[0] : undefined);
 			if (!preferred) return part;
-			return { ...part, link: `frn:entity:${preferred}` };
+			return {
+				...part,
+				link: `frn:entity:${preferred.entityId}`,
+				targetRuntimeId: String(preferred.runtimeId),
+				targetName: nameByRuntimeId.get(preferred.runtimeId) ?? part.name,
+				resolvedViaParent: preferred.runtimeId !== Number(part.id),
+			};
 		});
 	}
 
@@ -1672,7 +1720,17 @@ export async function renderWbs(
 					/* try next model candidate */
 				}
 			}
-			result.push(found ? { ...part, link: found } : part);
+			result.push(
+				found
+					? {
+							...part,
+							link: found,
+							targetRuntimeId: part.targetRuntimeId?.trim() || part.id,
+							targetName: part.targetName?.trim() || part.name,
+							resolvedViaParent: part.resolvedViaParent ?? false,
+					  }
+					: part,
+			);
 		}
 		return result;
 	}
@@ -1685,6 +1743,7 @@ export async function renderWbs(
 		if (hierarchyCacheModelId === activeModelId && parentByRuntimeId.size > 0) return;
 		parentByRuntimeId.clear();
 		fileIdByRuntimeId.clear();
+		nameByRuntimeId.clear();
 		hierarchyCacheModelId = activeModelId;
 
 		const queue: Array<{ parent: number; childrenOf: number[] }> = [
@@ -1709,6 +1768,9 @@ export async function renderWbs(
 					if (typeof child?.id !== "number" || Number.isNaN(child.id)) continue;
 					if (!parentByRuntimeId.has(child.id)) {
 						parentByRuntimeId.set(child.id, pid === 0 ? null : pid);
+						if (typeof child.name === "string" && child.name.trim()) {
+							nameByRuntimeId.set(child.id, child.name.trim());
+						}
 						if (typeof child.fileId === "string" && child.fileId.trim()) {
 							fileIdByRuntimeId.set(child.id, child.fileId.trim());
 						}
@@ -2057,6 +2119,7 @@ export async function renderWbs(
 		}
 		parentByRuntimeId.clear();
 		fileIdByRuntimeId.clear();
+		nameByRuntimeId.clear();
 		hierarchyCacheModelId = "";
 		refreshPartFilters();
 		refreshPartsList();
