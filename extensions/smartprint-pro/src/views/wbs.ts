@@ -1404,6 +1404,7 @@ export async function renderWbs(
 			.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 			.filter((v, i, a) => a.indexOf(v) === i);
 		if (!modelCandidates.length) return undefined;
+		await ensureHierarchyCacheForActiveModel();
 
 		const isLikelyEntityToken = (value: string): boolean => {
 			const v = value.trim();
@@ -1470,12 +1471,33 @@ export async function renderWbs(
 			return found;
 		};
 
+		const runtimeCandidates: number[] = [rid];
+		const directFileId = fileIdByRuntimeId.get(rid);
+		if (directFileId && isLikelyEntityToken(directFileId)) {
+			return `frn:entity:${directFileId}`;
+		}
+		let cur: number | null | undefined = rid;
+		let guard = 0;
+		while (typeof cur === "number" && !Number.isNaN(cur) && guard < 256) {
+			const parent = parentByRuntimeId.get(cur);
+			if (parent == null) break;
+			runtimeCandidates.push(parent);
+			const pfid = fileIdByRuntimeId.get(parent);
+			if (pfid && isLikelyEntityToken(pfid)) {
+				return `frn:entity:${pfid}`;
+			}
+			cur = parent;
+			guard += 1;
+		}
+
 		for (const modelId of modelCandidates) {
 			try {
-				const payload = await viewer.getObjectProperties(modelId, [rid]);
-				const first = Array.isArray(payload) ? payload[0] : undefined;
-				const picked = pickFromPayload(first);
-				if (picked) return picked;
+				const payload = await viewer.getObjectProperties(modelId, runtimeCandidates);
+				const rows = Array.isArray(payload) ? payload : [];
+				for (const row of rows) {
+					const picked = pickFromPayload(row);
+					if (picked) return picked;
+				}
 			} catch {
 				/* try next model id */
 			}
