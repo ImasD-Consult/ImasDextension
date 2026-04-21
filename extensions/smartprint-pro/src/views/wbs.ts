@@ -1556,6 +1556,127 @@ export async function renderWbs(
 		});
 	}
 
+	async function hydrateLinksFromObjectPropertiesStrict(input: IfcPart[]): Promise<IfcPart[]> {
+		if (!input.length) return input;
+		const viewer = api.viewer;
+		if (!viewer?.getObjectProperties) return input;
+		await ensureHierarchyCacheForActiveModel();
+		const activeModelId = getActiveModelId();
+		const openModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelCandidates = [openModel?.id, openModel?.versionId, activeModelId].filter(
+			(v): v is string => typeof v === "string" && v.trim().length > 0,
+		);
+		if (!modelCandidates.length) return input;
+		const UUID_RE =
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+		const IFC_COMPRESSED_GUID_RE = /^[0-9A-Za-z_$]{22}$/;
+		const isLikelyStableEntityId = (value: string): boolean => {
+			const v = value.trim();
+			if (!v) return false;
+			if (UUID_RE.test(v)) return true;
+			if (IFC_COMPRESSED_GUID_RE.test(v)) return true;
+			return false;
+		};
+		const extractStableEntityLinkFromPayload = (root: unknown): string | undefined => {
+			let foundFrnEntity: string | undefined;
+			let foundStableId: string | undefined;
+			const guidKeys = new Set([
+				"guid",
+				"globalid",
+				"ifcguid",
+				"fileid",
+				"entityid",
+				"objectid",
+			]);
+			const walk = (node: unknown, depth: number): void => {
+				if (depth > 18 || node == null) return;
+				if (Array.isArray(node)) {
+					for (const item of node) walk(item, depth + 1);
+					return;
+				}
+				if (typeof node !== "object") return;
+				const o = node as Record<string, unknown>;
+				const nvName =
+					typeof o.name === "string"
+						? o.name.toLowerCase().trim()
+						: typeof o.key === "string"
+							? o.key.toLowerCase().trim()
+							: undefined;
+				const nvValue =
+					typeof o.value === "string"
+						? o.value.trim()
+						: typeof o.val === "string"
+							? o.val.trim()
+							: undefined;
+				if (nvName && nvValue && guidKeys.has(nvName) && isLikelyStableEntityId(nvValue)) {
+					foundStableId = nvValue;
+				}
+				for (const [k, v] of Object.entries(o)) {
+					if (typeof v === "string") {
+						const sv = v.trim();
+						const lk = k.toLowerCase();
+						if (!sv) continue;
+						if ((lk === "frn" || lk === "link") && sv.startsWith("frn:entity:")) {
+							foundFrnEntity = sv;
+						}
+						if (guidKeys.has(lk) && isLikelyStableEntityId(sv)) {
+							foundStableId = sv;
+						}
+					} else if (v && typeof v === "object") {
+						walk(v, depth + 1);
+					}
+				}
+			};
+			walk(root, 0);
+			if (foundFrnEntity) return normalizeKnownLink(foundFrnEntity);
+			if (foundStableId) return `frn:entity:${foundStableId}`;
+			return undefined;
+		};
+		const result: IfcPart[] = [];
+		for (const part of input) {
+			if (isWritableLink(part.link)) {
+				result.push(part);
+				continue;
+			}
+			const rid = Number(part.id);
+			if (Number.isNaN(rid)) {
+				result.push(part);
+				continue;
+			}
+			const chain: number[] = [rid];
+			let cur: number | null | undefined = rid;
+			let guard = 0;
+			while (typeof cur === "number" && !Number.isNaN(cur) && guard < 128) {
+				const parent = parentByRuntimeId.get(cur);
+				if (parent == null) break;
+				chain.push(parent);
+				cur = parent;
+				guard += 1;
+			}
+			let found: string | undefined;
+			for (const modelId of modelCandidates) {
+				try {
+					const payload = await viewer.getObjectProperties(modelId, chain);
+					if (!Array.isArray(payload)) continue;
+					for (const row of payload) {
+						const link = extractStableEntityLinkFromPayload(row);
+						if (link) {
+							found = link;
+							break;
+						}
+					}
+					if (found) break;
+				} catch {
+					/* try next model candidate */
+				}
+			}
+			result.push(found ? { ...part, link: found } : part);
+		}
+		return result;
+	}
+
 	async function ensureHierarchyCacheForActiveModel(): Promise<void> {
 		const viewer = api.viewer;
 		if (!viewer?.getHierarchyChildren) return;
@@ -1927,6 +2048,7 @@ export async function renderWbs(
 		parts = await hydratePartsFromViewerObjectRegistry(parts);
 		parts = await hydrateLinksFromKnownRegistry(parts);
 		parts = await resolveStableLinksForParts(parts);
+		parts = await hydrateLinksFromObjectPropertiesStrict(parts);
 		parts = await hydrateLinksFromKnownRegistry(parts);
 		parts = await applyParentFallbackLinks(parts);
 		const assignableIds = new Set(getAssignableParts().map((p) => p.id));
@@ -1953,8 +2075,9 @@ export async function renderWbs(
 		}
 
 		const readyCount = countReadyParts(getAssignableParts());
+		const ghostCount = Math.max(0, getAssignableParts().length - readyCount);
 		setStatus(
-			`Loaded ${parts.length} IFC part/object(s) for ${selectedModel?.name ?? "selected IFC model"}. Writable links ready: ${readyCount}/${getAssignableParts().length}.`,
+			`Loaded ${parts.length} IFC part/object(s) for ${selectedModel?.name ?? "selected IFC model"}. Writable links ready: ${readyCount}/${getAssignableParts().length} (ghost: ${ghostCount}).`,
 		);
 	}
 
