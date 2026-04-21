@@ -6,7 +6,11 @@ import {
 	fetchProjectIfcModels,
 } from "../services/folders";
 import { resolveViewerModelsForWbs } from "../services/viewer-model";
-import { inspectWbsPsetConfig, writeWbsPropertySetValues } from "../services/pset";
+import {
+	inspectWbsPsetConfig,
+	loadKnownLibraryLinks,
+	writeWbsPropertySetValues,
+} from "../services/pset";
 
 type WbsTableData = {
 	headers: string[];
@@ -344,7 +348,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 4.5)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 4.7)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -394,6 +398,19 @@ export async function renderWbs(
         <p class="text-[11px] text-gray-500 truncate" data-model-pset-debug>Model Psets: not checked yet.</p>
       </div>
       <div class="shrink-0 flex flex-wrap items-center gap-2 rounded border border-gray-200 bg-gray-50 p-2">
+        <button
+          type="button"
+          class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          data-load-known-links
+        >
+          Load known links
+        </button>
+        <select
+          class="min-w-[260px] rounded border border-gray-300 px-2 py-1 text-xs text-gray-700"
+          data-known-link-select
+        >
+          <option value="">Known link (optional fallback)</option>
+        </select>
         <button
           type="button"
           class="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
@@ -464,7 +481,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 4.5)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 4.7)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -641,6 +658,12 @@ export async function renderWbs(
 	const psetDebugCheckButton = container.querySelector<HTMLButtonElement>(
 		"[data-pset-debug-check]",
 	);
+	const loadKnownLinksButton = container.querySelector<HTMLButtonElement>(
+		"[data-load-known-links]",
+	);
+	const knownLinkSelect = container.querySelector<HTMLSelectElement>(
+		"[data-known-link-select]",
+	);
 	const resolveLinksButton = container.querySelector<HTMLButtonElement>(
 		"[data-resolve-links]",
 	);
@@ -690,6 +713,8 @@ export async function renderWbs(
 	const viewerModelLabelEl = viewerModelLabel;
 	const retryAssembliesButtonEl = retryAssembliesButton;
 	const psetDebugCheckButtonEl = psetDebugCheckButton;
+	const loadKnownLinksButtonEl = loadKnownLinksButton;
+	const knownLinkSelectEl = knownLinkSelect;
 	const resolveLinksButtonEl = resolveLinksButton;
 	const psetDebugLabelEl = psetDebugLabel;
 	const modelPsetCheckButtonEl = modelPsetCheckButton;
@@ -990,6 +1015,16 @@ export async function renderWbs(
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
 	let assignments = loadAssignmentsFromLocalStorage();
+	let knownLibraryLinks: string[] = [];
+
+	function refreshKnownLinkOptions(): void {
+		if (!knownLinkSelectEl) return;
+		knownLinkSelectEl.innerHTML =
+			'<option value="">Known link (optional fallback)</option>' +
+			knownLibraryLinks
+				.map((l) => `<option value="${escapeHtml(l)}">${escapeHtml(l)}</option>`)
+				.join("");
+	}
 
 	function getAssemblyCandidates(source: IfcPart[]): IfcPart[] {
 		return source.filter((p) => p.type.toUpperCase().includes("ASSEMBLY"));
@@ -1530,7 +1565,7 @@ export async function renderWbs(
 					selectedModelId,
 					selectedModel?.versionId,
 					selectedModel?.name,
-					{ listAllIfcObjects: false },
+					{ listAllIfcObjects: false, preferStableEntityIds: true },
 				);
 				if (!assemblyPartsRaw.length) {
 					assemblyPartsRaw = await fetchIfcAssembliesFromFile(
@@ -1538,7 +1573,7 @@ export async function renderWbs(
 						selectedModelId,
 						selectedModel?.versionId,
 						selectedModel?.name,
-						{ listAllIfcObjects: true },
+						{ listAllIfcObjects: true, preferStableEntityIds: true },
 					);
 				}
 				const assemblyParts = assemblyPartsRaw.map((item) => ({
@@ -1753,6 +1788,22 @@ export async function renderWbs(
 	retryAssembliesButtonEl.addEventListener("click", async () => {
 		await loadAssembliesForSelectedModel(true);
 	});
+	loadKnownLinksButtonEl?.addEventListener("click", async () => {
+		setStatus("Loading known links from PSet library...");
+		try {
+			const res = await loadKnownLibraryLinks(api);
+			knownLibraryLinks = res.links;
+			refreshKnownLinkOptions();
+			if (res.links.length > 0) {
+				setStatus(`${res.message} Select one in dropdown to use as fallback link.`);
+			} else {
+				setStatus(res.message, "error");
+			}
+		} catch (error) {
+			const msg = error instanceof Error ? error.message : String(error);
+			setStatus(`Failed to load known links: ${msg}`, "error");
+		}
+	});
 	resolveLinksButtonEl?.addEventListener("click", async () => {
 		const assignable = getAssignableParts();
 		if (!assignable.length) {
@@ -1890,11 +1941,12 @@ export async function renderWbs(
 
 		const psetWriteItems = selectedPartsForWrite.map((part) => {
 			const propertySetValue = buildWbsPropertyValue(selectedRow);
+			const fallbackKnownLink = knownLinkSelectEl?.value?.trim();
 			return {
 				modelId: part.modelId ?? getActiveModelId(),
 				partId: part.id,
 				value: propertySetValue,
-				link: part.link,
+				link: part.link || fallbackKnownLink,
 			};
 		});
 

@@ -266,6 +266,11 @@ export interface WbsPsetDebugInfo {
 	message: string;
 }
 
+export interface KnownLibraryLinksResult {
+	links: string[];
+	message: string;
+}
+
 function ensureTrailingSlash(uri: string): string {
 	return uri.endsWith("/") ? uri : `${uri}/`;
 }
@@ -947,4 +952,95 @@ export async function inspectWbsPsetConfig(
 			message: withPsetTroubleshootingHint(msg),
 		};
 	}
+}
+
+export async function loadKnownLibraryLinks(
+	api: WorkspaceApi,
+): Promise<KnownLibraryLinksResult> {
+	const project = await api.project.getProject();
+	if (!project?.id) {
+		return { links: [], message: "No project selected." };
+	}
+	const token = await api.extension.requestPermission("accesstoken");
+	if (token === "denied" || token === "pending") {
+		return { links: [], message: `Access token ${token}.` };
+	}
+
+	const serviceUri = await resolvePsetServiceUri();
+	const configuredLibId = readPsetEnv("PSET_LIB_ID") || DEFAULT_LIBRARY_ID;
+	const definitionName =
+		readPsetEnv("PSET_DEFINITION_NAME") || DEFAULT_DEFINITION_NAME;
+	const explicitDefId = readPsetEnv("PSET_DEF_ID");
+	const libraryNameCandidates = [
+		readPsetEnv("PSET_LIBRARY_NAME"),
+		DEFAULT_LIBRARY_NAME,
+		configuredLibId,
+		DEFAULT_LIBRARY_ID,
+	].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
+
+	const pset = new PSet({
+		serviceUri,
+		credentials: new ServiceCredentials(undefined, token),
+	});
+	const { libId, defId } = await resolveCanonicalLibAndDefIds(
+		pset,
+		project.id,
+		serviceUri,
+		token,
+		configuredLibId,
+		libraryNameCandidates,
+		definitionName,
+		explicitDefId,
+	);
+
+	const extractLinks = (payload: unknown, out: Set<string>): void => {
+		if (payload == null) return;
+		if (Array.isArray(payload)) {
+			for (const item of payload) extractLinks(item, out);
+			return;
+		}
+		if (typeof payload !== "object") return;
+		const o = payload as Record<string, unknown>;
+		const direct = o.link;
+		if (typeof direct === "string" && direct.trim().startsWith("frn:")) {
+			out.add(direct.trim());
+		}
+		for (const v of Object.values(o)) extractLinks(v, out);
+	};
+
+	const links = new Set<string>();
+	const tryGetJson = async (url: string): Promise<unknown | null> => {
+		try {
+			const res = await fetch(url, {
+				headers: {
+					Authorization: `Bearer ${token}`,
+					Accept: "application/json",
+				},
+			});
+			if (!res.ok) return null;
+			return res.json();
+		} catch {
+			return null;
+		}
+	};
+
+	const base = ensureTrailingSlash(serviceUri);
+	const urls = [
+		`${base}libs/${encodeURIComponent(libId)}/psets?top=1000`,
+		`${base}libs/${encodeURIComponent(libId)}/defs/${encodeURIComponent(defId)}/psets?top=1000`,
+		`${base}psets?libId=${encodeURIComponent(libId)}&top=1000`,
+		`${base}psets?libId=${encodeURIComponent(libId)}&defId=${encodeURIComponent(defId)}&top=1000`,
+	];
+	for (const url of urls) {
+		const data = await tryGetJson(url);
+		if (data) extractLinks(data, links);
+	}
+
+	return {
+		links: [...links],
+		message:
+			links.size > 0
+				? `Loaded ${links.size} known link(s) from library.`
+				: "No known links found from queried PSet endpoints.",
+	};
 }

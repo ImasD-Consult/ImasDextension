@@ -586,6 +586,11 @@ export type FetchIfcPartsOptions = {
 	 * not only IFCELEMENTASSEMBLY.
 	 */
 	listAllIfcObjects?: boolean;
+	/**
+	 * Prefer persistent GUID/entity-id extraction from model-tree REST payloads.
+	 * When true, skips viewer-hierarchy fast path that can return runtime-only ids.
+	 */
+	preferStableEntityIds?: boolean;
 };
 
 export async function fetchIfcAssembliesFromFile(
@@ -596,6 +601,7 @@ export async function fetchIfcAssembliesFromFile(
 	options?: FetchIfcPartsOptions,
 ): Promise<IfcAssemblyItem[]> {
 	const listAllIfcObjects = options?.listAllIfcObjects !== false;
+	const preferStableEntityIds = options?.preferStableEntityIds === true;
 	const project = await api.project.getProject();
 	if (!project?.id) {
 		throw new Error("No project selected.");
@@ -1317,9 +1323,11 @@ export async function fetchIfcAssembliesFromFile(
 		}
 	}
 
-	const viaViewerHierarchy = await tryFetchAssembliesViaViewerHierarchy();
-	if (viaViewerHierarchy) {
-		return viaViewerHierarchy;
+	if (!preferStableEntityIds) {
+		const viaViewerHierarchy = await tryFetchAssembliesViaViewerHierarchy();
+		if (viaViewerHierarchy) {
+			return viaViewerHierarchy;
+		}
 	}
 
 	let idCandidates = uniqStrings([
