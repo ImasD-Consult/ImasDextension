@@ -348,7 +348,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 5.5)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 5.6)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -484,7 +484,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 5.5)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 5.6)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1141,12 +1141,31 @@ export async function renderWbs(
 
 	function refreshAssignButton(): void {
 		const selectedCount = getAssignableParts().filter(
-			(p) => isWritableLink(p.link) && selectedPartIds.has(p.id),
+			(p) => selectedPartIds.has(p.id),
 		).length;
 		assignButtonEl.disabled =
 			selectedWbsRowIndex === null ||
 			selectedCount === 0 ||
 			!tableData.rows.length;
+	}
+
+	async function runWithButtonFeedback(
+		button: HTMLButtonElement,
+		busyText: string,
+		task: () => Promise<void>,
+	): Promise<void> {
+		const prevText = button.textContent ?? "";
+		const prevDisabled = button.disabled;
+		button.disabled = true;
+		button.classList.add("bg-brand-800", "ring-2", "ring-brand-300");
+		button.textContent = busyText;
+		try {
+			await task();
+		} finally {
+			button.textContent = prevText;
+			button.classList.remove("bg-brand-800", "ring-2", "ring-brand-300");
+			button.disabled = prevDisabled;
+		}
 	}
 
 	function countReadyParts(source: IfcPart[]): number {
@@ -1931,6 +1950,7 @@ export async function renderWbs(
 	});
 	knownLinkSelectEl?.addEventListener("change", () => {
 		refreshKnownLinkHint();
+		refreshAssignButton();
 		const selected = knownLinkSelectEl.value?.trim();
 		if (selected) {
 			void syncViewerSelectionFromKnownLink(selected);
@@ -1969,7 +1989,10 @@ export async function renderWbs(
 		await refreshModelPsetDebugInfo();
 	});
 	useViewerSelectionButtonEl?.addEventListener("click", async () => {
-		await syncSelectedPartsFromViewerNative();
+		if (!useViewerSelectionButtonEl) return;
+		await runWithButtonFeedback(useViewerSelectionButtonEl, "Syncing selection...", async () => {
+			await syncSelectedPartsFromViewerNative();
+		});
 	});
 
 	typeFilterEl?.addEventListener("change", refreshPartsList);
@@ -2025,6 +2048,8 @@ export async function renderWbs(
 	});
 
 	assignButtonEl.addEventListener("click", async () => {
+		if (assignButtonEl.disabled) return;
+		await runWithButtonFeedback(assignButtonEl, "Assigning...", async () => {
 		if (selectedWbsRowIndex === null) return;
 		const assignedRowIndex = selectedWbsRowIndex;
 		const selectedRow = tableData.rows[selectedWbsRowIndex];
@@ -2087,7 +2112,7 @@ export async function renderWbs(
 			};
 		});
 
-		writeWbsPropertySetValues(api, psetWriteItems)
+		await writeWbsPropertySetValues(api, psetWriteItems)
 			.then(async () => {
 				saveAssignmentsToLocalStorage(assignments);
 				refreshAssignments();
@@ -2123,6 +2148,8 @@ export async function renderWbs(
 				saveAssignmentsToLocalStorage(assignments);
 				refreshAssignments();
 			});
+		});
+		refreshAssignButton();
 	});
 
 
