@@ -750,13 +750,16 @@ export async function writeWbsPropertySetValues(
 		definitionName,
 	);
 
-	/** `partId` may already be a full `frn:*` (e.g. known-target rows); never prefix `frn:entity:` twice. */
+	/**
+	 * Prefer a real `frn:*` link. `link` can be empty/whitespace or a non-FRN placeholder while
+	 * `partId` already holds `frn:entity:…` (known targets / migrated rows) — never prefix `frn:entity:` twice.
+	 */
 	function resolveChangesetItemLink(item: WbsPsetWriteItem): string {
-		const explicitLink = item.link?.trim();
-		if (explicitLink) return explicitLink;
-
+		const explicitLink = item.link?.trim() ?? "";
 		const candidate = item.partId?.trim() ?? "";
+		if (explicitLink.startsWith("frn:")) return explicitLink;
 		if (candidate.startsWith("frn:")) return candidate;
+		if (explicitLink) return explicitLink;
 		if (candidate && !/^\d+$/.test(candidate) && candidate.length >= 10) {
 			return `frn:entity:${candidate}`;
 		}
@@ -795,11 +798,15 @@ export async function writeWbsPropertySetValues(
 			errorCount?: number;
 			errors?: Array<{ message?: string }>;
 		};
-		if ((inline.errorCount ?? 0) === 0) {
+		const errorsList = inline.errors ?? [];
+		const hasFailures =
+			(typeof inline.errorCount === "number" && inline.errorCount > 0) ||
+			errorsList.length > 0;
+		if (!hasFailures) {
 			return { libId, defId, propertyName: key };
 		}
 
-		const firstError = inline.errors?.[0]?.message;
+		const firstError = errorsList[0]?.message;
 		lastErrorMessage = firstError || lastErrorMessage;
 		if ((firstError ?? "").includes(`Property '${key}' has not been defined`)) {
 			continue;

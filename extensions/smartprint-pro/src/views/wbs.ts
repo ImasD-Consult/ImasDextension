@@ -628,7 +628,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.22)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.23)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -724,7 +724,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.22)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.23)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -2165,8 +2165,11 @@ export async function renderWbs(
 					: prev && prev.wbsRowIndex >= 0
 						? prev.wbsRowIndex
 						: -1;
+			const prevPartId = prev?.partId?.trim() ?? "";
+			const keepRuntimePartId =
+				/^\d+$/.test(prevPartId) && isValidRuntimeId(Number(prevPartId));
 			byLink.set(k, {
-				partId: k,
+				partId: keepRuntimePartId ? prevPartId : k,
 				partName: prev?.partName ?? "Known Link Target",
 				partType: prev?.partType ?? "PSET",
 				partMaterial: prev?.partMaterial ?? "N/A",
@@ -2531,6 +2534,7 @@ export async function renderWbs(
 		setStatus(
 			`Loaded ${parts.length} IFC part/object(s) for ${selectedModel?.name ?? "selected IFC model"}. Writable links ready: ${readyCount}/${getAssignableParts().length} (ghost: ${ghostCount}).`,
 		);
+		await hydrateWbsAssignmentsFromPsetApi(true);
 	}
 
 	let knownLinksLoading = false;
@@ -2543,18 +2547,6 @@ export async function renderWbs(
 				...new Set(res.links.map((l) => normalizeKnownLink(l)).filter(Boolean)),
 			];
 
-			try {
-				const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
-				mergeAssignmentsFromPsetApi(hydrated.items);
-				saveAssignmentsToLocalStorage(assignments);
-			} catch (hydrateErr) {
-				if (!silent) {
-					const h =
-						hydrateErr instanceof Error ? hydrateErr.message : String(hydrateErr);
-					setStatus(`Known links loaded; PSet table hydrate failed: ${h}`, "error");
-				}
-			}
-
 			refreshKnownLinkOptions();
 			refreshKnownLinkHint();
 			refreshAssignments();
@@ -2566,6 +2558,22 @@ export async function renderWbs(
 			if (!silent) setStatus(`Failed to load known links: ${msg}`, "error");
 		} finally {
 			knownLinksLoading = false;
+		}
+	}
+
+	/** Full PSet list fetch + merge — keep off the hot path (avoid racing writes / duplicate list walks). */
+	async function hydrateWbsAssignmentsFromPsetApi(silent = true): Promise<void> {
+		try {
+			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
+			mergeAssignmentsFromPsetApi(hydrated.items);
+			saveAssignmentsToLocalStorage(assignments);
+			refreshAssignments();
+		} catch (hydrateErr) {
+			if (!silent) {
+				const h =
+					hydrateErr instanceof Error ? hydrateErr.message : String(hydrateErr);
+				setStatus(`PSet table hydrate failed: ${h}`, "error");
+			}
 		}
 	}
 
@@ -2704,7 +2712,6 @@ export async function renderWbs(
 				const changed = await rebindViewerModelIfSceneChanged();
 				if (changed) {
 					await loadAssembliesForSelectedModel(true);
-					await autoLoadKnownLinks(true);
 				}
 			})();
 		}, 3000);
@@ -2714,15 +2721,14 @@ export async function renderWbs(
 
 	modelFilterEl?.addEventListener("change", async () => {
 		await loadAssembliesForSelectedModel(false);
-		await autoLoadKnownLinks(true);
 	});
 
 	retryAssembliesButtonEl.addEventListener("click", async () => {
 		await loadAssembliesForSelectedModel(true);
-		await autoLoadKnownLinks(true);
 	});
 	loadKnownLinksButtonEl?.addEventListener("click", async () => {
 		await autoLoadKnownLinks(false);
+		await hydrateWbsAssignmentsFromPsetApi(false);
 	});
 	knownLinkSelectEl?.addEventListener("change", () => {
 		refreshKnownLinkHint();
@@ -3240,5 +3246,5 @@ export async function renderWbs(
 	});
 
 	void refreshPsetDebugInfo();
-	void autoLoadKnownLinks(true);
+	void autoLoadKnownLinks(true).then(() => hydrateWbsAssignmentsFromPsetApi(true));
 }
