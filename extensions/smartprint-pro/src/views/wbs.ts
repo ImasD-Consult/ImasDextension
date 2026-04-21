@@ -1368,6 +1368,83 @@ export async function renderWbs(
 		});
 	}
 
+	async function resolveStableLinkForPartAggressive(
+		part: IfcPart,
+	): Promise<string | undefined> {
+		const viewer = api.viewer;
+		if (!viewer?.getObjectProperties) return undefined;
+		const rid = Number(part.id);
+		if (Number.isNaN(rid)) return undefined;
+		const activeModelId = getActiveModelId();
+		const openModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelCandidates = [part.modelId, openModel?.id, openModel?.versionId, activeModelId]
+			.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+			.filter((v, i, a) => a.indexOf(v) === i);
+		if (!modelCandidates.length) return undefined;
+
+		const isLikelyEntityToken = (value: string): boolean => {
+			const v = value.trim();
+			if (!v) return false;
+			if (/^\d+$/.test(v)) return false;
+			return /^[0-9A-Za-z_$-]{8,64}$/.test(v);
+		};
+		const pickFromPayload = (root: unknown): string | undefined => {
+			let found: string | undefined;
+			const walk = (node: unknown, depth: number): void => {
+				if (found || depth > 18 || node == null) return;
+				if (Array.isArray(node)) {
+					for (const item of node) walk(item, depth + 1);
+					return;
+				}
+				if (typeof node !== "object") return;
+				const o = node as Record<string, unknown>;
+				for (const [k, v] of Object.entries(o)) {
+					if (typeof v === "string") {
+						const sv = v.trim();
+						const lk = k.toLowerCase();
+						if (!sv) continue;
+						if ((lk === "frn" || lk === "link") && sv.startsWith("frn:entity:")) {
+							found = sv;
+							return;
+						}
+						if (
+							[
+								"guid",
+								"globalid",
+								"ifcguid",
+								"fileid",
+								"entityid",
+								"objectid",
+							].includes(lk) &&
+							isLikelyEntityToken(sv)
+						) {
+							found = `frn:entity:${sv}`;
+							return;
+						}
+					} else if (v && typeof v === "object") {
+						walk(v, depth + 1);
+					}
+				}
+			};
+			walk(root, 0);
+			return found;
+		};
+
+		for (const modelId of modelCandidates) {
+			try {
+				const payload = await viewer.getObjectProperties(modelId, [rid]);
+				const first = Array.isArray(payload) ? payload[0] : undefined;
+				const picked = pickFromPayload(first);
+				if (picked) return picked;
+			} catch {
+				/* try next model id */
+			}
+		}
+		return undefined;
+	}
+
 	async function ensureHierarchyCacheForActiveModel(): Promise<void> {
 		const viewer = api.viewer;
 		if (!viewer?.getHierarchyChildren) return;
@@ -2108,6 +2185,14 @@ export async function renderWbs(
 				fallbackKnownLink = normalizeKnownLink(resolved.link);
 				const idx = parts.findIndex((p) => p.id === resolved.id);
 				if (idx >= 0) parts[idx] = resolved;
+			}
+			if (!fallbackKnownLink) {
+				const aggressive = await resolveStableLinkForPartAggressive(preferredPart);
+				if (aggressive) {
+					fallbackKnownLink = normalizeKnownLink(aggressive);
+					const idx = parts.findIndex((p) => p.id === preferredPart.id);
+					if (idx >= 0) parts[idx] = { ...parts[idx], link: fallbackKnownLink };
+				}
 			}
 		}
 		if (!fallbackKnownLink) {
