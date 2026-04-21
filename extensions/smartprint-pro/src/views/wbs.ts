@@ -1634,6 +1634,7 @@ export async function renderWbs(
 			}
 		}
 		refreshAssignButton();
+		refreshAssignments();
 	}
 
 	function setLastCheckedNow(): void {
