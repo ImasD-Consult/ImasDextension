@@ -314,6 +314,7 @@ function renderAssignmentsList(
 	assignments: WbsAssignment[],
 	knownLinks: string[],
 	parts: IfcPart[],
+	selectedWbsRowIndex: number | null,
 ): string {
 	if (!knownLinks.length && !assignments.length) {
 		return '<p class="text-sm text-gray-500 italic">No known targets loaded yet. Click "Load known links".</p>';
@@ -342,17 +343,26 @@ function renderAssignmentsList(
 			const assignedValue = latest?.propertySetValue || "-";
 			const assignedAt = latest?.assignedAt || "-";
 			const wbsRow = typeof latest?.wbsRowIndex === "number" ? String(latest.wbsRowIndex + 4) : "-";
+			const isAssigned = Boolean(latest);
+			const statusBadge = isAssigned
+				? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
+				: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>';
+			const canAssign = selectedWbsRowIndex !== null;
+			const assignTitle = canAssign
+				? "Assign selected WBS row to this target"
+				: "Select a WBS row first";
 			return `
       <tr class="hover:bg-gray-50">
         <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(name)}</td>
         <td class="px-2 py-2 text-xs text-gray-700 border-b border-gray-100">${escapeHtml(className)}</td>
+        <td class="px-2 py-2 text-xs border-b border-gray-100">${statusBadge}</td>
         <td class="px-2 py-2 text-xs text-gray-800 border-b border-gray-100">${escapeHtml(assignedValue)}</td>
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(assignedAt)}</td>
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link)}">${escapeHtml(link)}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-assignment-link="${escapeHtml(link)}">Select in 3D</button>
-          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50" data-assign-link="${escapeHtml(link)}">Assign</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link)}" ${canAssign ? "" : "disabled"} title="${escapeHtml(assignTitle)}">Assign</button>
         </td>
       </tr>
     `;
@@ -366,6 +376,7 @@ function renderAssignmentsList(
             <tr>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Name</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Class</th>
+              <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Status</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Last Assigned Value</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">Assigned At</th>
               <th class="px-2 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 border-b border-gray-200">WBS Row</th>
@@ -393,7 +404,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.11)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.12)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -502,7 +513,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.11)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.12)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1138,6 +1149,7 @@ export async function renderWbs(
 			assignments,
 			knownLibraryLinks,
 			getAssignableParts(),
+			selectedWbsRowIndex,
 		);
 	}
 
