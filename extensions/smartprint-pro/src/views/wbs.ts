@@ -7,9 +7,11 @@ import {
 } from "../services/folders";
 import { resolveViewerModelsForWbs } from "../services/viewer-model";
 import {
+	fetchWbsPsetAssignmentsFromModel,
 	inspectWbsPsetConfig,
 	loadKnownLibraryLinks,
 	writeWbsPropertySetValues,
+	type WbsPsetModelAssignmentRow,
 } from "../services/pset";
 
 type WbsTableData = {
@@ -500,7 +502,10 @@ function renderAssignmentsList(
 			const modelLabel = part.modelName?.trim() || part.modelId?.trim() || latest?.modelId?.trim() || "-";
 			const assignedValue = latest?.propertySetValue || "-";
 			const assignedAt = latest?.assignedAt || "-";
-			const wbsRow = typeof latest?.wbsRowIndex === "number" ? String(latest.wbsRowIndex + 4) : "-";
+			const wbsRow =
+				typeof latest?.wbsRowIndex === "number" && latest.wbsRowIndex >= 0
+					? String(latest.wbsRowIndex + 4)
+					: "-";
 			const isAssigned = Boolean(latest) && Boolean(link);
 			const hasLink = Boolean(link);
 			const statusBadge = isAssigned
@@ -549,7 +554,10 @@ function renderAssignmentsList(
 			const modelLabel = latest?.modelId?.trim() || "-";
 			const assignedValue = latest?.propertySetValue || "-";
 			const assignedAt = latest?.assignedAt || "-";
-			const wbsRow = typeof latest?.wbsRowIndex === "number" ? String(latest.wbsRowIndex + 4) : "-";
+			const wbsRow =
+				typeof latest?.wbsRowIndex === "number" && latest.wbsRowIndex >= 0
+					? String(latest.wbsRowIndex + 4)
+					: "-";
 			const isAssigned = Boolean(latest);
 			const statusBadge = isAssigned
 				? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
@@ -620,7 +628,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.21)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.22)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -716,7 +724,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.21)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.22)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -2121,6 +2129,60 @@ export async function renderWbs(
 		return wbs || description || "";
 	}
 
+	function findWbsRowIndexForPsetValue(storedValue: string): number | null {
+		const want = storedValue.trim();
+		if (!want) return null;
+		for (let i = 0; i < tableData.rows.length; i++) {
+			if (buildWbsPropertyValue(tableData.rows[i]).trim() === want) return i;
+		}
+		return null;
+	}
+
+	function mergeAssignmentsFromPsetApi(apiRows: WbsPsetModelAssignmentRow[]): void {
+		if (!apiRows.length) return;
+		const activeModelId = getActiveModelId();
+		const byLink = new Map<string, WbsAssignment>();
+		const unkeyed: WbsAssignment[] = [];
+		for (const a of assignments) {
+			const k = normalizeKnownLink(a.targetLink);
+			if (k) byLink.set(k, a);
+			else unkeyed.push(a);
+		}
+		for (const row of apiRows) {
+			const k = normalizeKnownLink(row.link);
+			if (!k) continue;
+			const idx = findWbsRowIndexForPsetValue(row.value);
+			const prev = byLink.get(k);
+			const wbsValues =
+				idx !== null && tableData.rows[idx]
+					? [...tableData.rows[idx]]
+					: prev?.wbsValues?.length
+						? [...prev.wbsValues]
+						: ["", "", "", ""];
+			const wbsRowIndex =
+				idx !== null
+					? idx
+					: prev && prev.wbsRowIndex >= 0
+						? prev.wbsRowIndex
+						: -1;
+			byLink.set(k, {
+				partId: k,
+				partName: prev?.partName ?? "Known Link Target",
+				partType: prev?.partType ?? "PSET",
+				partMaterial: prev?.partMaterial ?? "N/A",
+				targetLink: k,
+				modelId: prev?.modelId ?? activeModelId,
+				wbsRowIndex,
+				wbsValues,
+				propertySetName: "Pset_IMASD_WBS",
+				propertyName: row.propertyName,
+				propertySetValue: row.value,
+				assignedAt: new Date().toISOString(),
+			});
+		}
+		assignments = [...unkeyed, ...byLink.values()];
+	}
+
 	async function syncSelectedPartsFromViewerNative(): Promise<void> {
 		const viewer = api.viewer as WorkspaceApi["viewer"] & {
 			getSelection?: () => Promise<{
@@ -2477,7 +2539,22 @@ export async function renderWbs(
 		knownLinksLoading = true;
 		try {
 			const res = await loadKnownLibraryLinks(api);
-			knownLibraryLinks = [...new Set(res.links.map((l) => normalizeKnownLink(l)).filter(Boolean))];
+			knownLibraryLinks = [
+				...new Set(res.links.map((l) => normalizeKnownLink(l)).filter(Boolean)),
+			];
+
+			try {
+				const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
+				mergeAssignmentsFromPsetApi(hydrated.items);
+				saveAssignmentsToLocalStorage(assignments);
+			} catch (hydrateErr) {
+				if (!silent) {
+					const h =
+						hydrateErr instanceof Error ? hydrateErr.message : String(hydrateErr);
+					setStatus(`Known links loaded; PSet table hydrate failed: ${h}`, "error");
+				}
+			}
+
 			refreshKnownLinkOptions();
 			refreshKnownLinkHint();
 			refreshAssignments();

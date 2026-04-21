@@ -750,33 +750,29 @@ export async function writeWbsPropertySetValues(
 		definitionName,
 	);
 
+	/** `partId` may already be a full `frn:*` (e.g. known-target rows); never prefix `frn:entity:` twice. */
+	function resolveChangesetItemLink(item: WbsPsetWriteItem): string {
+		const explicitLink = item.link?.trim();
+		if (explicitLink) return explicitLink;
+
+		const candidate = item.partId?.trim() ?? "";
+		if (candidate.startsWith("frn:")) return candidate;
+		if (candidate && !/^\d+$/.test(candidate) && candidate.length >= 10) {
+			return `frn:entity:${candidate}`;
+		}
+		throw new Error(
+			`Could not resolve stable entity link for selected object "${item.partId}". ` +
+				`Write aborted to avoid creating PSet on runtime id link. Select an assembly/object with a stable entity id.`,
+		);
+	}
+
 	const buildChangesetItems = (propKey: string) =>
-		items.map((item) => {
-			const explicitLink = item.link?.trim();
-			if (explicitLink) {
-				return {
-					link: explicitLink,
-					libId,
-					defId,
-					props: { [propKey]: item.value },
-				};
-			}
-
-			const candidate = item.partId?.trim();
-			if (candidate && !/^\d+$/.test(candidate) && candidate.length >= 10) {
-				return {
-					link: `frn:entity:${candidate}`,
-					libId,
-					defId,
-					props: { [propKey]: item.value },
-				};
-			}
-
-			throw new Error(
-				`Could not resolve stable entity link for selected object "${item.partId}". ` +
-					`Write aborted to avoid creating PSet on runtime id link. Select an assembly/object with a stable entity id.`,
-			);
-		});
+		items.map((item) => ({
+			link: resolveChangesetItemLink(item),
+			libId,
+			defId,
+			props: { [propKey]: item.value },
+		}));
 
 	const triedKeys: string[] = [];
 	const keysToTry = propertyRetryKeys(propertyName);
@@ -971,6 +967,135 @@ export async function inspectWbsPsetConfig(
 			message: withPsetTroubleshootingHint(msg),
 		};
 	}
+}
+
+export interface WbsPsetModelAssignmentRow {
+	link: string;
+	value: string;
+	propertyName: string;
+}
+
+function readWbsValueFromPropsObject(
+	props: unknown,
+	candidateKeys: string[],
+): string {
+	if (!props || typeof props !== "object" || Array.isArray(props)) return "";
+	const o = props as Record<string, unknown>;
+	const tryKey = (key: string): string => {
+		const v = o[key];
+		if (typeof v === "string" && v.trim()) return v.trim();
+		if (typeof v === "number" || typeof v === "boolean")
+			return String(v).trim();
+		return "";
+	};
+	for (const key of candidateKeys) {
+		if (!key.trim()) continue;
+		const direct = tryKey(key);
+		if (direct) return direct;
+		const lower = key.toLowerCase();
+		for (const [k, v] of Object.entries(o)) {
+			if (k.toLowerCase() !== lower) continue;
+			if (typeof v === "string" && v.trim()) return v.trim();
+			if (typeof v === "number" || typeof v === "boolean")
+				return String(v).trim();
+		}
+	}
+	return "";
+}
+
+/**
+ * Lists PSet rows for the WBS definition on the current project, including the stored value
+ * for each target link (same definition as writes). Used to hydrate the extension table from the model.
+ */
+export async function fetchWbsPsetAssignmentsFromModel(
+	api: WorkspaceApi,
+): Promise<{ items: WbsPsetModelAssignmentRow[]; message: string }> {
+	const project = await api.project.getProject();
+	if (!project?.id) {
+		return { items: [], message: "No project selected." };
+	}
+	const token = await api.extension.requestPermission("accesstoken");
+	if (token === "denied" || token === "pending") {
+		return { items: [], message: `Access token ${token}.` };
+	}
+
+	const serviceUri = await resolvePsetServiceUri();
+	const configuredLibId = readPsetEnv("PSET_LIB_ID") || DEFAULT_LIBRARY_ID;
+	const definitionName =
+		readPsetEnv("PSET_DEFINITION_NAME") || DEFAULT_DEFINITION_NAME;
+	const explicitDefId = readPsetEnv("PSET_DEF_ID") || DEFAULT_DEFINITION_ID;
+	const configuredPropertyName =
+		readPsetEnv("PSET_PROPERTY_NAME") || DEFAULT_PROPERTY_NAME;
+	const libraryNameCandidates = [
+		readPsetEnv("PSET_LIBRARY_NAME"),
+		DEFAULT_LIBRARY_NAME,
+		configuredLibId,
+		DEFAULT_LIBRARY_ID,
+	].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
+
+	const pset = new PSet({
+		serviceUri,
+		credentials: new ServiceCredentials(undefined, token),
+	});
+	const { libId, defId } = await resolveCanonicalLibAndDefIds(
+		pset,
+		project.id,
+		serviceUri,
+		token,
+		configuredLibId,
+		libraryNameCandidates,
+		definitionName,
+		explicitDefId,
+	);
+	const propertyName = await resolveSchemaPropertyName(
+		pset,
+		libId,
+		defId,
+		configuredPropertyName,
+		definitionName,
+	);
+	const keysToRead = propertyRetryKeys(propertyName);
+
+	const out: WbsPsetModelAssignmentRow[] = [];
+	const seenNext = new Set<string>();
+	let page = await pset.listPSetsByDefinition(libId, defId, { top: 500 });
+	for (;;) {
+		const items =
+			(page.data as {
+				items?: Array<{ link?: string; props?: unknown }>;
+			})?.items ?? [];
+		for (const item of items) {
+			const link = typeof item?.link === "string" ? item.link.trim() : "";
+			if (!link.startsWith("frn:")) continue;
+			const value = readWbsValueFromPropsObject(item.props, keysToRead);
+			if (!value) continue;
+			out.push({ link, value, propertyName });
+		}
+		const next = (page.data as { next?: string })?.next ?? undefined;
+		if (!next || seenNext.has(next)) break;
+		seenNext.add(next);
+		try {
+			const res = await fetch(next, {
+				headers: {
+					Authorization: `Bearer ${token}`,
+					Accept: "application/json",
+				},
+			});
+			if (!res.ok) break;
+			const data = (await res.json()) as unknown;
+			page = { ...page, data } as typeof page;
+		} catch {
+			break;
+		}
+	}
+
+	return {
+		items: out,
+		message:
+			out.length > 0
+				? `Loaded ${out.length} PSet assignment(s) from listPSetsByDefinition.`
+				: "No PSet assignment rows with values found for this definition.",
+	};
 }
 
 export async function loadKnownLibraryLinks(
