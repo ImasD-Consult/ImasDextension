@@ -393,6 +393,7 @@ function renderPartsList(
 function renderAssignmentsList(
 	assignments: WbsAssignment[],
 	parts: IfcPart[],
+	knownLinks: string[],
 	selectedWbsRowIndex: number | null,
 ): string {
 	if (!parts.length && !assignments.length) {
@@ -410,7 +411,7 @@ function renderAssignmentsList(
 		if (!link) continue;
 		if (!partByLink.has(link)) partByLink.set(link, part);
 	}
-	const rows = parts
+	const rowsFromParts = parts
 		.map((part) => {
 			const link = normalizeKnownLink(part.link);
 			const latest = link ? latestByLink.get(link) : undefined;
@@ -467,6 +468,46 @@ function renderAssignmentsList(
     `;
 		})
 		.join("");
+	const knownOnlyLinks = knownLinks.filter((link) => !partByLink.has(link));
+	const rowsFromKnown = knownOnlyLinks
+		.map((link, i) => {
+			const latest = latestByLink.get(link);
+			const name = latest?.partName || `PSet target #${i + 1}`;
+			const className = latest?.partType || "PSET";
+			const guid = link.startsWith("frn:entity:") ? link.slice("frn:entity:".length) : "-";
+			const modelLabel = latest?.modelId?.trim() || "-";
+			const assignedValue = latest?.propertySetValue || "-";
+			const assignedAt = latest?.assignedAt || "-";
+			const wbsRow = typeof latest?.wbsRowIndex === "number" ? String(latest.wbsRowIndex + 4) : "-";
+			const isAssigned = Boolean(latest);
+			const statusBadge = isAssigned
+				? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
+				: '<span class="inline-flex items-center rounded bg-sky-100 px-2 py-0.5 text-[10px] font-semibold text-sky-700">Known target</span>';
+			const canAssign = selectedWbsRowIndex !== null;
+			const assignTitle = canAssign
+				? "Assign selected WBS row to this known target"
+				: "Select a WBS row first";
+			return `
+      <tr class="hover:bg-gray-50 bg-sky-50/30">
+        <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(name)}</td>
+        <td class="px-2 py-2 text-xs text-gray-700 border-b border-gray-100">${escapeHtml(className)}</td>
+        <td class="px-2 py-2 text-[11px] text-gray-700 border-b border-gray-100 max-w-[220px] truncate" title="${escapeHtml(guid)}">${escapeHtml(guid)}</td>
+        <td class="px-2 py-2 text-[11px] text-gray-700 border-b border-gray-100 max-w-[220px] truncate" title="${escapeHtml(modelLabel)}">${escapeHtml(modelLabel)}</td>
+        <td class="px-2 py-2 text-xs border-b border-gray-100">${statusBadge}</td>
+        <td class="px-2 py-2 text-xs text-gray-800 border-b border-gray-100">${escapeHtml(assignedValue)}</td>
+        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(assignedAt)}</td>
+        <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
+        <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link)}">${escapeHtml(link)}</td>
+        <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-assignment-link="${escapeHtml(link)}" data-assignment-runtime-id="" data-assignment-model-id="" data-assignment-part-id="">Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" disabled>Diagnose link</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link)}" data-assign-runtime-id="" data-assign-model-id="" data-assign-part-id="" ${canAssign ? "" : "disabled"} title="${escapeHtml(assignTitle)}">Assign</button>
+        </td>
+      </tr>
+    `;
+		})
+		.join("");
+	const rows = `${rowsFromParts}${rowsFromKnown}`;
 	return `
     <div class="rounded border border-gray-200 overflow-hidden">
       <div class="max-h-[32vh] overflow-auto">
@@ -1243,6 +1284,7 @@ export async function renderWbs(
 		assignmentsListEl.innerHTML = renderAssignmentsList(
 			assignments,
 			getAssignableParts(),
+			knownLibraryLinks,
 			selectedWbsRowIndex,
 		);
 	}
