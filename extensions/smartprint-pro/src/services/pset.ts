@@ -277,6 +277,16 @@ export interface KnownLibraryLinksResult {
 	message: string;
 }
 
+export interface WbsPsetLinkVerificationResult {
+	ok: boolean;
+	foundLink: boolean;
+	matchedValue: boolean;
+	libId?: string;
+	defId?: string;
+	propertyName?: string;
+	message: string;
+}
+
 function ensureTrailingSlash(uri: string): string {
 	return uri.endsWith("/") ? uri : `${uri}/`;
 }
@@ -1039,4 +1049,167 @@ export async function loadKnownLibraryLinks(
 				? `Loaded ${links.size} known link(s) from PSet listPSetsByDefinition.`
 				: "No known links found from PSet listPSetsByDefinition.",
 	};
+}
+
+function payloadContainsExpectedValueAtProperty(
+	root: unknown,
+	propertyName: string,
+	expectedValue: string,
+): boolean {
+	const expected = expectedValue.trim().toLowerCase();
+	if (!expected) return false;
+	let matched = false;
+	const walk = (node: unknown, depth: number): void => {
+		if (matched || depth > 14 || node == null) return;
+		if (Array.isArray(node)) {
+			for (const item of node) walk(item, depth + 1);
+			return;
+		}
+		if (typeof node !== "object") return;
+		const o = node as Record<string, unknown>;
+		const candidate = o[propertyName];
+		if (typeof candidate === "string") {
+			if (candidate.trim().toLowerCase() === expected) matched = true;
+		} else if (typeof candidate === "number" || typeof candidate === "boolean") {
+			if (String(candidate).trim().toLowerCase() === expected) matched = true;
+		}
+		for (const value of Object.values(o)) walk(value, depth + 1);
+	};
+	walk(root, 0);
+	return matched;
+}
+
+export async function verifyWbsValueByLink(
+	api: WorkspaceApi,
+	link: string,
+	expectedValue: string,
+): Promise<WbsPsetLinkVerificationResult> {
+	const normalizedLink = link.trim();
+	if (!normalizedLink.startsWith("frn:")) {
+		return {
+			ok: false,
+			foundLink: false,
+			matchedValue: false,
+			message: "Verification skipped: invalid link.",
+		};
+	}
+	const project = await api.project.getProject();
+	if (!project?.id) {
+		return {
+			ok: false,
+			foundLink: false,
+			matchedValue: false,
+			message: "No project selected.",
+		};
+	}
+	const token = await api.extension.requestPermission("accesstoken");
+	if (token === "denied" || token === "pending") {
+		return {
+			ok: false,
+			foundLink: false,
+			matchedValue: false,
+			message: `Access token ${token}.`,
+		};
+	}
+
+	try {
+		const serviceUri = await resolvePsetServiceUri();
+		const configuredLibId = readPsetEnv("PSET_LIB_ID") || DEFAULT_LIBRARY_ID;
+		const definitionName =
+			readPsetEnv("PSET_DEFINITION_NAME") || DEFAULT_DEFINITION_NAME;
+		const explicitDefId = readPsetEnv("PSET_DEF_ID");
+		const configuredPropertyName =
+			readPsetEnv("PSET_PROPERTY_NAME") || DEFAULT_PROPERTY_NAME;
+		const libraryNameCandidates = [
+			readPsetEnv("PSET_LIBRARY_NAME"),
+			DEFAULT_LIBRARY_NAME,
+			configuredLibId,
+			DEFAULT_LIBRARY_ID,
+		].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
+
+		const pset = new PSet({
+			serviceUri,
+			credentials: new ServiceCredentials(undefined, token),
+		});
+		const { libId, defId } = await resolveCanonicalLibAndDefIds(
+			pset,
+			project.id,
+			serviceUri,
+			token,
+			configuredLibId,
+			libraryNameCandidates,
+			definitionName,
+			explicitDefId,
+		);
+		const propertyName = await resolveSchemaPropertyName(
+			pset,
+			libId,
+			defId,
+			configuredPropertyName,
+			definitionName,
+		);
+
+		let foundLink = false;
+		let matchedValue = false;
+		const seenNext = new Set<string>();
+		let page = await pset.listPSetsByDefinition(libId, defId, { top: 500 });
+		for (;;) {
+			const items =
+				(page.data as { items?: Array<{ link?: string; props?: unknown }> })?.items ?? [];
+			for (const item of items) {
+				const itemLink = item?.link?.trim();
+				if (!itemLink || itemLink !== normalizedLink) continue;
+				foundLink = true;
+				if (
+					payloadContainsExpectedValueAtProperty(
+						item.props,
+						propertyName,
+						expectedValue,
+					)
+				) {
+					matchedValue = true;
+					break;
+				}
+			}
+			if (matchedValue) break;
+			const next = (page.data as { next?: string })?.next ?? undefined;
+			if (!next || seenNext.has(next)) break;
+			seenNext.add(next);
+			try {
+				const res = await fetch(next, {
+					headers: {
+						Authorization: `Bearer ${token}`,
+						Accept: "application/json",
+					},
+				});
+				if (!res.ok) break;
+				const data = (await res.json()) as unknown;
+				page = { ...page, data } as typeof page;
+			} catch {
+				break;
+			}
+		}
+
+		return {
+			ok: true,
+			foundLink,
+			matchedValue,
+			libId,
+			defId,
+			propertyName,
+			message: matchedValue
+				? "Verified written value in PSet API for target link."
+				: foundLink
+					? "Target link exists in PSet API, but expected value not found yet."
+					: "Target link not found in PSet API listPSetsByDefinition.",
+		};
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			ok: false,
+			foundLink: false,
+			matchedValue: false,
+			message: withPsetTroubleshootingHint(message),
+		};
+	}
 }
