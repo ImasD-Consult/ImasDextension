@@ -312,12 +312,11 @@ function renderPartsList(
 
 function renderAssignmentsList(
 	assignments: WbsAssignment[],
-	knownLinks: string[],
 	parts: IfcPart[],
 	selectedWbsRowIndex: number | null,
 ): string {
-	if (!knownLinks.length && !assignments.length) {
-		return '<p class="text-sm text-gray-500 italic">No known targets loaded yet. Targets load automatically after model load.</p>';
+	if (!parts.length && !assignments.length) {
+		return '<p class="text-sm text-gray-500 italic">No IFC parts loaded for current model.</p>';
 	}
 	const latestByLink = new Map<string, WbsAssignment>();
 	for (const item of assignments) {
@@ -331,29 +330,22 @@ function renderAssignmentsList(
 		if (!link) continue;
 		if (!partByLink.has(link)) partByLink.set(link, part);
 	}
-	const knownLinksFiltered = knownLinks.filter((raw) => {
-		const link = normalizeKnownLink(raw);
-		return partByLink.has(link) || latestByLink.has(link);
-	});
-	const links = knownLinksFiltered;
-	if (!links.length) {
-		return '<p class="text-sm text-gray-500 italic">No known targets match the current model yet.</p>';
-	}
-	const rows = links
-		.map((rawLink) => normalizeKnownLink(rawLink))
-		.filter((link) => link.length > 0)
-		.map((link) => {
-			const matchPart = partByLink.get(link);
-			const latest = latestByLink.get(link);
-			const name = latest?.partName || matchPart?.name || "(unknown)";
-			const className = latest?.partType || matchPart?.type || "(unknown)";
+	const rows = parts
+		.map((part) => {
+			const link = normalizeKnownLink(part.link);
+			const latest = link ? latestByLink.get(link) : undefined;
+			const name = part.name || latest?.partName || "(unknown)";
+			const className = part.type || latest?.partType || "(unknown)";
 			const assignedValue = latest?.propertySetValue || "-";
 			const assignedAt = latest?.assignedAt || "-";
 			const wbsRow = typeof latest?.wbsRowIndex === "number" ? String(latest.wbsRowIndex + 4) : "-";
-			const isAssigned = Boolean(latest);
+			const isAssigned = Boolean(latest) && Boolean(link);
+			const hasLink = Boolean(link);
 			const statusBadge = isAssigned
 				? '<span class="inline-flex items-center rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Assigned</span>'
-				: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>';
+				: hasLink
+					? '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
+					: '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">No link</span>';
 			const canAssign = selectedWbsRowIndex !== null;
 			const assignTitle = canAssign
 				? "Assign selected WBS row to this target"
@@ -366,10 +358,10 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-800 border-b border-gray-100">${escapeHtml(assignedValue)}</td>
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(assignedAt)}</td>
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
-        <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link)}">${escapeHtml(link)}</td>
+        <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-assignment-link="${escapeHtml(link)}">Select in 3D</button>
-          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link)}" ${canAssign ? "" : "disabled"} title="${escapeHtml(assignTitle)}">Assign</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" ${hasLink ? "" : "disabled"}>Select in 3D</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" ${(canAssign && hasLink) ? "" : "disabled"} title="${escapeHtml(hasLink ? assignTitle : "Part has no writable link")}">Assign</button>
         </td>
       </tr>
     `;
@@ -411,7 +403,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.15)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.16)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -507,7 +499,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.15)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.16)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1141,7 +1133,6 @@ export async function renderWbs(
 	function refreshAssignments(): void {
 		assignmentsListEl.innerHTML = renderAssignmentsList(
 			assignments,
-			knownLibraryLinks,
 			getAssignableParts(),
 			selectedWbsRowIndex,
 		);
