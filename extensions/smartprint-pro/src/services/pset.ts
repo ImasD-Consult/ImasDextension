@@ -267,6 +267,15 @@ export interface EnsureWbsLibraryAndAssignmentsResult {
 	propertyName: string;
 }
 
+function toEntityLinkIfScoped(link: string): string {
+	const value = link.trim();
+	const marker = ":entity:";
+	const idx = value.indexOf(marker);
+	if (!value.startsWith("frn:tc:project:") || idx < 0) return value;
+	const entity = value.slice(idx + marker.length).trim();
+	return entity ? `frn:entity:${entity}` : value;
+}
+
 export interface WbsPsetDebugInfo {
 	ok: boolean;
 	serviceUri: string;
@@ -885,9 +894,11 @@ export async function writeWbsPropertySetValues(
 		);
 	}
 
-	const buildChangesetItems = (propKey: string) =>
+	const buildChangesetItems = (propKey: string, forceEntityLink = false) =>
 		items.map((item) => ({
-			link: resolveChangesetItemLink(item),
+			link: forceEntityLink
+				? toEntityLinkIfScoped(resolveChangesetItemLink(item))
+				: resolveChangesetItemLink(item),
 			libId,
 			defId,
 			props: { [propKey]: item.value },
@@ -904,6 +915,35 @@ export async function writeWbsPropertySetValues(
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			lastErrorMessage = msg;
+			const canRetryWithEntityLinks =
+				msg.includes("invalid") ||
+				msg.includes("not found") ||
+				msg.includes("unsupported") ||
+				msg.includes("resource");
+			if (canRetryWithEntityLinks) {
+				let retryResponse: Awaited<ReturnType<PSet["changeset"]>> | undefined;
+				try {
+					retryResponse = await pset.changeset({
+						items: buildChangesetItems(key, true),
+					});
+				} catch {
+					// Keep original message in lastErrorMessage for troubleshooting.
+				}
+				if (retryResponse) {
+					const inlineRetry = retryResponse.data as {
+						errorCount?: number;
+						errors?: Array<{ message?: string }>;
+					};
+					const retryErrors = inlineRetry.errors ?? [];
+					const retryHasFailures =
+						(typeof inlineRetry.errorCount === "number" &&
+							inlineRetry.errorCount > 0) ||
+						retryErrors.length > 0;
+					if (!retryHasFailures) {
+						return { libId, defId, propertyName: key };
+					}
+				}
+			}
 			if (msg.includes(`Property '${key}' has not been defined`)) {
 				continue;
 			}
@@ -1005,6 +1045,12 @@ export async function ensureWbsLibraryAndAssignmentsForLinks(
 				.map((t) => [t.link, t] as const),
 		).values(),
 	];
+	const equivalentTargetLinks = (link: string): string[] => {
+		const base = link.trim();
+		if (!base) return [];
+		const entity = toEntityLinkIfScoped(base);
+		return [...new Set([base, entity])];
+	};
 	if (normalizedTargets.length === 0) {
 		return {
 			createdLibrary,
@@ -1041,16 +1087,28 @@ export async function ensureWbsLibraryAndAssignmentsForLinks(
 		page = { ...page, data } as typeof page;
 	}
 
-	const missing = normalizedTargets.filter((t) => !existingLinks.has(t.link));
+	const missing = normalizedTargets.filter((t) =>
+		equivalentTargetLinks(t.link).every((candidate) => !existingLinks.has(candidate)),
+	);
 	if (missing.length > 0) {
-		await pset.changeset({
-			items: missing.map((t) => ({
-				link: t.link,
-				libId,
-				defId,
-				props: { [propertyName]: t.value },
-			})),
-		});
+		const scopedItems = missing.map((t) => ({
+			link: t.link,
+			libId,
+			defId,
+			props: { [propertyName]: t.value },
+		}));
+		try {
+			await pset.changeset({ items: scopedItems });
+		} catch {
+			await pset.changeset({
+				items: missing.map((t) => ({
+					link: toEntityLinkIfScoped(t.link),
+					libId,
+					defId,
+					props: { [propertyName]: t.value },
+				})),
+			});
+		}
 	}
 
 	return {
