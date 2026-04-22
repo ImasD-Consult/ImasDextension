@@ -421,10 +421,6 @@ function renderAssignmentsList(
 				: undefined;
 		const link = directLink || mappedKnownLink || "";
 		if (link && knownLinkSet.has(link)) usedKnownLinks.add(link);
-		// Only list IFC rows that already have a writable stable link (direct or mapped).
-		// Runtime-only rows were misleading (fake/table-order ids) and cluttered the table vs PSet targets.
-		const actionable = isWritableLink(link);
-		if (!actionable) continue;
 		resolvedPartRows.push({ part, directLink, mappedKnownLink, link });
 	}
 	const rowsFromParts = resolvedPartRows
@@ -444,7 +440,6 @@ function renderAssignmentsList(
 			const targetRuntimeIdRaw = isValidRuntimeId(targetRuntimeIdNum)
 				? String(targetRuntimeIdNum)
 				: "";
-			const canHarvestFromRuntime = Boolean(targetRuntimeIdRaw);
 			const targetName = part.targetName?.trim() || baseName;
 			const displayName =
 				part.resolvedViaParent && targetName !== baseName
@@ -476,10 +471,12 @@ function renderAssignmentsList(
 								? '<span class="inline-flex items-center rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">Assigns to parent</span>'
 								: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
 						: '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">No link</span>';
-			const canAssign = selectedWbsRowIndex !== null;
+			const canAssign = selectedWbsRowIndex !== null && hasLink;
 			const assignTitle = canAssign
 				? "Assign selected WBS row to this target"
-				: "Select a WBS row first";
+				: selectedWbsRowIndex === null
+					? "Select a WBS row first"
+					: "Target has no writable link";
 			return `
       <tr class="hover:bg-gray-50">
         <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(displayName)}</td>
@@ -492,9 +489,7 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" data-assignment-part-id="${escapeHtml(part.id)}" ${(hasLink || canHarvestFromRuntime) ? "" : "disabled"}>Select in 3D</button>
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
-          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assign-model-id="${escapeHtml(modelId)}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && (hasLink || canHarvestFromRuntime)) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : (canHarvestFromRuntime ? "Will resolve link from runtime target before assign" : "Geometry only, no data properties found")) : "Select a WBS row first")}">Assign</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assign-model-id="${escapeHtml(modelId)}" data-assign-part-id="${escapeHtml(part.id)}" ${canAssign ? "" : "disabled"} title="${escapeHtml(assignTitle)}">Assign</button>
         </td>
       </tr>
     `;
@@ -547,8 +542,6 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link)}">${escapeHtml(link)}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-assignment-link="${escapeHtml(link)}" data-assignment-runtime-id="" data-assignment-model-id="" data-assignment-part-id="">Select in 3D</button>
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" disabled>Diagnose link</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link)}" data-assign-runtime-id="" data-assign-model-id="" data-assign-part-id="" ${canAssign ? "" : "disabled"} title="${escapeHtml(assignTitle)}">Assign</button>
         </td>
       </tr>
@@ -557,7 +550,7 @@ function renderAssignmentsList(
 		.join("");
 	const rows = `${rowsFromParts}${rowsFromKnown}`;
 	if (!rows.trim()) {
-		return '<p class="text-sm text-gray-500 italic">No actionable targets: IFC rows with no link and no valid 3D runtime are hidden. Wait for known PSet links to load, or reload the model.</p>';
+		return '<p class="text-sm text-gray-500 italic">No targets available yet. Wait for known PSet links to load, or reload the model.</p>';
 	}
 	return `
     <div class="rounded border border-gray-200 overflow-hidden">
@@ -598,7 +591,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.26)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.27)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -694,7 +687,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.26)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.27)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
