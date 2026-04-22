@@ -760,10 +760,20 @@ async function resolveOrCreateCanonicalLibAndDefIds(
 		libraryNameCandidates.find((s) => s.trim().length > 0) ||
 		configuredLibId ||
 		DEFAULT_LIBRARY_NAME;
-	const createLibraryRes = await pset.createLibrary({
-		name: primaryLibraryName,
-		description: "Created by smartprintPRO to store WBS property sets.",
-	});
+	let createLibraryRes: Awaited<ReturnType<PSet["createLibrary"]>>;
+	try {
+		createLibraryRes = await pset.createLibrary({
+			id: configuredLibId?.trim() || undefined,
+			name: primaryLibraryName,
+			description: "Created by smartprintPRO to store WBS property sets.",
+		});
+	} catch {
+		// Some deployments may not accept explicit ids on create.
+		createLibraryRes = await pset.createLibrary({
+			name: primaryLibraryName,
+			description: "Created by smartprintPRO to store WBS property sets.",
+		});
+	}
 	const libId =
 		(createLibraryRes.data as { id?: string })?.id?.trim() || configuredLibId;
 	if (!libId) {

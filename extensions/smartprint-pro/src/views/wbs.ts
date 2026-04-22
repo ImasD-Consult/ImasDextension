@@ -1270,7 +1270,6 @@ export async function renderWbs(
 	const nameByRuntimeId = new Map<number, string>();
 	let hierarchyCacheModelId = "";
 	let knownLibraryLinks: string[] = [];
-	const ensuredLibraryModelIds = new Set<string>();
 	/** Stable `frn:entity:*` → viewer runtime for highlights (rebuilt per model load). */
 	const entityLinkToRuntimeCache = new Map<
 		string,
@@ -2556,26 +2555,27 @@ export async function renderWbs(
 
 		const readyCount = countReadyParts(getAssignableParts());
 		const ghostCount = Math.max(0, getAssignableParts().length - readyCount);
-		if (!ensuredLibraryModelIds.has(selectedModelId)) {
-			try {
-				const seedTargets = [...(await buildCurrentModelLinkScope())]
-					.map((link) => ({ link: normalizeKnownLink(link), value: "" }))
-					.filter((t) => t.link.startsWith("frn:"));
-				const ensured = await ensureWbsLibraryAndAssignmentsForLinks(
-					api,
-					seedTargets,
+		try {
+			const seedTargets = [...(await buildCurrentModelLinkScope())]
+				.map((link) => ({ link: normalizeKnownLink(link), value: "" }))
+				.filter((t) => t.link.startsWith("frn:"));
+			const ensured = await ensureWbsLibraryAndAssignmentsForLinks(
+				api,
+				seedTargets,
+			);
+			if (
+				ensured.createdLibrary ||
+				ensured.createdDefinition ||
+				ensured.missingTargetsSeeded > 0
+			) {
+				setStatus(
+					`Property library initialized for this model (lib: ${ensured.libId}, def: ${ensured.defId}, seeded: ${ensured.missingTargetsSeeded}/${ensured.totalTargets}).`,
 				);
-				ensuredLibraryModelIds.add(selectedModelId);
-				if (ensured.createdLibrary || ensured.createdDefinition) {
-					setStatus(
-						`Property library initialized for this model (lib: ${ensured.libId}, def: ${ensured.defId}, seeded: ${ensured.missingTargetsSeeded}/${ensured.totalTargets}).`,
-					);
-				}
-			} catch (ensureErr) {
-				const ensureMsg =
-					ensureErr instanceof Error ? ensureErr.message : String(ensureErr);
-				setStatus(`Property library auto-setup failed: ${ensureMsg}`, "error");
 			}
+		} catch (ensureErr) {
+			const ensureMsg =
+				ensureErr instanceof Error ? ensureErr.message : String(ensureErr);
+			setStatus(`Property library auto-setup failed: ${ensureMsg}`, "error");
 		}
 		setStatus(
 			`Loaded ${parts.length} IFC part/object(s) for ${selectedModel?.name ?? "selected IFC model"}. Writable links ready: ${readyCount}/${getAssignableParts().length} (ghost: ${ghostCount}).`,
