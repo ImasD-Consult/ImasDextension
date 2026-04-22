@@ -652,7 +652,10 @@ function renderAssignmentsList(
 		.join("");
 	const rows = `${rowsFromParts}${rowsFromKnown}`;
 	if (!rows.trim()) {
-		return '<p class="text-sm text-gray-500 italic">No actionable targets: IFC rows with no link and no valid 3D runtime are hidden. Wait for known PSet links to load, or reload the model.</p>';
+		const scopedAssignments = assignments.filter((a) =>
+			assignmentMatchesCurrentModel(a),
+		).length;
+		return `<p class="text-sm text-gray-500 italic">No actionable targets: IFC rows with no link and no valid 3D runtime are hidden. Scope debug: parts=${parts.length}, knownLinks=${knownLinks.length}, assignments=${scopedAssignments}. Wait for known PSet links to load, or reload the model.</p>`;
 	}
 	return `
     <div class="rounded border border-gray-200 overflow-hidden">
@@ -1408,7 +1411,7 @@ export async function renderWbs(
 			linksForRender,
 			selectedWbsRowIndex,
 			modelScope,
-			!viewerOnly,
+			true,
 		);
 	}
 
