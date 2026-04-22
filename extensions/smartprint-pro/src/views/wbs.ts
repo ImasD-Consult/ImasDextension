@@ -364,12 +364,18 @@ function renderAssignmentsList(
 	knownLinks: string[],
 	selectedWbsRowIndex: number | null,
 	activeModelScopeIds: string[],
+	modelNameById: Record<string, string>,
 ): string {
 	const scope = [...new Set(activeModelScopeIds.map((s) => s.trim()).filter(Boolean))];
+	const resolveModelName = (modelId: string | undefined): string => {
+		const id = (modelId ?? "").trim();
+		if (!id) return "-";
+		return modelNameById[id] ?? id;
+	};
 	function assignmentMatchesCurrentModel(item: WbsAssignment): boolean {
 		if (scope.length === 0) return true;
 		const mid = item.modelId?.trim();
-		if (!mid) return true;
+		if (!mid) return false;
 		return scope.includes(mid);
 	}
 	const hasKnownPsetLinks = knownLinks.some((l) => Boolean(normalizeKnownLink(l)));
@@ -452,7 +458,9 @@ function renderAssignmentsList(
 					: baseName;
 			const modelId = part.modelId?.trim() || latest?.modelId?.trim() || "";
 			const guid = link.startsWith("frn:entity:") ? link.slice("frn:entity:".length) : "-";
-			const modelLabel = part.modelName?.trim() || part.modelId?.trim() || latest?.modelId?.trim() || "-";
+			const modelLabel =
+				part.modelName?.trim() ||
+				resolveModelName(part.modelId?.trim() || latest?.modelId?.trim());
 			const assignedValue = staleOtherModel
 				? "(other IFC / cached)"
 				: latest?.propertySetValue || "-";
@@ -513,7 +521,9 @@ function renderAssignmentsList(
 			const name = latest?.partName || latestRaw?.partName || `PSet target #${i + 1}`;
 			const className = latest?.partType || latestRaw?.partType || "PSET";
 			const guid = link.startsWith("frn:entity:") ? link.slice("frn:entity:".length) : "-";
-			const modelLabel = latest?.modelId?.trim() || latestRaw?.modelId?.trim() || "-";
+			const modelLabel = resolveModelName(
+				latest?.modelId?.trim() || latestRaw?.modelId?.trim(),
+			);
 			const assignedValue = staleOtherModel
 				? "(other IFC / cached)"
 				: latest?.propertySetValue || "-";
@@ -596,7 +606,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.38)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.39)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -692,7 +702,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.38)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.39)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1238,9 +1248,14 @@ export async function renderWbs(
 	function refreshKnownLinkHint(): void {
 		if (!knownLinkHintEl) return;
 		const selected = knownLinkSelectEl?.value?.trim();
+		const activeId = getActiveModelId();
+		const activeModel = allIfcModels.find(
+			(m) => activeId && (m.id === activeId || m.versionId === activeId),
+		);
+		const scopeLabel = activeModel?.name?.trim() || "current model";
 		knownLinkHintEl.textContent = selected
 			? `Known link fallback selected: ${selected}`
-			: `Known targets loaded: ${knownLibraryLinks.length}`;
+			: `Known targets loaded: ${knownLibraryLinks.length} (scope: ${scopeLabel})`;
 	}
 
 	function getAssignableParts(): IfcPart[] {
@@ -1255,12 +1270,19 @@ export async function renderWbs(
 		const modelScope = [active, open?.versionId, open?.id].filter(
 			(x): x is string => typeof x === "string" && x.trim().length > 0,
 		);
+		const modelNameById: Record<string, string> = {};
+		for (const m of allIfcModels) {
+			const label = m.name?.trim() || "IFC";
+			if (m.id?.trim()) modelNameById[m.id.trim()] = label;
+			if (m.versionId?.trim()) modelNameById[m.versionId.trim()] = label;
+		}
 		assignmentsListEl.innerHTML = renderAssignmentsList(
 			assignments,
 			getAssignableParts(),
 			knownLibraryLinks,
 			selectedWbsRowIndex,
 			modelScope,
+			modelNameById,
 		);
 	}
 
