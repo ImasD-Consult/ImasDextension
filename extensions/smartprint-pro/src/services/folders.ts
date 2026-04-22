@@ -1489,7 +1489,12 @@ export async function fetchIfcAssembliesFromFile(
 		);
 	}
 
-	return result;
+	return result.map((row) => {
+		if (row.link?.trim()) return row;
+		const stable = (row.id ?? "").trim();
+		if (!stable || /^\d+$/.test(stable) || stable.length < 4) return row;
+		return { ...row, link: `frn:entity:${stable}` };
+	});
 }
 
 export async function fetchProcessAssemblies(
