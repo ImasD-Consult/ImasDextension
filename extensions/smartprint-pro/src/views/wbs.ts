@@ -492,7 +492,6 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" data-assignment-part-id="${escapeHtml(part.id)}" ${(hasLink || canHarvestFromRuntime) ? "" : "disabled"}>Select in 3D</button>
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assign-model-id="${escapeHtml(modelId)}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && (hasLink || canHarvestFromRuntime)) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : (canHarvestFromRuntime ? "Will resolve link from runtime target before assign" : "Geometry only, no data properties found")) : "Select a WBS row first")}">Assign</button>
         </td>
@@ -547,7 +546,6 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link)}">${escapeHtml(link)}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-assignment-link="${escapeHtml(link)}" data-assignment-runtime-id="" data-assignment-model-id="" data-assignment-part-id="">Select in 3D</button>
           <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" disabled>Diagnose link</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link)}" data-assign-runtime-id="" data-assign-model-id="" data-assign-part-id="" ${canAssign ? "" : "disabled"} title="${escapeHtml(assignTitle)}">Assign</button>
         </td>
@@ -598,7 +596,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.36)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.37)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -694,7 +692,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.36)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.37)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1257,10 +1255,19 @@ export async function renderWbs(
 		const modelScope = [active, open?.versionId, open?.id].filter(
 			(x): x is string => typeof x === "string" && x.trim().length > 0,
 		);
+		const currentModelLinks = new Set(
+			getAssignableParts()
+				.map((p) => normalizeKnownLink(p.link))
+				.filter((l): l is string => Boolean(l)),
+		);
+		const linksForCurrentModel =
+			currentModelLinks.size > 0
+				? knownLibraryLinks.filter((l) => currentModelLinks.has(normalizeKnownLink(l)))
+				: [];
 		assignmentsListEl.innerHTML = renderAssignmentsList(
 			assignments,
 			getAssignableParts(),
-			knownLibraryLinks,
+			linksForCurrentModel,
 			selectedWbsRowIndex,
 			modelScope,
 		);
@@ -2013,73 +2020,6 @@ export async function renderWbs(
 		return undefined;
 	}
 
-	async function syncViewerSelectionFromKnownLink(link: string): Promise<void> {
-		const v = api.viewer;
-		if (!viewerOnly || !v?.setSelection) return;
-		const trimmed = normalizeKnownLink(link);
-		if (!trimmed) return;
-
-		let modelId: string | undefined;
-		let runtimeId: number | undefined;
-
-		const runtimeMatch = trimmed.match(
-			/^frn:tc:project:[^:]+:model:([^:]+):entity:(\d+)$/i,
-		);
-		if (runtimeMatch) {
-			modelId = runtimeMatch[1];
-			runtimeId = Number(runtimeMatch[2]);
-		}
-
-		if (
-			(!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) &&
-			trimmed.startsWith("frn:entity:")
-		) {
-			const resolved = await resolveRuntimeForEntityLink(trimmed);
-			if (resolved) {
-				modelId = resolved.modelId;
-				runtimeId = resolved.runtimeId;
-			}
-		}
-
-		if (!modelId || runtimeId == null || !isValidRuntimeId(runtimeId)) {
-			setStatus(
-				`Could not map this link to a 3D runtime id yet (try Reload model). Assign/write still targets: ${trimmed}`,
-			);
-			return;
-		}
-
-		const activeModelId = getActiveModelId();
-		const currentOpenModel = allIfcModels.find(
-			(m) => activeModelId === m.id || activeModelId === m.versionId,
-		);
-		const modelCandidates = [
-			modelId,
-			activeModelId,
-			currentOpenModel?.id,
-			currentOpenModel?.versionId,
-		].filter((m): m is string => typeof m === "string" && m.trim().length > 0);
-
-		for (const candidateModelId of [...new Set(modelCandidates)]) {
-			try {
-				await v.setSelection(
-					{
-						modelObjectIds: [
-							{ modelId: candidateModelId, objectRuntimeIds: [runtimeId] },
-						],
-					},
-					"set",
-				);
-				setStatus(
-					`Viewer selected from link: ${trimmed} (model ${candidateModelId}, runtime ${runtimeId})`,
-				);
-				return;
-			} catch {
-				/* try next model id alias */
-			}
-		}
-		setStatus(`Failed to apply viewer selection for link: ${trimmed}`, "error");
-	}
-
 	function summarizeWriteTargets(
 		source: IfcPart[],
 		fallbackKnownLink?: string,
@@ -2800,57 +2740,6 @@ export async function renderWbs(
 				}
 				await assignToTargetLink(link ?? "", partId);
 			});
-			return;
-		}
-		const assignmentLinkButton = target.closest<HTMLButtonElement>(
-			"[data-assignment-link]",
-		);
-		if (assignmentLinkButton) {
-			const link = assignmentLinkButton.dataset.assignmentLink?.trim();
-			const runtimeIdRaw = assignmentLinkButton.dataset.assignmentRuntimeId?.trim();
-			const rowModelId = assignmentLinkButton.dataset.assignmentModelId?.trim();
-			const partId = assignmentLinkButton.dataset.assignmentPartId?.trim();
-			const runtimeId =
-				runtimeIdRaw && /^\d+$/.test(runtimeIdRaw) ? Number(runtimeIdRaw) : NaN;
-			if (
-				viewerOnly &&
-				api.viewer?.setSelection &&
-				isValidRuntimeId(runtimeId)
-			) {
-				const activeModelId = getActiveModelId();
-				const modelCandidates = [rowModelId, activeModelId].filter(
-					(v): v is string => typeof v === "string" && v.trim().length > 0,
-				);
-				for (const modelId of [...new Set(modelCandidates)]) {
-					try {
-						void api.viewer.setSelection(
-							{
-								modelObjectIds: [{ modelId, objectRuntimeIds: [runtimeId] }],
-							},
-							"set",
-						);
-						setStatus(
-							`Viewer selected from row runtime mapping (model ${modelId}, runtime ${runtimeId}).`,
-						);
-						if (partId) {
-							void backfillLinkFromRuntimeSelection(partId, modelId, runtimeId).then(
-								(harvested) => {
-									if (harvested) {
-										setStatus(
-											`Viewer selected and link harvested from properties (model ${modelId}, runtime ${runtimeId}).`,
-										);
-									}
-								},
-							);
-						}
-						return;
-					} catch {
-						/* try next */
-					}
-				}
-			}
-			if (!link || !link.startsWith("frn:")) return;
-			void syncViewerSelectionFromKnownLink(link);
 			return;
 		}
 		const partButton = target.closest<HTMLElement>("[data-part-id]");
