@@ -358,6 +358,23 @@ function readNodeChildren(node: Record<string, unknown>): unknown[] {
 	return [];
 }
 
+function resolveStableEntityLinkFromNode(node: Record<string, unknown>): string | undefined {
+	const direct = readNodeString(node, ["frn", "link"]);
+	if (direct?.startsWith("frn:entity:")) return direct;
+	const stableId = readNodeString(node, [
+		"guid",
+		"globalId",
+		"ifcGuid",
+		"fileId",
+		"entityId",
+		"objectId",
+	]);
+	if (!stableId) return undefined;
+	const token = stableId.trim();
+	if (!token || /^\d+$/.test(token)) return undefined;
+	return `frn:entity:${token}`;
+}
+
 function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], seen: Set<string>): void {
 	if (!tree || typeof tree !== "object") return;
 	const node = tree as Record<string, unknown>;
@@ -380,7 +397,7 @@ function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], see
 				name: readNodeString(node, ["name", "label"]) ?? `Assembly ${id}`,
 				type: "IFCELEMENTASSEMBLY",
 				material: "Unknown",
-				link: readNodeString(node, ["frn", "link"]),
+				link: resolveStableEntityLinkFromNode(node),
 			});
 		}
 	}
@@ -425,7 +442,7 @@ function collectAllObjectNodesFromTree(
 			name: name ?? `${classOrType} ${id}`,
 			type: classOrType.toUpperCase(),
 			material: "Unknown",
-			link: readNodeString(node, ["frn", "link"]),
+			link: resolveStableEntityLinkFromNode(node),
 		});
 	}
 
