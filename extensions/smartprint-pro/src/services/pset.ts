@@ -16,14 +16,15 @@ const DEFAULT_PSET_SERVICE_URI =
 	"https://pset-api.us-east-1.connect.trimble.com/v1/";
 const DEFAULT_LIBRARY_NAME = "WBS_ImasD";
 const DEFAULT_LIBRARY_ID = "cp2pk84lbapks4r9etenbvo1uyktau5j";
-const DEFAULT_DEFINITION_ID = "4njeejhw2pvx706j2clj6z4f2h6w4who";
+const DEFAULT_DEFINITION_ID = "";
 /**
  * Property set **definition** title in Connect (the block name in the library editor).
  * Your library uses the same label for the block and the schema field: *Pset_IMASD_WBS*.
  * The value written in `props` uses `DEFAULT_PROPERTY_NAME` (also `Pset_IMASD_WBS` by default).
  */
-const DEFAULT_DEFINITION_NAME = "WBS_ImasD";
-const DEFAULT_PROPERTY_NAME = "prop_3770e0nztx48cihfpm0zjqfmt2jrbzf4";
+const DEFAULT_DEFINITION_NAME = "Pset_IMASD_WBS";
+const DEFAULT_PROPERTY_NAME = "Pset_IMASD_WBS";
+const LEGACY_PROPERTY_NAME = "prop_3770e0nztx48cihfpm0zjqfmt2jrbzf4";
 
 const REGIONS_JSON_URL = "https://app.connect.trimble.com/tc/api/2.0/regions";
 
@@ -567,6 +568,8 @@ function propertyRetryKeys(primary: string): string[] {
 	// Prefer the schema-resolved key first (manual PATCH-proven), then fallbacks.
 	const out = new Set<string>();
 	if (primary.trim()) out.add(primary.trim());
+	out.add(DEFAULT_PROPERTY_NAME);
+	out.add(LEGACY_PROPERTY_NAME);
 	out.add("Group");
 	out.add("group");
 	if (primary.startsWith("Pset_") && primary.length > 5) {
