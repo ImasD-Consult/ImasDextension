@@ -369,6 +369,15 @@ function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], see
 		normalized.includes("ifcelementassembly") ||
 		normalized === "assembly" ||
 		normalized.endsWith("assembly");
+	const guidLikeId =
+		readNodeString(node, ["guid", "globalId", "globalid", "fileId", "fileid", "entityId", "entityid"]) ??
+		"";
+	const stableEntityLink =
+		guidLikeId &&
+		!/^\d+$/.test(guidLikeId.trim()) &&
+		guidLikeId.trim().length >= 4
+			? `frn:entity:${guidLikeId.trim()}`
+			: undefined;
 	if (isAssemblyNode) {
 		const id =
 			readNodeString(node, ["guid", "id", "runtimeId", "entityId"]) ??
@@ -380,7 +389,7 @@ function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], see
 				name: readNodeString(node, ["name", "label"]) ?? `Assembly ${id}`,
 				type: "IFCELEMENTASSEMBLY",
 				material: "Unknown",
-				link: readNodeString(node, ["frn", "link"]),
+				link: readNodeString(node, ["frn", "link"]) ?? stableEntityLink,
 			});
 		}
 	}
@@ -417,6 +426,15 @@ function collectAllObjectNodesFromTree(
 		readNodeString(node, ["class", "type", "entityType", "ifcClass", "category"]) ??
 		"UNKNOWN";
 	const name = readNodeString(node, ["name", "label"]);
+	const stableEntityCandidate =
+		readNodeString(node, ["guid", "globalId", "globalid", "fileId", "fileid", "entityId", "entityid"]) ??
+		"";
+	const stableEntityLink =
+		stableEntityCandidate &&
+		!/^\d+$/.test(stableEntityCandidate.trim()) &&
+		stableEntityCandidate.trim().length >= 4
+			? `frn:entity:${stableEntityCandidate.trim()}`
+			: undefined;
 
 	if (id && !seen.has(id)) {
 		seen.add(id);
@@ -425,7 +443,7 @@ function collectAllObjectNodesFromTree(
 			name: name ?? `${classOrType} ${id}`,
 			type: classOrType.toUpperCase(),
 			material: "Unknown",
-			link: readNodeString(node, ["frn", "link"]),
+			link: readNodeString(node, ["frn", "link"]) ?? stableEntityLink,
 		});
 	}
 
