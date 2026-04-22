@@ -400,11 +400,39 @@ function renderAssignmentsList(
 		return '<p class="text-sm text-gray-500 italic">No IFC parts loaded for current model.</p>';
 	}
 	const latestByLink = new Map<string, WbsAssignment>();
+	const latestByEntity = new Map<string, WbsAssignment[]>();
+	const getEntityTokenFromAnyFrn = (raw: string | undefined): string => {
+		const link = normalizeKnownLink(raw);
+		if (!link.startsWith("frn:")) return "";
+		if (link.startsWith("frn:entity:")) {
+			return link.slice("frn:entity:".length).trim();
+		}
+		const marker = ":entity:";
+		const idx = link.indexOf(marker);
+		if (idx < 0) return "";
+		return link.slice(idx + marker.length).trim();
+	};
 	for (const item of assignments) {
 		const link = normalizeKnownLink(item.targetLink);
 		if (!link) continue;
 		if (!latestByLink.has(link)) latestByLink.set(link, item);
+		const entityToken = getEntityTokenFromAnyFrn(link);
+		if (entityToken) {
+			const bucket = latestByEntity.get(entityToken) ?? [];
+			bucket.push(item);
+			latestByEntity.set(entityToken, bucket);
+		}
 	}
+	const resolveLatestForLink = (link: string): WbsAssignment | undefined => {
+		const direct = latestByLink.get(link);
+		if (direct) return direct;
+		const entityToken = getEntityTokenFromAnyFrn(link);
+		if (!entityToken) return undefined;
+		const bucket = latestByEntity.get(entityToken) ?? [];
+		return (
+			bucket.find((item) => assignmentMatchesCurrentModel(item)) ?? bucket[0]
+		);
+	};
 	const partByLink = new Map<string, IfcPart>();
 	for (const part of parts) {
 		const link = normalizeKnownLink(part.link);
@@ -452,7 +480,7 @@ function renderAssignmentsList(
 	}
 	const rowsFromParts = resolvedPartRows
 		.map(({ part, directLink, mappedKnownLink, link }) => {
-			const latestRaw = link ? latestByLink.get(link) : undefined;
+			const latestRaw = link ? resolveLatestForLink(link) : undefined;
 			const latest =
 				latestRaw && assignmentMatchesCurrentModel(latestRaw) ? latestRaw : undefined;
 			const staleOtherModel =
@@ -530,7 +558,7 @@ function renderAssignmentsList(
 		.filter((link) => !partByLink.has(link) && !usedKnownLinks.has(link));
 	const rowsFromKnown = knownOnlyLinks
 		.map((link, i) => {
-			const latestRaw = latestByLink.get(link);
+			const latestRaw = resolveLatestForLink(link);
 			const latest =
 				latestRaw && assignmentMatchesCurrentModel(latestRaw) ? latestRaw : undefined;
 			const staleOtherModel =
