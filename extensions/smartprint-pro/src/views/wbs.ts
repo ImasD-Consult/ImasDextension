@@ -101,6 +101,16 @@ function toScopedModelEntityLink(
 	return `frn:tc:project:${pid}:model:${mid}:entity:${entity}`;
 }
 
+function getEntityTokenFromAnyFrn(raw: string | undefined): string {
+	const link = normalizeKnownLink(raw);
+	if (!link.startsWith("frn:")) return "";
+	if (link.startsWith("frn:entity:")) return link.slice("frn:entity:".length).trim();
+	const marker = ":entity:";
+	const idx = link.indexOf(marker);
+	if (idx < 0) return "";
+	return link.slice(idx + marker.length).trim();
+}
+
 function getEntityIdFromFrn(link: string | undefined): string | undefined {
 	const normalized = normalizeKnownLink(link);
 	if (!normalized.startsWith("frn:entity:")) return undefined;
@@ -401,17 +411,6 @@ function renderAssignmentsList(
 	}
 	const latestByLink = new Map<string, WbsAssignment>();
 	const latestByEntity = new Map<string, WbsAssignment[]>();
-	const getEntityTokenFromAnyFrn = (raw: string | undefined): string => {
-		const link = normalizeKnownLink(raw);
-		if (!link.startsWith("frn:")) return "";
-		if (link.startsWith("frn:entity:")) {
-			return link.slice("frn:entity:".length).trim();
-		}
-		const marker = ":entity:";
-		const idx = link.indexOf(marker);
-		if (idx < 0) return "";
-		return link.slice(idx + marker.length).trim();
-	};
 	for (const item of assignments) {
 		const link = normalizeKnownLink(item.targetLink);
 		if (!link) continue;
@@ -651,7 +650,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.41)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.42)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -747,7 +746,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.41)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.42)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1309,12 +1308,15 @@ export async function renderWbs(
 
 	async function buildCurrentModelLinkScope(): Promise<Set<string>> {
 		const out = new Set<string>();
+		const currentEntityIds = new Set<string>();
 		const activeModelId = getActiveModelId();
 		const project = await api.project.getProject();
 		const projectId = project?.id;
 		for (const part of getAssignableParts()) {
 			const l = normalizeKnownLink(part.link);
 			if (l.startsWith("frn:")) out.add(l);
+			const entity = getEntityTokenFromAnyFrn(l);
+			if (entity) currentEntityIds.add(entity);
 			const scoped = toScopedModelEntityLink(l, projectId, part.modelId ?? activeModelId);
 			if (scoped.startsWith("frn:")) out.add(scoped);
 		}
@@ -1324,7 +1326,16 @@ export async function renderWbs(
 			if (!fid || /^\d+$/.test(fid)) continue;
 			const base = normalizeKnownLink(`frn:entity:${fid}`);
 			out.add(base);
+			currentEntityIds.add(fid);
 			const scoped = toScopedModelEntityLink(base, projectId, activeModelId);
+			if (scoped.startsWith("frn:")) out.add(scoped);
+		}
+		for (const known of knownLibraryLinks) {
+			const normalized = normalizeKnownLink(known);
+			const entity = getEntityTokenFromAnyFrn(normalized);
+			if (!entity || !currentEntityIds.has(entity)) continue;
+			out.add(normalized);
+			const scoped = toScopedModelEntityLink(normalized, projectId, activeModelId);
 			if (scoped.startsWith("frn:")) out.add(scoped);
 		}
 		return out;
@@ -2532,17 +2543,8 @@ export async function renderWbs(
 		const ghostCount = Math.max(0, getAssignableParts().length - readyCount);
 		if (!ensuredLibraryModelIds.has(selectedModelId)) {
 			try {
-				const project = await api.project.getProject();
-				const projectId = project?.id;
-				const seedTargets = getAssignableParts()
-					.map((part) => ({
-						link: toScopedModelEntityLink(
-							part.link,
-							projectId,
-							part.modelId ?? selectedModelId,
-						),
-						value: "",
-					}))
+				const seedTargets = [...(await buildCurrentModelLinkScope())]
+					.map((link) => ({ link: normalizeKnownLink(link), value: "" }))
 					.filter((t) => t.link.startsWith("frn:"));
 				const ensured = await ensureWbsLibraryAndAssignmentsForLinks(
 					api,
