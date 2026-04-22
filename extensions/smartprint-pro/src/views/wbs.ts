@@ -456,13 +456,12 @@ function renderAssignmentsList(
 	knownLinks: string[],
 	selectedWbsRowIndex: number | null,
 	activeModelScopeIds: string[],
-	includeKnownOnlyTargets: boolean,
 ): string {
 	const scope = [...new Set(activeModelScopeIds.map((s) => s.trim()).filter(Boolean))];
 	function assignmentMatchesCurrentModel(item: WbsAssignment): boolean {
 		if (scope.length === 0) return true;
 		const mid = item.modelId?.trim();
-		if (!mid) return false;
+		if (!mid) return true;
 		return scope.includes(mid);
 	}
 	const hasKnownPsetLinks = knownLinks.some((l) => Boolean(normalizeKnownLink(l)));
@@ -593,12 +592,10 @@ function renderAssignmentsList(
     `;
 		})
 		.join("");
-	const knownOnlyLinks = includeKnownOnlyTargets
-		? knownLinks
-				.map((l) => normalizeKnownLink(l))
-				.filter((link): link is string => Boolean(link))
-				.filter((link) => !partByLink.has(link) && !usedKnownLinks.has(link))
-		: [];
+	const knownOnlyLinks = knownLinks
+		.map((l) => normalizeKnownLink(l))
+		.filter((link): link is string => Boolean(link))
+		.filter((link) => !partByLink.has(link) && !usedKnownLinks.has(link));
 	const rowsFromKnown = knownOnlyLinks
 		.map((link, i) => {
 			const latestRaw = latestByLink.get(link);
@@ -652,10 +649,7 @@ function renderAssignmentsList(
 		.join("");
 	const rows = `${rowsFromParts}${rowsFromKnown}`;
 	if (!rows.trim()) {
-		const scopedAssignments = assignments.filter((a) =>
-			assignmentMatchesCurrentModel(a),
-		).length;
-		return `<p class="text-sm text-gray-500 italic">No actionable targets: IFC rows with no link and no valid 3D runtime are hidden. Scope debug: parts=${parts.length}, knownLinks=${knownLinks.length}, assignments=${scopedAssignments}. Wait for known PSet links to load, or reload the model.</p>`;
+		return '<p class="text-sm text-gray-500 italic">No actionable targets: IFC rows with no link and no valid 3D runtime are hidden. Wait for known PSet links to load, or reload the model.</p>';
 	}
 	return `
     <div class="rounded border border-gray-200 overflow-hidden">
@@ -1322,7 +1316,6 @@ export async function renderWbs(
 	const nameByRuntimeId = new Map<number, string>();
 	let hierarchyCacheModelId = "";
 	let knownLibraryLinks: string[] = [];
-	let scopedKnownLibraryLinks: string[] = [];
 	const ensuredLibraryModelIds = new Set<string>();
 	/** Stable `frn:entity:*` → viewer runtime for highlights (rebuilt per model load). */
 	const entityLinkToRuntimeCache = new Map<
@@ -1332,10 +1325,9 @@ export async function renderWbs(
 
 	function refreshKnownLinkOptions(): void {
 		if (!knownLinkSelectEl) return;
-		const sourceLinks = viewerOnly ? scopedKnownLibraryLinks : knownLibraryLinks;
 		knownLinkSelectEl.innerHTML =
 			'<option value="">Known link target (required for Assign)</option>' +
-			sourceLinks
+			knownLibraryLinks
 				.map((l, i) => {
 					const suffix = l.length > 56 ? `${l.slice(0, 28)}...${l.slice(-22)}` : l;
 					return `<option value="${escapeHtml(l)}">#${i + 1} ${escapeHtml(suffix)}</option>`;
@@ -1345,55 +1337,14 @@ export async function renderWbs(
 
 	function refreshKnownLinkHint(): void {
 		if (!knownLinkHintEl) return;
-		const count = viewerOnly
-			? scopedKnownLibraryLinks.length
-			: knownLibraryLinks.length;
 		const selected = knownLinkSelectEl?.value?.trim();
 		knownLinkHintEl.textContent = selected
 			? `Known link fallback selected: ${selected}`
-			: `Known targets loaded: ${count}`;
+			: `Known targets loaded: ${knownLibraryLinks.length}`;
 	}
 
 	function getAssignableParts(): IfcPart[] {
 		return parts;
-	}
-
-	async function buildActiveModelLinkScope(): Promise<Set<string>> {
-		const scoped = new Set(
-			getAssignableParts()
-				.map((p) => normalizeKnownLink(p.link))
-				.filter((l): l is string => l.startsWith("frn:entity:")),
-		);
-		if (scoped.size > 0) return scoped;
-		await ensureHierarchyCacheForActiveModel();
-		const MAX_STEPS = 256;
-		for (const part of getAssignableParts()) {
-			let cur = Number(part.id);
-			if (Number.isNaN(cur)) continue;
-			let guard = 0;
-			while (!Number.isNaN(cur) && guard < MAX_STEPS) {
-				const fileId = fileIdByRuntimeId.get(cur);
-				if (fileId && !/^\d+$/.test(fileId) && fileId.trim().length >= 8) {
-					scoped.add(normalizeKnownLink(`frn:entity:${fileId.trim()}`));
-				}
-				const parent = parentByRuntimeId.get(cur);
-				if (parent == null) break;
-				cur = parent;
-				guard += 1;
-			}
-		}
-		return scoped;
-	}
-
-	async function refreshScopedKnownLinksForActiveModel(): Promise<void> {
-		if (!viewerOnly) {
-			scopedKnownLibraryLinks = [...knownLibraryLinks];
-			return;
-		}
-		const scope = await buildActiveModelLinkScope();
-		scopedKnownLibraryLinks = knownLibraryLinks.filter((l) =>
-			scope.has(normalizeKnownLink(l)),
-		);
 	}
 
 	function refreshAssignments(): void {
@@ -1404,14 +1355,12 @@ export async function renderWbs(
 		const modelScope = [active, open?.versionId, open?.id].filter(
 			(x): x is string => typeof x === "string" && x.trim().length > 0,
 		);
-		const linksForRender = viewerOnly ? scopedKnownLibraryLinks : knownLibraryLinks;
 		assignmentsListEl.innerHTML = renderAssignmentsList(
 			assignments,
 			getAssignableParts(),
-			linksForRender,
+			knownLibraryLinks,
 			selectedWbsRowIndex,
 			modelScope,
-			true,
 		);
 	}
 
@@ -2266,10 +2215,7 @@ export async function renderWbs(
 		return null;
 	}
 
-	function mergeAssignmentsFromPsetApi(
-		apiRows: WbsPsetModelAssignmentRow[],
-		allowedLinks?: Set<string>,
-	): void {
+	function mergeAssignmentsFromPsetApi(apiRows: WbsPsetModelAssignmentRow[]): void {
 		if (!apiRows.length) return;
 		const activeModelId = getActiveModelId();
 		const byLink = new Map<string, WbsAssignment>();
@@ -2282,7 +2228,6 @@ export async function renderWbs(
 		for (const row of apiRows) {
 			const k = normalizeKnownLink(row.link);
 			if (!k) continue;
-			if (allowedLinks && allowedLinks.size > 0 && !allowedLinks.has(k)) continue;
 			const idx = findWbsRowIndexForPsetValue(row.value);
 			const prev = byLink.get(k);
 			const wbsValues =
@@ -2629,7 +2574,6 @@ export async function renderWbs(
 		parts = await hydrateLinksFromObjectPropertiesStrict(parts);
 		parts = await hydrateLinksFromKnownRegistry(parts);
 		parts = await applyParentFallbackLinks(parts);
-		await refreshScopedKnownLinksForActiveModel();
 		for (const p of parts) {
 			const l = normalizeKnownLink(p.link);
 			if (!l.startsWith("frn:entity:")) continue;
@@ -2703,7 +2647,6 @@ export async function renderWbs(
 			knownLibraryLinks = [
 				...new Set(res.links.map((l) => normalizeKnownLink(l)).filter(Boolean)),
 			];
-			await refreshScopedKnownLinksForActiveModel();
 
 			refreshKnownLinkOptions();
 			refreshKnownLinkHint();
@@ -2722,10 +2665,8 @@ export async function renderWbs(
 	/** Full PSet list fetch + merge — keep off the hot path (avoid racing writes / duplicate list walks). */
 	async function hydrateWbsAssignmentsFromPsetApi(silent = true): Promise<void> {
 		try {
-			const allowedLinks = await buildActiveModelLinkScope();
-			if (allowedLinks.size === 0) return;
 			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
-			mergeAssignmentsFromPsetApi(hydrated.items, allowedLinks);
+			mergeAssignmentsFromPsetApi(hydrated.items);
 			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		} catch (hydrateErr) {
