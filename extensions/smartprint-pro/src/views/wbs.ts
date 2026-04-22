@@ -24,12 +24,6 @@ type WbsTableData = {
 const WBS_STORAGE_KEY = "smartprintpro:wbs:uploaded-file";
 const WBS_ASSIGNMENTS_STORAGE_KEY = "smartprintpro:wbs:assignments";
 
-type StoredWbsFile = {
-	name: string;
-	mimeType: string;
-	base64: string;
-};
-
 type IfcPart = {
 	id: string;
 	name: string;
@@ -239,99 +233,13 @@ function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
 	return { headers, rows };
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-	const bytes = new Uint8Array(buffer);
-	let binary = "";
-	for (let index = 0; index < bytes.length; index += 1) {
-		binary += String.fromCharCode(bytes[index]);
-	}
-	return btoa(binary);
-}
-
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-	const binary = atob(base64);
-	const bytes = new Uint8Array(binary.length);
-	for (let index = 0; index < binary.length; index += 1) {
-		bytes[index] = binary.charCodeAt(index);
-	}
-	return bytes.buffer;
-}
-
-function saveFileToLocalStorage(file: File, fileBuffer: ArrayBuffer): void {
-	const payload: StoredWbsFile = {
-		name: file.name,
-		mimeType: file.type,
-		base64: arrayBufferToBase64(fileBuffer),
-	};
-	localStorage.setItem(WBS_STORAGE_KEY, JSON.stringify(payload));
-}
-
-function loadFileFromLocalStorage(): StoredWbsFile | null {
+function clearLocalWbsCache(): void {
 	try {
-		const raw = localStorage.getItem(WBS_STORAGE_KEY);
-		if (!raw) return null;
-		const parsed = JSON.parse(raw) as Partial<StoredWbsFile>;
-		if (!parsed.name || !parsed.base64) return null;
-		return {
-			name: parsed.name,
-			mimeType: parsed.mimeType ?? "",
-			base64: parsed.base64,
-		};
+		localStorage.removeItem(WBS_STORAGE_KEY);
+		localStorage.removeItem(WBS_ASSIGNMENTS_STORAGE_KEY);
 	} catch {
-		return null;
+		/* ignore cache cleanup errors */
 	}
-}
-
-type WbsAssignmentsStoreV1 = {
-	v: 1;
-	projectId: string;
-	items: WbsAssignment[];
-};
-
-function migrateKnownLinkTargetPartIds(rows: WbsAssignment[]): WbsAssignment[] {
-	return rows.map((item) => {
-		if (item.partId === "known-link-target" && item.targetLink) {
-			const nl = normalizeKnownLink(item.targetLink);
-			if (nl) return { ...item, partId: nl };
-		}
-		return item;
-	});
-}
-
-/** Scoped by Connect project id so another project cannot reuse cached rows. */
-function loadAssignmentsFromLocalStorage(projectId: string): WbsAssignment[] {
-	try {
-		const raw = localStorage.getItem(WBS_ASSIGNMENTS_STORAGE_KEY);
-		if (!raw) return [];
-		const parsed = JSON.parse(raw) as unknown;
-		// Legacy flat array (no project): do not apply to a real project id (cross-project bleed).
-		if (Array.isArray(parsed)) {
-			if (projectId) return [];
-			return migrateKnownLinkTargetPartIds(parsed as WbsAssignment[]);
-		}
-		if (!parsed || typeof parsed !== "object") return [];
-		const rec = parsed as Partial<WbsAssignmentsStoreV1>;
-		if (rec.v !== 1 || !Array.isArray(rec.items)) return [];
-		const storedPid = (rec.projectId ?? "").trim();
-		if (projectId) {
-			if (!storedPid || storedPid !== projectId) return [];
-		} else if (storedPid) {
-			// Scoped rows for a project, but we could not read the current project id yet.
-			return [];
-		}
-		return migrateKnownLinkTargetPartIds(rec.items);
-	} catch {
-		return [];
-	}
-}
-
-function saveAssignmentsToLocalStorage(projectId: string, assignments: WbsAssignment[]): void {
-	const payload: WbsAssignmentsStoreV1 = {
-		v: 1,
-		projectId: projectId.trim(),
-		items: assignments,
-	};
-	localStorage.setItem(WBS_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(payload));
 }
 
 function renderTable(
@@ -681,13 +589,7 @@ export async function renderWbs(
 	api: WorkspaceApi,
 	options?: RenderWbsOptions,
 ): Promise<void> {
-	let wbsProjectId = "";
-	try {
-		wbsProjectId = (await api.project.getProject())?.id?.trim() ?? "";
-	} catch {
-		wbsProjectId = "";
-	}
-
+	clearLocalWbsCache();
 	const viewerOnly = options?.useViewerModelOnly === true;
 	const dockLayout = viewerOnly && options?.horizontalDockLayout === true;
 
@@ -696,7 +598,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.25)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.36)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -792,7 +694,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.25)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.36)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1309,7 +1211,7 @@ export async function renderWbs(
 	const partsByModelId = new Map<string, IfcPart[]>();
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
-	let assignments = loadAssignmentsFromLocalStorage(wbsProjectId);
+	let assignments: WbsAssignment[] = [];
 	let assignmentsModelId = "";
 	const parentByRuntimeId = new Map<number, number | null>();
 	const fileIdByRuntimeId = new Map<number, string>();
@@ -2514,7 +2416,6 @@ export async function renderWbs(
 		}
 		if (assignmentsModelId && assignmentsModelId !== selectedModelId) {
 			assignments = [];
-			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		}
 		assignmentsModelId = selectedModelId;
@@ -2667,7 +2568,6 @@ export async function renderWbs(
 		try {
 			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
 			mergeAssignmentsFromPsetApi(hydrated.items);
-			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		} catch (hydrateErr) {
 			if (!silent) {
@@ -2794,18 +2694,6 @@ export async function renderWbs(
 	}
 
 	refreshAssignments();
-
-	const cachedFile = loadFileFromLocalStorage();
-	if (cachedFile) {
-		try {
-			tableData = parseWorkbookToTableData(base64ToArrayBuffer(cachedFile.base64));
-			refreshWbsTable();
-			status.textContent = `Loaded ${cachedFile.name} from local storage (${tableData.rows.length} rows). Select a WBS row.`;
-		} catch {
-			setStatus("Stored WBS file is invalid. Please upload again.", "error");
-			localStorage.removeItem(WBS_STORAGE_KEY);
-		}
-	}
 
 	if (viewerOnly && api.viewer?.getModels) {
 		window.setInterval(() => {
@@ -3095,7 +2983,6 @@ export async function renderWbs(
 					assignments[idx] = { ...assignments[idx], propertyName: writeResult.propertyName };
 				}
 			}
-			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 			void resolveRuntimeForEntityLink(fallbackKnownLink).then((hit) => {
 				if (hit) {
@@ -3123,7 +3010,6 @@ export async function renderWbs(
 			const message =
 				error instanceof Error ? error.message : "Failed to write property set.";
 			setStatus(`Assignment failed: ${message}. Target: ${targetSummary}`, "error");
-			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		}
 	}
@@ -3345,10 +3231,9 @@ export async function renderWbs(
 			selectedWbsRowIndex = null;
 			wbsFilterValue = "";
 			descriptionFilterValue = "";
-			saveFileToLocalStorage(selectedFile, fileBuffer);
 			refreshWbsTable();
 			setStatus(
-				`Loaded ${selectedFile.name} (${tableData.rows.length} rows). File saved locally.`,
+				`Loaded ${selectedFile.name} (${tableData.rows.length} rows).`,
 			);
 		} catch (error) {
 			const message =
