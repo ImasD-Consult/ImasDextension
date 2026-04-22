@@ -84,6 +84,23 @@ function normalizeKnownLink(raw: string | undefined): string {
 	return `${prefix}${entity}`;
 }
 
+function toScopedModelEntityLink(
+	rawLink: string | undefined,
+	projectId: string | undefined,
+	modelId: string | undefined,
+): string {
+	const normalized = normalizeKnownLink(rawLink);
+	if (!normalized) return "";
+	if (normalized.startsWith("frn:tc:project:")) return normalized;
+	if (!normalized.startsWith("frn:entity:")) return normalized;
+	const pid = (projectId ?? "").trim();
+	const mid = (modelId ?? "").trim();
+	if (!pid || !mid) return normalized;
+	const entity = normalized.slice("frn:entity:".length).trim();
+	if (!entity) return normalized;
+	return `frn:tc:project:${pid}:model:${mid}:entity:${entity}`;
+}
+
 function getEntityIdFromFrn(link: string | undefined): string | undefined {
 	const normalized = normalizeKnownLink(link);
 	if (!normalized.startsWith("frn:entity:")) return undefined;
@@ -606,7 +623,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.39)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.40)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -702,7 +719,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.39)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.40)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1260,6 +1277,29 @@ export async function renderWbs(
 
 	function getAssignableParts(): IfcPart[] {
 		return parts;
+	}
+
+	async function buildCurrentModelLinkScope(): Promise<Set<string>> {
+		const out = new Set<string>();
+		const activeModelId = getActiveModelId();
+		const project = await api.project.getProject();
+		const projectId = project?.id;
+		for (const part of getAssignableParts()) {
+			const l = normalizeKnownLink(part.link);
+			if (l.startsWith("frn:")) out.add(l);
+			const scoped = toScopedModelEntityLink(l, projectId, part.modelId ?? activeModelId);
+			if (scoped.startsWith("frn:")) out.add(scoped);
+		}
+		await ensureHierarchyCacheForActiveModel();
+		for (const fileId of fileIdByRuntimeId.values()) {
+			const fid = (fileId ?? "").trim();
+			if (!fid || /^\d+$/.test(fid)) continue;
+			const base = normalizeKnownLink(`frn:entity:${fid}`);
+			out.add(base);
+			const scoped = toScopedModelEntityLink(base, projectId, activeModelId);
+			if (scoped.startsWith("frn:")) out.add(scoped);
+		}
+		return out;
 	}
 
 	function refreshAssignments(): void {
@@ -2464,12 +2504,18 @@ export async function renderWbs(
 		const ghostCount = Math.max(0, getAssignableParts().length - readyCount);
 		if (!ensuredLibraryModelIds.has(selectedModelId)) {
 			try {
+				const project = await api.project.getProject();
+				const projectId = project?.id;
 				const seedTargets = getAssignableParts()
 					.map((part) => ({
-						link: normalizeKnownLink(part.link),
+						link: toScopedModelEntityLink(
+							part.link,
+							projectId,
+							part.modelId ?? selectedModelId,
+						),
 						value: "",
 					}))
-					.filter((t) => t.link.startsWith("frn:entity:"));
+					.filter((t) => t.link.startsWith("frn:"));
 				const ensured = await ensureWbsLibraryAndAssignmentsForLinks(
 					api,
 					seedTargets,
@@ -2520,7 +2566,14 @@ export async function renderWbs(
 	async function hydrateWbsAssignmentsFromPsetApi(silent = true): Promise<void> {
 		try {
 			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
-			mergeAssignmentsFromPsetApi(hydrated.items);
+			const allowedLinks = await buildCurrentModelLinkScope();
+			const filteredItems =
+				allowedLinks.size > 0
+					? hydrated.items.filter((row) =>
+							allowedLinks.has(normalizeKnownLink(row.link)),
+						)
+					: [];
+			mergeAssignmentsFromPsetApi(filteredItems);
 			refreshAssignments();
 		} catch (hydrateErr) {
 			if (!silent) {
@@ -2849,11 +2902,17 @@ export async function renderWbs(
 					} as IfcPart,
 				];
 		const now = new Date().toISOString();
+		const project = await api.project.getProject();
+		const projectId = project?.id;
 
 		selectedPartsForWrite.forEach((part) => {
 			assignments = assignments.filter((item) => item.partId !== part.id);
 			const propertySetValue = buildWbsPropertyValue(selectedRow);
-			const effectiveLink = (part.link || fallbackKnownLink || "").trim();
+			const effectiveLink = toScopedModelEntityLink(
+				part.link || fallbackKnownLink,
+				projectId,
+				part.modelId ?? getActiveModelId(),
+			);
 			assignments.push({
 				partId: part.id,
 				partName: part.name,
@@ -2874,7 +2933,11 @@ export async function renderWbs(
 			modelId: part.modelId ?? getActiveModelId(),
 			partId: part.id,
 			value: buildWbsPropertyValue(selectedRow),
-			link: part.link || fallbackKnownLink,
+			link: toScopedModelEntityLink(
+				part.link || fallbackKnownLink,
+				projectId,
+				part.modelId ?? getActiveModelId(),
+			),
 		}));
 		const targetSummary = summarizeWriteTargets(selectedPartsForWrite, fallbackKnownLink);
 		try {
@@ -2892,9 +2955,14 @@ export async function renderWbs(
 				}
 			});
 			const writtenValue = buildWbsPropertyValue(selectedRow);
+			const verifyLink = toScopedModelEntityLink(
+				fallbackKnownLink,
+				projectId,
+				getActiveModelId(),
+			);
 			const verify = await verifyWbsValueByLink(
 				api,
-				normalizeKnownLink(fallbackKnownLink),
+				normalizeKnownLink(verifyLink || fallbackKnownLink),
 				writtenValue,
 			);
 			const baseMsg = `Assigned WBS row ${assignedRowIndex + 4}. PSet: def=${writeResult.defId}, prop=${writeResult.propertyName}. Target: ${targetSummary}`;

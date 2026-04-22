@@ -866,11 +866,18 @@ export async function writeWbsPropertySetValues(
 	function resolveChangesetItemLink(item: WbsPsetWriteItem): string {
 		const explicitLink = item.link?.trim() ?? "";
 		const candidate = item.partId?.trim() ?? "";
-		if (explicitLink.startsWith("frn:")) return explicitLink;
-		if (candidate.startsWith("frn:")) return candidate;
+		const scopeEntityLink = (link: string): string => {
+			if (!link.startsWith("frn:entity:")) return link;
+			const entity = link.slice("frn:entity:".length).trim();
+			const modelId = item.modelId?.trim();
+			if (!entity || !modelId) return link;
+			return `frn:tc:project:${project.id}:model:${modelId}:entity:${entity}`;
+		};
+		if (explicitLink.startsWith("frn:")) return scopeEntityLink(explicitLink);
+		if (candidate.startsWith("frn:")) return scopeEntityLink(candidate);
 		if (explicitLink) return explicitLink;
 		if (candidate && !/^\d+$/.test(candidate) && candidate.length >= 10) {
-			return `frn:entity:${candidate}`;
+			return scopeEntityLink(`frn:entity:${candidate}`);
 		}
 		throw new Error(
 			`Could not resolve stable entity link for selected object "${item.partId}". ` +
