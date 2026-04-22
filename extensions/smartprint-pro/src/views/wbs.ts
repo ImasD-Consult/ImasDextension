@@ -2678,6 +2678,25 @@ export async function renderWbs(
 					.map((p) => normalizeKnownLink(p.link))
 					.filter((l): l is string => l.startsWith("frn:entity:")),
 			);
+			if (allowedLinks.size === 0) {
+				await ensureHierarchyCacheForActiveModel();
+				const MAX_STEPS = 256;
+				for (const part of getAssignableParts()) {
+					let cur = Number(part.id);
+					if (Number.isNaN(cur)) continue;
+					let guard = 0;
+					while (!Number.isNaN(cur) && guard < MAX_STEPS) {
+						const fileId = fileIdByRuntimeId.get(cur);
+						if (fileId && !/^\d+$/.test(fileId) && fileId.trim().length >= 8) {
+							allowedLinks.add(normalizeKnownLink(`frn:entity:${fileId.trim()}`));
+						}
+						const parent = parentByRuntimeId.get(cur);
+						if (parent == null) break;
+						cur = parent;
+						guard += 1;
+					}
+				}
+			}
 			if (allowedLinks.size === 0) return;
 			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
 			mergeAssignmentsFromPsetApi(hydrated.items, allowedLinks);
