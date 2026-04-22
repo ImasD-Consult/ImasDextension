@@ -315,7 +315,7 @@ function renderTable(
           data-description-filter
         />
       </div>
-      <div class="${tableScrollClass}">
+      <div class="${tableScrollClass}" data-wbs-table-scroll>
         <table class="min-w-full border-collapse">
           <thead class="sticky top-0 z-10">
             <tr>${headerCells}</tr>
@@ -364,7 +364,11 @@ function renderAssignmentsList(
 	knownLinks: string[],
 	selectedWbsRowIndex: number | null,
 	activeModelScopeIds: string[],
+	nameFilter: string,
+	classFilter: string,
 ): string {
+	const normalizedNameFilter = nameFilter.trim().toLowerCase();
+	const normalizedClassFilter = classFilter.trim().toLowerCase();
 	const scope = [...new Set(activeModelScopeIds.map((s) => s.trim()).filter(Boolean))];
 	function assignmentMatchesCurrentModel(item: WbsAssignment): boolean {
 		if (scope.length === 0) return true;
@@ -409,7 +413,30 @@ function renderAssignmentsList(
 		link: string;
 	};
 	const resolvedPartRows: PartRowResolved[] = [];
+	const seenAssemblyKeys = new Set<string>();
 	for (const part of parts) {
+		const typeUpper = (part.type ?? "").trim().toUpperCase();
+		const isAssemblyLike = typeUpper.includes("ASSEMBLY");
+		const usingParentAssembly = Boolean(part.resolvedViaParent || (!isAssemblyLike && part.targetRuntimeId));
+		if (!isAssemblyLike && !usingParentAssembly) continue;
+		const assemblyRid = (usingParentAssembly ? part.targetRuntimeId : part.id)?.trim() || part.id;
+		const assemblyName =
+			(usingParentAssembly ? part.targetName : part.name)?.trim() || part.name;
+		const assemblyType = isAssemblyLike ? part.type : "IFCASSEMBLY";
+		const assemblyLink = normalizeKnownLink(part.link);
+		const assemblyKey = assemblyLink || `asm:${assemblyRid}`;
+		if (seenAssemblyKeys.has(assemblyKey)) continue;
+		seenAssemblyKeys.add(assemblyKey);
+
+		const assemblyPart: IfcPart = {
+			...part,
+			id: assemblyRid,
+			name: assemblyName,
+			type: assemblyType,
+			targetRuntimeId: assemblyRid,
+			targetName: assemblyName,
+			resolvedViaParent: false,
+		};
 		const directLink = normalizeKnownLink(part.link);
 		const sig = `${(part.name ?? "").trim().toUpperCase()}::${(part.type ?? "")
 			.trim()
@@ -421,7 +448,12 @@ function renderAssignmentsList(
 				: undefined;
 		const link = directLink || mappedKnownLink || "";
 		if (link && knownLinkSet.has(link)) usedKnownLinks.add(link);
-		resolvedPartRows.push({ part, directLink, mappedKnownLink, link });
+		resolvedPartRows.push({
+			part: assemblyPart,
+			directLink,
+			mappedKnownLink,
+			link,
+		});
 	}
 	const rowsFromParts = resolvedPartRows
 		.map(({ part, directLink, mappedKnownLink, link }) => {
@@ -477,6 +509,12 @@ function renderAssignmentsList(
 				: selectedWbsRowIndex === null
 					? "Select a WBS row first"
 					: "Target has no writable link";
+			if (
+				(normalizedNameFilter && !displayName.toLowerCase().includes(normalizedNameFilter)) ||
+				(normalizedClassFilter && !className.toLowerCase().includes(normalizedClassFilter))
+			) {
+				return "";
+			}
 			return `
       <tr class="hover:bg-gray-50">
         <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(displayName)}</td>
@@ -530,6 +568,12 @@ function renderAssignmentsList(
 			const assignTitle = canAssign
 				? "Assign selected WBS row to this known target"
 				: "Select a WBS row first";
+			if (
+				(normalizedNameFilter && !name.toLowerCase().includes(normalizedNameFilter)) ||
+				(normalizedClassFilter && !className.toLowerCase().includes(normalizedClassFilter))
+			) {
+				return "";
+			}
 			return `
       <tr class="hover:bg-gray-50 bg-sky-50/30">
         <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(name)}</td>
@@ -554,7 +598,23 @@ function renderAssignmentsList(
 	}
 	return `
     <div class="rounded border border-gray-200 overflow-hidden">
-      <div class="max-h-[32vh] overflow-auto">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 p-2 border-b border-gray-200 bg-gray-50">
+        <input
+          type="text"
+          value="${escapeHtml(nameFilter)}"
+          placeholder="Filter Name"
+          class="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+          data-assign-name-filter
+        />
+        <input
+          type="text"
+          value="${escapeHtml(classFilter)}"
+          placeholder="Filter Class"
+          class="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+          data-assign-class-filter
+        />
+      </div>
+      <div class="max-h-[32vh] overflow-auto" data-assignments-scroll>
         <table class="min-w-full border-collapse">
           <thead class="sticky top-0 bg-gray-50 z-10">
             <tr>
@@ -591,7 +651,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.27)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.28)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -687,7 +747,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.27)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.28)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1200,6 +1260,8 @@ export async function renderWbs(
 	let selectedWbsRowIndex: number | null = null;
 	let wbsFilterValue = "";
 	let descriptionFilterValue = "";
+	let assignmentNameFilterValue = "";
+	let assignmentClassFilterValue = "";
 	let allIfcModels: IfcModelOption[] = [];
 	const partsByModelId = new Map<string, IfcPart[]>();
 	let parts: IfcPart[] = [];
@@ -1276,6 +1338,9 @@ export async function renderWbs(
 	}
 
 	function refreshAssignments(): void {
+		const prevScroll =
+			assignmentsListEl.querySelector<HTMLElement>("[data-assignments-scroll]")
+				?.scrollTop ?? 0;
 		const active = getActiveModelId();
 		const open = allIfcModels.find(
 			(m) => active && (m.id === active || m.versionId === active),
@@ -1290,7 +1355,13 @@ export async function renderWbs(
 			linksForRender,
 			selectedWbsRowIndex,
 			modelScope,
+			assignmentNameFilterValue,
+			assignmentClassFilterValue,
 		);
+		const nextScroll = assignmentsListEl.querySelector<HTMLElement>(
+			"[data-assignments-scroll]",
+		);
+		if (nextScroll) nextScroll.scrollTop = prevScroll;
 	}
 
 	function refreshAssignButton(): void {
@@ -2374,6 +2445,9 @@ export async function renderWbs(
 			  }
 			| undefined,
 	): void {
+		const prevScroll =
+			tableContainerEl.querySelector<HTMLElement>("[data-wbs-table-scroll]")
+				?.scrollTop ?? 0;
 		tableContainerEl.innerHTML = renderTable(
 			tableData,
 			selectedWbsRowIndex,
@@ -2397,6 +2471,10 @@ export async function renderWbs(
 				);
 			}
 		}
+		const nextScroll = tableContainerEl.querySelector<HTMLElement>(
+			"[data-wbs-table-scroll]",
+		);
+		if (nextScroll) nextScroll.scrollTop = prevScroll;
 		refreshAssignButton();
 		refreshAssignments();
 	}
@@ -2519,10 +2597,6 @@ export async function renderWbs(
 		for (const id of [...selectedPartIds]) {
 			if (!assignableIds.has(id)) selectedPartIds.delete(id);
 		}
-		parentByRuntimeId.clear();
-		fileIdByRuntimeId.clear();
-		nameByRuntimeId.clear();
-		hierarchyCacheModelId = "";
 		refreshPartFilters();
 		refreshPartsList();
 		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
@@ -2932,6 +3006,22 @@ export async function renderWbs(
 					descriptionFilterInput.selectionEnd ??
 					descriptionFilterInput.value.length,
 			});
+			return;
+		}
+		const assignmentNameFilterInput = target.closest<HTMLInputElement>(
+			"[data-assign-name-filter]",
+		);
+		if (assignmentNameFilterInput) {
+			assignmentNameFilterValue = assignmentNameFilterInput.value;
+			refreshAssignments();
+			return;
+		}
+		const assignmentClassFilterInput = target.closest<HTMLInputElement>(
+			"[data-assign-class-filter]",
+		);
+		if (assignmentClassFilterInput) {
+			assignmentClassFilterValue = assignmentClassFilterInput.value;
+			refreshAssignments();
 		}
 	});
 
