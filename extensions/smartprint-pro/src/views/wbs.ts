@@ -61,7 +61,7 @@ type IfcModelOption = {
 function isWritableLink(link: string | undefined): boolean {
 	const l = link?.trim();
 	if (!l) return false;
-	return l.startsWith("frn:entity:");
+	return l.startsWith("frn:");
 }
 
 function normalizeKnownLink(raw: string | undefined): string {
@@ -673,7 +673,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.32)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.33)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -769,7 +769,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.32)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.33)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1335,7 +1335,7 @@ export async function renderWbs(
 		const scoped = new Set<string>();
 		for (const part of getAssignableParts()) {
 			const link = normalizeKnownLink(part.link);
-			if (link.startsWith("frn:entity:")) scoped.add(link);
+			if (link.startsWith("frn:")) scoped.add(link);
 		}
 		// Robust fallback: include all stable entity ids from active model hierarchy,
 		// not just currently resolved part links.
@@ -2631,7 +2631,7 @@ export async function renderWbs(
 		await refreshScopedKnownLinksForActiveModel();
 		for (const p of parts) {
 			const l = normalizeKnownLink(p.link);
-			if (!l.startsWith("frn:entity:")) continue;
+			if (!l.startsWith("frn:")) continue;
 			const rid = Number(p.id);
 			if (!isValidRuntimeId(rid)) continue;
 			const mid = p.modelId ?? selectedModelId;
@@ -2666,7 +2666,7 @@ export async function renderWbs(
 						link: normalizeKnownLink(part.link),
 						value: "",
 					}))
-					.filter((t) => t.link.startsWith("frn:entity:"));
+					.filter((t) => t.link.startsWith("frn:"));
 				const ensured = await ensureWbsLibraryAndAssignmentsForLinks(
 					api,
 					seedTargets,
