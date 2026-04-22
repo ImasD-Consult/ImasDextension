@@ -369,15 +369,6 @@ function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], see
 		normalized.includes("ifcelementassembly") ||
 		normalized === "assembly" ||
 		normalized.endsWith("assembly");
-	const guidLikeId =
-		readNodeString(node, ["guid", "globalId", "globalid", "fileId", "fileid", "entityId", "entityid"]) ??
-		"";
-	const stableEntityLink =
-		guidLikeId &&
-		!/^\d+$/.test(guidLikeId.trim()) &&
-		guidLikeId.trim().length >= 4
-			? `frn:entity:${guidLikeId.trim()}`
-			: undefined;
 	if (isAssemblyNode) {
 		const id =
 			readNodeString(node, ["guid", "id", "runtimeId", "entityId"]) ??
@@ -389,7 +380,7 @@ function collectIfcAssembliesFromTree(tree: unknown, acc: IfcAssemblyItem[], see
 				name: readNodeString(node, ["name", "label"]) ?? `Assembly ${id}`,
 				type: "IFCELEMENTASSEMBLY",
 				material: "Unknown",
-				link: readNodeString(node, ["frn", "link"]) ?? stableEntityLink,
+				link: readNodeString(node, ["frn", "link"]),
 			});
 		}
 	}
@@ -426,15 +417,6 @@ function collectAllObjectNodesFromTree(
 		readNodeString(node, ["class", "type", "entityType", "ifcClass", "category"]) ??
 		"UNKNOWN";
 	const name = readNodeString(node, ["name", "label"]);
-	const stableEntityCandidate =
-		readNodeString(node, ["guid", "globalId", "globalid", "fileId", "fileid", "entityId", "entityid"]) ??
-		"";
-	const stableEntityLink =
-		stableEntityCandidate &&
-		!/^\d+$/.test(stableEntityCandidate.trim()) &&
-		stableEntityCandidate.trim().length >= 4
-			? `frn:entity:${stableEntityCandidate.trim()}`
-			: undefined;
 
 	if (id && !seen.has(id)) {
 		seen.add(id);
@@ -443,7 +425,7 @@ function collectAllObjectNodesFromTree(
 			name: name ?? `${classOrType} ${id}`,
 			type: classOrType.toUpperCase(),
 			material: "Unknown",
-			link: readNodeString(node, ["frn", "link"]) ?? stableEntityLink,
+			link: readNodeString(node, ["frn", "link"]),
 		});
 	}
 
@@ -620,13 +602,6 @@ export async function fetchIfcAssembliesFromFile(
 ): Promise<IfcAssemblyItem[]> {
 	const listAllIfcObjects = options?.listAllIfcObjects !== false;
 	const preferStableEntityIds = options?.preferStableEntityIds === true;
-	function countStableLinks(items: IfcAssemblyItem[]): number {
-		return items.filter((item) => {
-			const l = item.link?.trim() ?? "";
-			return l.startsWith("frn:") && l.length > 8;
-		}).length;
-	}
-
 	const project = await api.project.getProject();
 	if (!project?.id) {
 		throw new Error("No project selected.");
@@ -1351,11 +1326,7 @@ export async function fetchIfcAssembliesFromFile(
 	if (!preferStableEntityIds) {
 		const viaViewerHierarchy = await tryFetchAssembliesViaViewerHierarchy();
 		if (viaViewerHierarchy) {
-			// Keep viewer data when it already contains stable links.
-			// If it has zero links, continue to REST/model-tree path to recover GUID-based links.
-			if (countStableLinks(viaViewerHierarchy) > 0) {
-				return viaViewerHierarchy;
-			}
+			return viaViewerHierarchy;
 		}
 	}
 
@@ -1500,12 +1471,7 @@ export async function fetchIfcAssembliesFromFile(
 		);
 	}
 
-	return result.map((row) => {
-		if (row.link?.trim()) return row;
-		const stable = (row.id ?? "").trim();
-		if (!stable || /^\d+$/.test(stable) || stable.length < 4) return row;
-		return { ...row, link: `frn:entity:${stable}` };
-	});
+	return result;
 }
 
 export async function fetchProcessAssemblies(

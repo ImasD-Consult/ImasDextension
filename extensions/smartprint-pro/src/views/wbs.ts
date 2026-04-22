@@ -24,6 +24,12 @@ type WbsTableData = {
 const WBS_STORAGE_KEY = "smartprintpro:wbs:uploaded-file";
 const WBS_ASSIGNMENTS_STORAGE_KEY = "smartprintpro:wbs:assignments";
 
+type StoredWbsFile = {
+	name: string;
+	mimeType: string;
+	base64: string;
+};
+
 type IfcPart = {
 	id: string;
 	name: string;
@@ -61,7 +67,7 @@ type IfcModelOption = {
 function isWritableLink(link: string | undefined): boolean {
 	const l = link?.trim();
 	if (!l) return false;
-	return l.startsWith("frn:");
+	return l.startsWith("frn:entity:");
 }
 
 function normalizeKnownLink(raw: string | undefined): string {
@@ -233,13 +239,99 @@ function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
 	return { headers, rows };
 }
 
-function clearLocalWbsCache(): void {
-	try {
-		localStorage.removeItem(WBS_STORAGE_KEY);
-		localStorage.removeItem(WBS_ASSIGNMENTS_STORAGE_KEY);
-	} catch {
-		/* ignore cache cleanup errors */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+	const bytes = new Uint8Array(buffer);
+	let binary = "";
+	for (let index = 0; index < bytes.length; index += 1) {
+		binary += String.fromCharCode(bytes[index]);
 	}
+	return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64: string): ArrayBuffer {
+	const binary = atob(base64);
+	const bytes = new Uint8Array(binary.length);
+	for (let index = 0; index < binary.length; index += 1) {
+		bytes[index] = binary.charCodeAt(index);
+	}
+	return bytes.buffer;
+}
+
+function saveFileToLocalStorage(file: File, fileBuffer: ArrayBuffer): void {
+	const payload: StoredWbsFile = {
+		name: file.name,
+		mimeType: file.type,
+		base64: arrayBufferToBase64(fileBuffer),
+	};
+	localStorage.setItem(WBS_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function loadFileFromLocalStorage(): StoredWbsFile | null {
+	try {
+		const raw = localStorage.getItem(WBS_STORAGE_KEY);
+		if (!raw) return null;
+		const parsed = JSON.parse(raw) as Partial<StoredWbsFile>;
+		if (!parsed.name || !parsed.base64) return null;
+		return {
+			name: parsed.name,
+			mimeType: parsed.mimeType ?? "",
+			base64: parsed.base64,
+		};
+	} catch {
+		return null;
+	}
+}
+
+type WbsAssignmentsStoreV1 = {
+	v: 1;
+	projectId: string;
+	items: WbsAssignment[];
+};
+
+function migrateKnownLinkTargetPartIds(rows: WbsAssignment[]): WbsAssignment[] {
+	return rows.map((item) => {
+		if (item.partId === "known-link-target" && item.targetLink) {
+			const nl = normalizeKnownLink(item.targetLink);
+			if (nl) return { ...item, partId: nl };
+		}
+		return item;
+	});
+}
+
+/** Scoped by Connect project id so another project cannot reuse cached rows. */
+function loadAssignmentsFromLocalStorage(projectId: string): WbsAssignment[] {
+	try {
+		const raw = localStorage.getItem(WBS_ASSIGNMENTS_STORAGE_KEY);
+		if (!raw) return [];
+		const parsed = JSON.parse(raw) as unknown;
+		// Legacy flat array (no project): do not apply to a real project id (cross-project bleed).
+		if (Array.isArray(parsed)) {
+			if (projectId) return [];
+			return migrateKnownLinkTargetPartIds(parsed as WbsAssignment[]);
+		}
+		if (!parsed || typeof parsed !== "object") return [];
+		const rec = parsed as Partial<WbsAssignmentsStoreV1>;
+		if (rec.v !== 1 || !Array.isArray(rec.items)) return [];
+		const storedPid = (rec.projectId ?? "").trim();
+		if (projectId) {
+			if (!storedPid || storedPid !== projectId) return [];
+		} else if (storedPid) {
+			// Scoped rows for a project, but we could not read the current project id yet.
+			return [];
+		}
+		return migrateKnownLinkTargetPartIds(rec.items);
+	} catch {
+		return [];
+	}
+}
+
+function saveAssignmentsToLocalStorage(projectId: string, assignments: WbsAssignment[]): void {
+	const payload: WbsAssignmentsStoreV1 = {
+		v: 1,
+		projectId: projectId.trim(),
+		items: assignments,
+	};
+	localStorage.setItem(WBS_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(payload));
 }
 
 function renderTable(
@@ -315,7 +407,7 @@ function renderTable(
           data-description-filter
         />
       </div>
-      <div class="${tableScrollClass}" data-wbs-table-scroll>
+      <div class="${tableScrollClass}">
         <table class="min-w-full border-collapse">
           <thead class="sticky top-0 z-10">
             <tr>${headerCells}</tr>
@@ -364,16 +456,12 @@ function renderAssignmentsList(
 	knownLinks: string[],
 	selectedWbsRowIndex: number | null,
 	activeModelScopeIds: string[],
-	nameFilter: string,
-	classFilter: string,
 ): string {
-	const normalizedNameFilter = nameFilter.trim().toLowerCase();
-	const normalizedClassFilter = classFilter.trim().toLowerCase();
 	const scope = [...new Set(activeModelScopeIds.map((s) => s.trim()).filter(Boolean))];
 	function assignmentMatchesCurrentModel(item: WbsAssignment): boolean {
 		if (scope.length === 0) return true;
 		const mid = item.modelId?.trim();
-		if (!mid) return false;
+		if (!mid) return true;
 		return scope.includes(mid);
 	}
 	const hasKnownPsetLinks = knownLinks.some((l) => Boolean(normalizeKnownLink(l)));
@@ -413,30 +501,7 @@ function renderAssignmentsList(
 		link: string;
 	};
 	const resolvedPartRows: PartRowResolved[] = [];
-	const seenAssemblyKeys = new Set<string>();
 	for (const part of parts) {
-		const typeUpper = (part.type ?? "").trim().toUpperCase();
-		const isAssemblyLike = typeUpper.includes("ASSEMBLY");
-		const usingParentAssembly = Boolean(part.resolvedViaParent || (!isAssemblyLike && part.targetRuntimeId));
-		if (!isAssemblyLike && !usingParentAssembly) continue;
-		const assemblyRid = (usingParentAssembly ? part.targetRuntimeId : part.id)?.trim() || part.id;
-		const assemblyName =
-			(usingParentAssembly ? part.targetName : part.name)?.trim() || part.name;
-		const assemblyType = isAssemblyLike ? part.type : "IFCASSEMBLY";
-		const assemblyLink = normalizeKnownLink(part.link);
-		const assemblyKey = assemblyLink || `asm:${assemblyRid}`;
-		if (seenAssemblyKeys.has(assemblyKey)) continue;
-		seenAssemblyKeys.add(assemblyKey);
-
-		const assemblyPart: IfcPart = {
-			...part,
-			id: assemblyRid,
-			name: assemblyName,
-			type: assemblyType,
-			targetRuntimeId: assemblyRid,
-			targetName: assemblyName,
-			resolvedViaParent: false,
-		};
 		const directLink = normalizeKnownLink(part.link);
 		const sig = `${(part.name ?? "").trim().toUpperCase()}::${(part.type ?? "")
 			.trim()
@@ -448,34 +513,11 @@ function renderAssignmentsList(
 				: undefined;
 		const link = directLink || mappedKnownLink || "";
 		if (link && knownLinkSet.has(link)) usedKnownLinks.add(link);
-		resolvedPartRows.push({
-			part: assemblyPart,
-			directLink,
-			mappedKnownLink,
-			link,
-		});
-	}
-	// Fallback: if no assembly-level rows were detected, keep legacy target behavior
-	// so models that do not expose clear assembly class metadata still work.
-	if (resolvedPartRows.length === 0) {
-		const seenFallbackKeys = new Set<string>();
-		for (const part of parts) {
-			const directLink = normalizeKnownLink(part.link);
-			const sig = `${(part.name ?? "").trim().toUpperCase()}::${(part.type ?? "")
-				.trim()
-				.toUpperCase()}`;
-			const bySigBucket = knownBySignature.get(sig) ?? [];
-			const mappedKnownLink =
-				!directLink
-					? bySigBucket.find((l) => !usedKnownLinks.has(l))
-					: undefined;
-			const link = directLink || mappedKnownLink || "";
-			if (link && knownLinkSet.has(link)) usedKnownLinks.add(link);
-			const fallbackKey = `${part.id}::${link}`;
-			if (seenFallbackKeys.has(fallbackKey)) continue;
-			seenFallbackKeys.add(fallbackKey);
-			resolvedPartRows.push({ part, directLink, mappedKnownLink, link });
-		}
+		// Only list IFC rows that already have a writable stable link (direct or mapped).
+		// Runtime-only rows were misleading (fake/table-order ids) and cluttered the table vs PSet targets.
+		const actionable = isWritableLink(link);
+		if (!actionable) continue;
+		resolvedPartRows.push({ part, directLink, mappedKnownLink, link });
 	}
 	const rowsFromParts = resolvedPartRows
 		.map(({ part, directLink, mappedKnownLink, link }) => {
@@ -494,6 +536,7 @@ function renderAssignmentsList(
 			const targetRuntimeIdRaw = isValidRuntimeId(targetRuntimeIdNum)
 				? String(targetRuntimeIdNum)
 				: "";
+			const canHarvestFromRuntime = Boolean(targetRuntimeIdRaw);
 			const targetName = part.targetName?.trim() || baseName;
 			const displayName =
 				part.resolvedViaParent && targetName !== baseName
@@ -525,18 +568,10 @@ function renderAssignmentsList(
 								? '<span class="inline-flex items-center rounded bg-indigo-100 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">Assigns to parent</span>'
 								: '<span class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-600">Never assigned</span>'
 						: '<span class="inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">No link</span>';
-			const canAssign = selectedWbsRowIndex !== null && hasLink;
+			const canAssign = selectedWbsRowIndex !== null;
 			const assignTitle = canAssign
 				? "Assign selected WBS row to this target"
-				: selectedWbsRowIndex === null
-					? "Select a WBS row first"
-					: "Target has no writable link";
-			if (
-				(normalizedNameFilter && !displayName.toLowerCase().includes(normalizedNameFilter)) ||
-				(normalizedClassFilter && !className.toLowerCase().includes(normalizedClassFilter))
-			) {
-				return "";
-			}
+				: "Select a WBS row first";
 			return `
       <tr class="hover:bg-gray-50">
         <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(displayName)}</td>
@@ -549,7 +584,9 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link || "(no link)")}">${escapeHtml(link || "(no link)")}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
-          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assign-model-id="${escapeHtml(modelId)}" data-assign-part-id="${escapeHtml(part.id)}" ${canAssign ? "" : "disabled"} title="${escapeHtml(assignTitle)}">Assign</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" data-assignment-link="${escapeHtml(link || "")}" data-assignment-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assignment-model-id="${escapeHtml(modelId)}" data-assignment-part-id="${escapeHtml(part.id)}" ${(hasLink || canHarvestFromRuntime) ? "" : "disabled"}>Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-diagnose-part-id="${escapeHtml(part.id)}">Diagnose link</button>
+          <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link || "")}" data-assign-runtime-id="${escapeHtml(targetRuntimeIdRaw)}" data-assign-model-id="${escapeHtml(modelId)}" data-assign-part-id="${escapeHtml(part.id)}" ${(canAssign && (hasLink || canHarvestFromRuntime)) ? "" : "disabled"} title="${escapeHtml(canAssign ? (hasLink ? assignTitle : (canHarvestFromRuntime ? "Will resolve link from runtime target before assign" : "Geometry only, no data properties found")) : "Select a WBS row first")}">Assign</button>
         </td>
       </tr>
     `;
@@ -590,12 +627,6 @@ function renderAssignmentsList(
 			const assignTitle = canAssign
 				? "Assign selected WBS row to this known target"
 				: "Select a WBS row first";
-			if (
-				(normalizedNameFilter && !name.toLowerCase().includes(normalizedNameFilter)) ||
-				(normalizedClassFilter && !className.toLowerCase().includes(normalizedClassFilter))
-			) {
-				return "";
-			}
 			return `
       <tr class="hover:bg-gray-50 bg-sky-50/30">
         <td class="px-2 py-2 text-sm text-gray-800 border-b border-gray-100">${escapeHtml(name)}</td>
@@ -608,6 +639,8 @@ function renderAssignmentsList(
         <td class="px-2 py-2 text-xs text-gray-600 border-b border-gray-100">${escapeHtml(wbsRow)}</td>
         <td class="px-2 py-2 text-[11px] text-gray-600 border-b border-gray-100 max-w-[260px] truncate" title="${escapeHtml(link)}">${escapeHtml(link)}</td>
         <td class="px-2 py-2 text-xs border-b border-gray-100 whitespace-nowrap">
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1" data-assignment-link="${escapeHtml(link)}" data-assignment-runtime-id="" data-assignment-model-id="" data-assignment-part-id="">Select in 3D</button>
+          <button type="button" class="rounded border border-gray-300 px-2 py-0.5 font-medium text-gray-700 hover:bg-gray-50 mr-1 disabled:opacity-50 disabled:cursor-not-allowed" disabled>Diagnose link</button>
           <button type="button" class="rounded border border-brand-600 px-2 py-0.5 font-medium text-brand-700 hover:bg-brand-50 disabled:opacity-50 disabled:cursor-not-allowed" data-assign-link="${escapeHtml(link)}" data-assign-runtime-id="" data-assign-model-id="" data-assign-part-id="" ${canAssign ? "" : "disabled"} title="${escapeHtml(assignTitle)}">Assign</button>
         </td>
       </tr>
@@ -616,27 +649,11 @@ function renderAssignmentsList(
 		.join("");
 	const rows = `${rowsFromParts}${rowsFromKnown}`;
 	if (!rows.trim()) {
-		return '<p class="text-sm text-gray-500 italic">No targets available yet. Wait for known PSet links to load, or reload the model.</p>';
+		return '<p class="text-sm text-gray-500 italic">No actionable targets: IFC rows with no link and no valid 3D runtime are hidden. Wait for known PSet links to load, or reload the model.</p>';
 	}
 	return `
     <div class="rounded border border-gray-200 overflow-hidden">
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-2 p-2 border-b border-gray-200 bg-gray-50">
-        <input
-          type="text"
-          value="${escapeHtml(nameFilter)}"
-          placeholder="Filter Name"
-          class="w-full rounded border border-gray-300 px-2 py-1 text-sm"
-          data-assign-name-filter
-        />
-        <input
-          type="text"
-          value="${escapeHtml(classFilter)}"
-          placeholder="Filter Class"
-          class="w-full rounded border border-gray-300 px-2 py-1 text-sm"
-          data-assign-class-filter
-        />
-      </div>
-      <div class="max-h-[32vh] overflow-auto" data-assignments-scroll>
+      <div class="max-h-[32vh] overflow-auto">
         <table class="min-w-full border-collapse">
           <thead class="sticky top-0 bg-gray-50 z-10">
             <tr>
@@ -664,7 +681,13 @@ export async function renderWbs(
 	api: WorkspaceApi,
 	options?: RenderWbsOptions,
 ): Promise<void> {
-	clearLocalWbsCache();
+	let wbsProjectId = "";
+	try {
+		wbsProjectId = (await api.project.getProject())?.id?.trim() ?? "";
+	} catch {
+		wbsProjectId = "";
+	}
+
 	const viewerOnly = options?.useViewerModelOnly === true;
 	const dockLayout = viewerOnly && options?.horizontalDockLayout === true;
 
@@ -673,7 +696,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.35)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.25)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -769,7 +792,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.35)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.25)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1282,20 +1305,17 @@ export async function renderWbs(
 	let selectedWbsRowIndex: number | null = null;
 	let wbsFilterValue = "";
 	let descriptionFilterValue = "";
-	let assignmentNameFilterValue = "";
-	let assignmentClassFilterValue = "";
 	let allIfcModels: IfcModelOption[] = [];
 	const partsByModelId = new Map<string, IfcPart[]>();
 	let parts: IfcPart[] = [];
 	const selectedPartIds = new Set<string>();
-	let assignments: WbsAssignment[] = [];
+	let assignments = loadAssignmentsFromLocalStorage(wbsProjectId);
 	let assignmentsModelId = "";
 	const parentByRuntimeId = new Map<number, number | null>();
 	const fileIdByRuntimeId = new Map<number, string>();
 	const nameByRuntimeId = new Map<number, string>();
 	let hierarchyCacheModelId = "";
 	let knownLibraryLinks: string[] = [];
-	let scopedKnownLibraryLinks: string[] = [];
 	const ensuredLibraryModelIds = new Set<string>();
 	/** Stable `frn:entity:*` → viewer runtime for highlights (rebuilt per model load). */
 	const entityLinkToRuntimeCache = new Map<
@@ -1305,10 +1325,9 @@ export async function renderWbs(
 
 	function refreshKnownLinkOptions(): void {
 		if (!knownLinkSelectEl) return;
-		const visibleLinks = viewerOnly ? scopedKnownLibraryLinks : knownLibraryLinks;
 		knownLinkSelectEl.innerHTML =
 			'<option value="">Known link target (required for Assign)</option>' +
-			visibleLinks
+			knownLibraryLinks
 				.map((l, i) => {
 					const suffix = l.length > 56 ? `${l.slice(0, 28)}...${l.slice(-22)}` : l;
 					return `<option value="${escapeHtml(l)}">#${i + 1} ${escapeHtml(suffix)}</option>`;
@@ -1319,58 +1338,16 @@ export async function renderWbs(
 	function refreshKnownLinkHint(): void {
 		if (!knownLinkHintEl) return;
 		const selected = knownLinkSelectEl?.value?.trim();
-		const visibleCount = viewerOnly
-			? scopedKnownLibraryLinks.length
-			: knownLibraryLinks.length;
 		knownLinkHintEl.textContent = selected
 			? `Known link fallback selected: ${selected}`
-			: `Known targets loaded: ${visibleCount}`;
+			: `Known targets loaded: ${knownLibraryLinks.length}`;
 	}
 
 	function getAssignableParts(): IfcPart[] {
 		return parts;
 	}
 
-	async function buildActiveModelLinkScope(): Promise<Set<string>> {
-		const scoped = new Set<string>();
-		for (const part of getAssignableParts()) {
-			const link = normalizeKnownLink(part.link);
-			if (link.startsWith("frn:")) scoped.add(link);
-		}
-		// Robust fallback: include all stable entity ids from active model hierarchy,
-		// not just currently resolved part links.
-		await ensureHierarchyCacheForActiveModel();
-		for (const fileId of fileIdByRuntimeId.values()) {
-			const stable = (fileId ?? "").trim();
-			if (!stable || /^\d+$/.test(stable) || stable.length < 8) continue;
-			scoped.add(normalizeKnownLink(`frn:entity:${stable}`));
-		}
-		return scoped;
-	}
-
-	async function refreshScopedKnownLinksForActiveModel(): Promise<void> {
-		if (!viewerOnly) {
-			scopedKnownLibraryLinks = [...knownLibraryLinks];
-			return;
-		}
-		const scope = await buildActiveModelLinkScope();
-		scopedKnownLibraryLinks = knownLibraryLinks.filter((l) =>
-			scope.has(normalizeKnownLink(l)),
-		);
-	}
-
-	function refreshAssignments(
-		preserveFocus?:
-			| {
-					field: "name" | "class";
-					selectionStart: number;
-					selectionEnd: number;
-			  }
-			| undefined,
-	): void {
-		const prevScroll =
-			assignmentsListEl.querySelector<HTMLElement>("[data-assignments-scroll]")
-				?.scrollTop ?? 0;
+	function refreshAssignments(): void {
 		const active = getActiveModelId();
 		const open = allIfcModels.find(
 			(m) => active && (m.id === active || m.versionId === active),
@@ -1378,34 +1355,13 @@ export async function renderWbs(
 		const modelScope = [active, open?.versionId, open?.id].filter(
 			(x): x is string => typeof x === "string" && x.trim().length > 0,
 		);
-		const linksForRender = viewerOnly ? scopedKnownLibraryLinks : knownLibraryLinks;
 		assignmentsListEl.innerHTML = renderAssignmentsList(
 			assignments,
 			getAssignableParts(),
-			linksForRender,
+			knownLibraryLinks,
 			selectedWbsRowIndex,
 			modelScope,
-			assignmentNameFilterValue,
-			assignmentClassFilterValue,
 		);
-		const nextScroll = assignmentsListEl.querySelector<HTMLElement>(
-			"[data-assignments-scroll]",
-		);
-		if (nextScroll) nextScroll.scrollTop = prevScroll;
-		if (preserveFocus) {
-			const selector =
-				preserveFocus.field === "name"
-					? "[data-assign-name-filter]"
-					: "[data-assign-class-filter]";
-			const input = assignmentsListEl.querySelector<HTMLInputElement>(selector);
-			if (input) {
-				input.focus();
-				input.setSelectionRange(
-					preserveFocus.selectionStart,
-					preserveFocus.selectionEnd,
-				);
-			}
-		}
 	}
 
 	function refreshAssignButton(): void {
@@ -1783,18 +1739,18 @@ export async function renderWbs(
 			if (Number.isNaN(cur)) return part;
 			let guard = 0;
 			while (!Number.isNaN(cur) && guard < 256) {
-				const fileId = fileIdByRuntimeId.get(cur);
-				if (fileId && !/^\d+$/.test(fileId) && fileId.trim().length >= 4) {
+				const parent = parentByRuntimeId.get(cur);
+				if (parent == null) break;
+				const fileId = fileIdByRuntimeId.get(parent);
+				if (fileId && !/^\d+$/.test(fileId) && fileId.trim().length >= 8) {
 					return {
 						...part,
 						link: `frn:entity:${fileId.trim()}`,
-						targetRuntimeId: String(cur),
-						targetName: nameByRuntimeId.get(cur) ?? part.name,
-						resolvedViaParent: cur !== Number(part.id),
+						targetRuntimeId: String(parent),
+						targetName: nameByRuntimeId.get(parent) ?? part.name,
+						resolvedViaParent: true,
 					};
 				}
-				const parent = parentByRuntimeId.get(cur);
-				if (parent == null) break;
 				cur = parent;
 				guard += 1;
 			}
@@ -1981,62 +1937,46 @@ export async function renderWbs(
 		if (!viewer?.getHierarchyChildren) return;
 		const activeModelId = getActiveModelId();
 		if (!activeModelId) return;
-		const openModel = allIfcModels.find(
-			(m) => activeModelId === m.id || activeModelId === m.versionId,
-		);
-		const modelCandidates = [
-			activeModelId,
-			openModel?.id,
-			openModel?.versionId,
-		].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-		const cacheKey = [...new Set(modelCandidates)].join("|");
-		if (hierarchyCacheModelId === cacheKey && parentByRuntimeId.size > 0) return;
+		if (hierarchyCacheModelId === activeModelId && parentByRuntimeId.size > 0) return;
+		parentByRuntimeId.clear();
+		fileIdByRuntimeId.clear();
+		nameByRuntimeId.clear();
+		hierarchyCacheModelId = activeModelId;
 
-		let populated = false;
-		for (const modelId of [...new Set(modelCandidates)]) {
-			parentByRuntimeId.clear();
-			fileIdByRuntimeId.clear();
-			nameByRuntimeId.clear();
-			const queue: Array<{ parent: number; childrenOf: number[] }> = [
-				{ parent: 0, childrenOf: [0] },
-			];
-			const visitedParents = new Set<number>();
-			const MAX_NODES = 20000;
-			let seenNodes = 0;
-			while (queue.length > 0 && seenNodes < MAX_NODES) {
-				const cur = queue.shift();
-				if (!cur) break;
-				for (const pid of cur.childrenOf) {
-					if (visitedParents.has(pid)) continue;
-					visitedParents.add(pid);
-					let children: Array<{ id: number; fileId: string; name: string }> = [];
-					try {
-						children = await viewer.getHierarchyChildren(modelId, [pid], undefined, false);
-					} catch {
-						continue;
-					}
-					for (const child of children ?? []) {
-						if (typeof child?.id !== "number" || Number.isNaN(child.id)) continue;
-						if (!parentByRuntimeId.has(child.id)) {
-							parentByRuntimeId.set(child.id, pid === 0 ? null : pid);
-							if (typeof child.name === "string" && child.name.trim()) {
-								nameByRuntimeId.set(child.id, child.name.trim());
-							}
-							if (typeof child.fileId === "string" && child.fileId.trim()) {
-								fileIdByRuntimeId.set(child.id, child.fileId.trim());
-							}
-							seenNodes += 1;
-							queue.push({ parent: child.id, childrenOf: [child.id] });
+		const queue: Array<{ parent: number; childrenOf: number[] }> = [
+			{ parent: 0, childrenOf: [0] },
+		];
+		const visitedParents = new Set<number>();
+		const MAX_NODES = 20000;
+		let seenNodes = 0;
+		while (queue.length > 0 && seenNodes < MAX_NODES) {
+			const cur = queue.shift();
+			if (!cur) break;
+			for (const pid of cur.childrenOf) {
+				if (visitedParents.has(pid)) continue;
+				visitedParents.add(pid);
+				let children: Array<{ id: number; fileId: string; name: string }> = [];
+				try {
+					children = await viewer.getHierarchyChildren(activeModelId, [pid], undefined, false);
+				} catch {
+					continue;
+				}
+				for (const child of children ?? []) {
+					if (typeof child?.id !== "number" || Number.isNaN(child.id)) continue;
+					if (!parentByRuntimeId.has(child.id)) {
+						parentByRuntimeId.set(child.id, pid === 0 ? null : pid);
+						if (typeof child.name === "string" && child.name.trim()) {
+							nameByRuntimeId.set(child.id, child.name.trim());
 						}
+						if (typeof child.fileId === "string" && child.fileId.trim()) {
+							fileIdByRuntimeId.set(child.id, child.fileId.trim());
+						}
+						seenNodes += 1;
+						queue.push({ parent: child.id, childrenOf: [child.id] });
 					}
 				}
 			}
-			if (seenNodes > 0) {
-				populated = true;
-				break;
-			}
 		}
-		hierarchyCacheModelId = populated ? cacheKey : "";
 	}
 
 	/**
@@ -2275,10 +2215,7 @@ export async function renderWbs(
 		return null;
 	}
 
-	function mergeAssignmentsFromPsetApi(
-		apiRows: WbsPsetModelAssignmentRow[],
-		allowedLinks?: Set<string>,
-	): void {
+	function mergeAssignmentsFromPsetApi(apiRows: WbsPsetModelAssignmentRow[]): void {
 		if (!apiRows.length) return;
 		const activeModelId = getActiveModelId();
 		const byLink = new Map<string, WbsAssignment>();
@@ -2291,7 +2228,6 @@ export async function renderWbs(
 		for (const row of apiRows) {
 			const k = normalizeKnownLink(row.link);
 			if (!k) continue;
-			if (allowedLinks && allowedLinks.size > 0 && !allowedLinks.has(k)) continue;
 			const idx = findWbsRowIndexForPsetValue(row.value);
 			const prev = byLink.get(k);
 			const wbsValues =
@@ -2505,9 +2441,6 @@ export async function renderWbs(
 			  }
 			| undefined,
 	): void {
-		const prevScroll =
-			tableContainerEl.querySelector<HTMLElement>("[data-wbs-table-scroll]")
-				?.scrollTop ?? 0;
 		tableContainerEl.innerHTML = renderTable(
 			tableData,
 			selectedWbsRowIndex,
@@ -2531,10 +2464,6 @@ export async function renderWbs(
 				);
 			}
 		}
-		const nextScroll = tableContainerEl.querySelector<HTMLElement>(
-			"[data-wbs-table-scroll]",
-		);
-		if (nextScroll) nextScroll.scrollTop = prevScroll;
 		refreshAssignButton();
 		refreshAssignments();
 	}
@@ -2585,6 +2514,7 @@ export async function renderWbs(
 		}
 		if (assignmentsModelId && assignmentsModelId !== selectedModelId) {
 			assignments = [];
+			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		}
 		assignmentsModelId = selectedModelId;
@@ -2612,7 +2542,7 @@ export async function renderWbs(
 					selectedModelId,
 					selectedModel?.versionId,
 					selectedModel?.name,
-					{ listAllIfcObjects: true, preferStableEntityIds: false },
+					{ listAllIfcObjects: true, preferStableEntityIds: true },
 				);
 				const assemblyParts = assemblyPartsRaw.map((item) => ({
 					id: item.id,
@@ -2644,10 +2574,9 @@ export async function renderWbs(
 		parts = await hydrateLinksFromObjectPropertiesStrict(parts);
 		parts = await hydrateLinksFromKnownRegistry(parts);
 		parts = await applyParentFallbackLinks(parts);
-		await refreshScopedKnownLinksForActiveModel();
 		for (const p of parts) {
 			const l = normalizeKnownLink(p.link);
-			if (!l.startsWith("frn:")) continue;
+			if (!l.startsWith("frn:entity:")) continue;
 			const rid = Number(p.id);
 			if (!isValidRuntimeId(rid)) continue;
 			const mid = p.modelId ?? selectedModelId;
@@ -2657,6 +2586,10 @@ export async function renderWbs(
 		for (const id of [...selectedPartIds]) {
 			if (!assignableIds.has(id)) selectedPartIds.delete(id);
 		}
+		parentByRuntimeId.clear();
+		fileIdByRuntimeId.clear();
+		nameByRuntimeId.clear();
+		hierarchyCacheModelId = "";
 		refreshPartFilters();
 		refreshPartsList();
 		const selectedModel = allIfcModels.find((model) => model.id === selectedModelId);
@@ -2682,7 +2615,7 @@ export async function renderWbs(
 						link: normalizeKnownLink(part.link),
 						value: "",
 					}))
-					.filter((t) => t.link.startsWith("frn:"));
+					.filter((t) => t.link.startsWith("frn:entity:"));
 				const ensured = await ensureWbsLibraryAndAssignmentsForLinks(
 					api,
 					seedTargets,
@@ -2714,7 +2647,6 @@ export async function renderWbs(
 			knownLibraryLinks = [
 				...new Set(res.links.map((l) => normalizeKnownLink(l)).filter(Boolean)),
 			];
-			await refreshScopedKnownLinksForActiveModel();
 
 			refreshKnownLinkOptions();
 			refreshKnownLinkHint();
@@ -2733,10 +2665,9 @@ export async function renderWbs(
 	/** Full PSet list fetch + merge — keep off the hot path (avoid racing writes / duplicate list walks). */
 	async function hydrateWbsAssignmentsFromPsetApi(silent = true): Promise<void> {
 		try {
-			const allowedLinks = await buildActiveModelLinkScope();
-			if (allowedLinks.size === 0) return;
 			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
-			mergeAssignmentsFromPsetApi(hydrated.items, allowedLinks);
+			mergeAssignmentsFromPsetApi(hydrated.items);
+			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		} catch (hydrateErr) {
 			if (!silent) {
@@ -2863,6 +2794,18 @@ export async function renderWbs(
 	}
 
 	refreshAssignments();
+
+	const cachedFile = loadFileFromLocalStorage();
+	if (cachedFile) {
+		try {
+			tableData = parseWorkbookToTableData(base64ToArrayBuffer(cachedFile.base64));
+			refreshWbsTable();
+			status.textContent = `Loaded ${cachedFile.name} from local storage (${tableData.rows.length} rows). Select a WBS row.`;
+		} catch {
+			setStatus("Stored WBS file is invalid. Please upload again.", "error");
+			localStorage.removeItem(WBS_STORAGE_KEY);
+		}
+	}
 
 	if (viewerOnly && api.viewer?.getModels) {
 		window.setInterval(() => {
@@ -3066,38 +3009,6 @@ export async function renderWbs(
 					descriptionFilterInput.selectionEnd ??
 					descriptionFilterInput.value.length,
 			});
-			return;
-		}
-		const assignmentNameFilterInput = target.closest<HTMLInputElement>(
-			"[data-assign-name-filter]",
-		);
-		if (assignmentNameFilterInput) {
-			assignmentNameFilterValue = assignmentNameFilterInput.value;
-			refreshAssignments({
-				field: "name",
-				selectionStart:
-					assignmentNameFilterInput.selectionStart ??
-					assignmentNameFilterInput.value.length,
-				selectionEnd:
-					assignmentNameFilterInput.selectionEnd ??
-					assignmentNameFilterInput.value.length,
-			});
-			return;
-		}
-		const assignmentClassFilterInput = target.closest<HTMLInputElement>(
-			"[data-assign-class-filter]",
-		);
-		if (assignmentClassFilterInput) {
-			assignmentClassFilterValue = assignmentClassFilterInput.value;
-			refreshAssignments({
-				field: "class",
-				selectionStart:
-					assignmentClassFilterInput.selectionStart ??
-					assignmentClassFilterInput.value.length,
-				selectionEnd:
-					assignmentClassFilterInput.selectionEnd ??
-					assignmentClassFilterInput.value.length,
-			});
 		}
 	});
 
@@ -3184,6 +3095,7 @@ export async function renderWbs(
 					assignments[idx] = { ...assignments[idx], propertyName: writeResult.propertyName };
 				}
 			}
+			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 			void resolveRuntimeForEntityLink(fallbackKnownLink).then((hit) => {
 				if (hit) {
@@ -3211,6 +3123,7 @@ export async function renderWbs(
 			const message =
 				error instanceof Error ? error.message : "Failed to write property set.";
 			setStatus(`Assignment failed: ${message}. Target: ${targetSummary}`, "error");
+			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		}
 	}
@@ -3432,9 +3345,10 @@ export async function renderWbs(
 			selectedWbsRowIndex = null;
 			wbsFilterValue = "";
 			descriptionFilterValue = "";
+			saveFileToLocalStorage(selectedFile, fileBuffer);
 			refreshWbsTable();
 			setStatus(
-				`Loaded ${selectedFile.name} (${tableData.rows.length} rows).`,
+				`Loaded ${selectedFile.name} (${tableData.rows.length} rows). File saved locally.`,
 			);
 		} catch (error) {
 			const message =
