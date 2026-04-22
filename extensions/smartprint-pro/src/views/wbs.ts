@@ -456,12 +456,13 @@ function renderAssignmentsList(
 	knownLinks: string[],
 	selectedWbsRowIndex: number | null,
 	activeModelScopeIds: string[],
+	includeKnownOnlyTargets: boolean,
 ): string {
 	const scope = [...new Set(activeModelScopeIds.map((s) => s.trim()).filter(Boolean))];
 	function assignmentMatchesCurrentModel(item: WbsAssignment): boolean {
 		if (scope.length === 0) return true;
 		const mid = item.modelId?.trim();
-		if (!mid) return true;
+		if (!mid) return false;
 		return scope.includes(mid);
 	}
 	const hasKnownPsetLinks = knownLinks.some((l) => Boolean(normalizeKnownLink(l)));
@@ -592,10 +593,12 @@ function renderAssignmentsList(
     `;
 		})
 		.join("");
-	const knownOnlyLinks = knownLinks
-		.map((l) => normalizeKnownLink(l))
-		.filter((link): link is string => Boolean(link))
-		.filter((link) => !partByLink.has(link) && !usedKnownLinks.has(link));
+	const knownOnlyLinks = includeKnownOnlyTargets
+		? knownLinks
+				.map((l) => normalizeKnownLink(l))
+				.filter((link): link is string => Boolean(link))
+				.filter((link) => !partByLink.has(link) && !usedKnownLinks.has(link))
+		: [];
 	const rowsFromKnown = knownOnlyLinks
 		.map((link, i) => {
 			const latestRaw = latestByLink.get(link);
@@ -1361,6 +1364,7 @@ export async function renderWbs(
 			knownLibraryLinks,
 			selectedWbsRowIndex,
 			modelScope,
+			!viewerOnly,
 		);
 	}
 
@@ -2215,7 +2219,10 @@ export async function renderWbs(
 		return null;
 	}
 
-	function mergeAssignmentsFromPsetApi(apiRows: WbsPsetModelAssignmentRow[]): void {
+	function mergeAssignmentsFromPsetApi(
+		apiRows: WbsPsetModelAssignmentRow[],
+		allowedLinks?: Set<string>,
+	): void {
 		if (!apiRows.length) return;
 		const activeModelId = getActiveModelId();
 		const byLink = new Map<string, WbsAssignment>();
@@ -2228,6 +2235,7 @@ export async function renderWbs(
 		for (const row of apiRows) {
 			const k = normalizeKnownLink(row.link);
 			if (!k) continue;
+			if (allowedLinks && allowedLinks.size > 0 && !allowedLinks.has(k)) continue;
 			const idx = findWbsRowIndexForPsetValue(row.value);
 			const prev = byLink.get(k);
 			const wbsValues =
@@ -2665,8 +2673,14 @@ export async function renderWbs(
 	/** Full PSet list fetch + merge — keep off the hot path (avoid racing writes / duplicate list walks). */
 	async function hydrateWbsAssignmentsFromPsetApi(silent = true): Promise<void> {
 		try {
+			const allowedLinks = new Set(
+				getAssignableParts()
+					.map((p) => normalizeKnownLink(p.link))
+					.filter((l): l is string => l.startsWith("frn:entity:")),
+			);
+			if (allowedLinks.size === 0) return;
 			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
-			mergeAssignmentsFromPsetApi(hydrated.items);
+			mergeAssignmentsFromPsetApi(hydrated.items, allowedLinks);
 			saveAssignmentsToLocalStorage(wbsProjectId, assignments);
 			refreshAssignments();
 		} catch (hydrateErr) {
