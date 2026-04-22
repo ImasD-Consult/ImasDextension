@@ -1341,6 +1341,21 @@ export async function renderWbs(
 		return out;
 	}
 
+	async function buildCurrentModelEntityScope(): Promise<Set<string>> {
+		const out = new Set<string>();
+		for (const part of getAssignableParts()) {
+			const entity = getEntityTokenFromAnyFrn(part.link);
+			if (entity) out.add(entity);
+		}
+		await ensureHierarchyCacheForActiveModel();
+		for (const fileId of fileIdByRuntimeId.values()) {
+			const fid = (fileId ?? "").trim();
+			if (!fid || /^\d+$/.test(fid)) continue;
+			out.add(fid);
+		}
+		return out;
+	}
+
 	function refreshAssignments(): void {
 		const active = getActiveModelId();
 		const open = allIfcModels.find(
@@ -2597,11 +2612,15 @@ export async function renderWbs(
 		try {
 			const hydrated = await fetchWbsPsetAssignmentsFromModel(api);
 			const allowedLinks = await buildCurrentModelLinkScope();
+			const allowedEntities = await buildCurrentModelEntityScope();
 			const filteredItems =
-				allowedLinks.size > 0
-					? hydrated.items.filter((row) =>
-							allowedLinks.has(normalizeKnownLink(row.link)),
-						)
+				allowedLinks.size > 0 || allowedEntities.size > 0
+					? hydrated.items.filter((row) => {
+							const normalized = normalizeKnownLink(row.link);
+							if (allowedLinks.has(normalized)) return true;
+							const entity = getEntityTokenFromAnyFrn(normalized);
+							return Boolean(entity) && allowedEntities.has(entity);
+						})
 					: [];
 			mergeAssignmentsFromPsetApi(filteredItems);
 			refreshAssignments();
