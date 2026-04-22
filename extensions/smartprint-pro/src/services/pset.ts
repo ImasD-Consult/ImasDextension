@@ -257,6 +257,16 @@ export interface WbsPsetWriteResult {
 	propertyName: string;
 }
 
+export interface EnsureWbsLibraryAndAssignmentsResult {
+	createdLibrary: boolean;
+	createdDefinition: boolean;
+	totalTargets: number;
+	missingTargetsSeeded: number;
+	libId: string;
+	defId: string;
+	propertyName: string;
+}
+
 export interface WbsPsetDebugInfo {
 	ok: boolean;
 	serviceUri: string;
@@ -692,6 +702,104 @@ async function resolveCanonicalLibAndDefIds(
 	);
 }
 
+function buildDefaultWbsDefinitionSchema(propertyName: string): object {
+	const safeProperty = propertyName.trim() || "Pset_IMASD_WBS";
+	return {
+		type: "object",
+		props: {
+			[safeProperty]: {
+				type: "string",
+				name: safeProperty,
+			},
+		},
+	};
+}
+
+async function resolveOrCreateCanonicalLibAndDefIds(
+	pset: InstanceType<typeof PSet>,
+	projectId: string,
+	serviceUri: string,
+	token: string,
+	configuredLibId: string,
+	libraryNameCandidates: string[],
+	definitionName: string,
+	explicitDefId: string | undefined,
+	propertyName: string,
+): Promise<{
+	libId: string;
+	defId: string;
+	createdLibrary: boolean;
+	createdDefinition: boolean;
+}> {
+	try {
+		const ids = await resolveCanonicalLibAndDefIds(
+			pset,
+			projectId,
+			serviceUri,
+			token,
+			configuredLibId,
+			libraryNameCandidates,
+			definitionName,
+			explicitDefId,
+		);
+		return { ...ids, createdLibrary: false, createdDefinition: false };
+	} catch {
+		// Continue with create flow below.
+	}
+
+	const primaryLibraryName =
+		libraryNameCandidates.find((s) => s.trim().length > 0) ||
+		configuredLibId ||
+		DEFAULT_LIBRARY_NAME;
+	const createLibraryRes = await pset.createLibrary({
+		name: primaryLibraryName,
+		description: "Created by smartprintPRO to store WBS property sets.",
+	});
+	const libId =
+		(createLibraryRes.data as { id?: string })?.id?.trim() || configuredLibId;
+	if (!libId) {
+		throw new Error("Library creation did not return an id.");
+	}
+
+	let defId = "";
+	let createdDefinition = false;
+	try {
+		const createDefinitionRes = await pset.createDefinition(libId, {
+			id: explicitDefId?.trim() || undefined,
+			name: definitionName,
+			description: "WBS values assigned by smartprintPRO.",
+			schema: buildDefaultWbsDefinitionSchema(propertyName),
+		});
+		defId = (createDefinitionRes.data as { id?: string })?.id?.trim() || "";
+		createdDefinition = true;
+	} catch {
+		// If definition already exists or create failed for a non-fatal reason, resolve it by listing.
+		const defs = await pset.listDefinitions(libId, { top: 500 });
+		const items = (defs.data as { items?: Array<{ id?: string; name?: string }> })
+			?.items ?? [];
+		const lowerName = definitionName.trim().toLowerCase();
+		const found = items.find(
+			(d) =>
+				(d.name ?? "").trim().toLowerCase() === lowerName ||
+				(explicitDefId?.trim() && (d.id ?? "").trim() === explicitDefId.trim()),
+		);
+		defId = found?.id?.trim() || "";
+	}
+
+	if (!defId) {
+		throw new Error(
+			`Could not resolve/create definition "${definitionName}" in library "${primaryLibraryName}".`,
+		);
+	}
+
+	return {
+		libId,
+		defId,
+		createdLibrary: true,
+		createdDefinition,
+	};
+}
+
 export async function writeWbsPropertySetValues(
 	api: WorkspaceApi,
 	items: WbsPsetWriteItem[],
@@ -732,7 +840,7 @@ export async function writeWbsPropertySetValues(
 		credentials: new ServiceCredentials(undefined, token),
 	});
 
-	const { libId, defId } = await resolveCanonicalLibAndDefIds(
+	const { libId, defId } = await resolveOrCreateCanonicalLibAndDefIds(
 		pset,
 		project.id,
 		serviceUri,
@@ -741,6 +849,7 @@ export async function writeWbsPropertySetValues(
 		libraryNameCandidates,
 		definitionName,
 		explicitDefId,
+		configuredPropertyName,
 	);
 	const propertyName = await resolveSchemaPropertyName(
 		pset,
@@ -823,6 +932,129 @@ export async function writeWbsPropertySetValues(
 			`${lastErrorMessage} (Tried property keys: ${triedKeys.join(", ")})`,
 		),
 	);
+}
+
+export async function ensureWbsLibraryAndAssignmentsForLinks(
+	api: WorkspaceApi,
+	targets: Array<{ link?: string; value?: string }>,
+): Promise<EnsureWbsLibraryAndAssignmentsResult> {
+	const project = await api.project.getProject();
+	if (!project?.id) {
+		throw new Error("No project selected.");
+	}
+	const token = await api.extension.requestPermission("accesstoken");
+	if (token === "denied" || token === "pending") {
+		throw new Error(
+			`Access token ${token}. Please grant permission in extension settings.`,
+		);
+	}
+
+	const serviceUri = await resolvePsetServiceUri();
+	const configuredLibId = readPsetEnv("PSET_LIB_ID") || DEFAULT_LIBRARY_ID;
+	const definitionName =
+		readPsetEnv("PSET_DEFINITION_NAME") || DEFAULT_DEFINITION_NAME;
+	const explicitDefId = readPsetEnv("PSET_DEF_ID") || DEFAULT_DEFINITION_ID;
+	const configuredPropertyName =
+		readPsetEnv("PSET_PROPERTY_NAME") || DEFAULT_PROPERTY_NAME;
+	const libraryNameCandidates = [
+		readPsetEnv("PSET_LIBRARY_NAME"),
+		DEFAULT_LIBRARY_NAME,
+		configuredLibId,
+		DEFAULT_LIBRARY_ID,
+	].flatMap((s) => (typeof s === "string" && s.trim() ? [s.trim()] : []));
+
+	const pset = new PSet({
+		serviceUri,
+		credentials: new ServiceCredentials(undefined, token),
+	});
+	const { libId, defId, createdLibrary, createdDefinition } =
+		await resolveOrCreateCanonicalLibAndDefIds(
+			pset,
+			project.id,
+			serviceUri,
+			token,
+			configuredLibId,
+			libraryNameCandidates,
+			definitionName,
+			explicitDefId,
+			configuredPropertyName,
+		);
+	const propertyName = await resolveSchemaPropertyName(
+		pset,
+		libId,
+		defId,
+		configuredPropertyName,
+		definitionName,
+	);
+
+	const normalizedTargets = [
+		...new Map(
+			targets
+				.map((t) => ({
+					link: (t.link ?? "").trim(),
+					value: (t.value ?? "").trim(),
+				}))
+				.filter((t) => t.link.startsWith("frn:"))
+				.map((t) => [t.link, t] as const),
+		).values(),
+	];
+	if (normalizedTargets.length === 0) {
+		return {
+			createdLibrary,
+			createdDefinition,
+			totalTargets: 0,
+			missingTargetsSeeded: 0,
+			libId,
+			defId,
+			propertyName,
+		};
+	}
+
+	const existingLinks = new Set<string>();
+	const seenNext = new Set<string>();
+	let page = await pset.listPSetsByDefinition(libId, defId, { top: 500 });
+	for (;;) {
+		const rows =
+			(page.data as { items?: Array<{ link?: string }> })?.items ?? [];
+		for (const row of rows) {
+			const link = typeof row?.link === "string" ? row.link.trim() : "";
+			if (link.startsWith("frn:")) existingLinks.add(link);
+		}
+		const next = (page.data as { next?: string })?.next ?? undefined;
+		if (!next || seenNext.has(next)) break;
+		seenNext.add(next);
+		const res = await fetch(next, {
+			headers: {
+				Authorization: `Bearer ${token}`,
+				Accept: "application/json",
+			},
+		});
+		if (!res.ok) break;
+		const data = (await res.json()) as unknown;
+		page = { ...page, data } as typeof page;
+	}
+
+	const missing = normalizedTargets.filter((t) => !existingLinks.has(t.link));
+	if (missing.length > 0) {
+		await pset.changeset({
+			items: missing.map((t) => ({
+				link: t.link,
+				libId,
+				defId,
+				props: { [propertyName]: t.value },
+			})),
+		});
+	}
+
+	return {
+		createdLibrary,
+		createdDefinition,
+		totalTargets: normalizedTargets.length,
+		missingTargetsSeeded: missing.length,
+		libId,
+		defId,
+		propertyName,
+	};
 }
 
 export async function inspectWbsPsetConfig(
