@@ -620,6 +620,13 @@ export async function fetchIfcAssembliesFromFile(
 ): Promise<IfcAssemblyItem[]> {
 	const listAllIfcObjects = options?.listAllIfcObjects !== false;
 	const preferStableEntityIds = options?.preferStableEntityIds === true;
+	function countStableLinks(items: IfcAssemblyItem[]): number {
+		return items.filter((item) => {
+			const l = item.link?.trim() ?? "";
+			return l.startsWith("frn:") && l.length > 8;
+		}).length;
+	}
+
 	const project = await api.project.getProject();
 	if (!project?.id) {
 		throw new Error("No project selected.");
@@ -1344,7 +1351,11 @@ export async function fetchIfcAssembliesFromFile(
 	if (!preferStableEntityIds) {
 		const viaViewerHierarchy = await tryFetchAssembliesViaViewerHierarchy();
 		if (viaViewerHierarchy) {
-			return viaViewerHierarchy;
+			// Keep viewer data when it already contains stable links.
+			// If it has zero links, continue to REST/model-tree path to recover GUID-based links.
+			if (countStableLinks(viaViewerHierarchy) > 0) {
+				return viaViewerHierarchy;
+			}
 		}
 	}
 
