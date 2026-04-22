@@ -673,7 +673,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.33)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.34)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -769,7 +769,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.33)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.34)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -1981,46 +1981,62 @@ export async function renderWbs(
 		if (!viewer?.getHierarchyChildren) return;
 		const activeModelId = getActiveModelId();
 		if (!activeModelId) return;
-		if (hierarchyCacheModelId === activeModelId && parentByRuntimeId.size > 0) return;
-		parentByRuntimeId.clear();
-		fileIdByRuntimeId.clear();
-		nameByRuntimeId.clear();
-		hierarchyCacheModelId = activeModelId;
+		const openModel = allIfcModels.find(
+			(m) => activeModelId === m.id || activeModelId === m.versionId,
+		);
+		const modelCandidates = [
+			activeModelId,
+			openModel?.id,
+			openModel?.versionId,
+		].filter((v): v is string => typeof v === "string" && v.trim().length > 0);
+		const cacheKey = [...new Set(modelCandidates)].join("|");
+		if (hierarchyCacheModelId === cacheKey && parentByRuntimeId.size > 0) return;
 
-		const queue: Array<{ parent: number; childrenOf: number[] }> = [
-			{ parent: 0, childrenOf: [0] },
-		];
-		const visitedParents = new Set<number>();
-		const MAX_NODES = 20000;
-		let seenNodes = 0;
-		while (queue.length > 0 && seenNodes < MAX_NODES) {
-			const cur = queue.shift();
-			if (!cur) break;
-			for (const pid of cur.childrenOf) {
-				if (visitedParents.has(pid)) continue;
-				visitedParents.add(pid);
-				let children: Array<{ id: number; fileId: string; name: string }> = [];
-				try {
-					children = await viewer.getHierarchyChildren(activeModelId, [pid], undefined, false);
-				} catch {
-					continue;
-				}
-				for (const child of children ?? []) {
-					if (typeof child?.id !== "number" || Number.isNaN(child.id)) continue;
-					if (!parentByRuntimeId.has(child.id)) {
-						parentByRuntimeId.set(child.id, pid === 0 ? null : pid);
-						if (typeof child.name === "string" && child.name.trim()) {
-							nameByRuntimeId.set(child.id, child.name.trim());
+		let populated = false;
+		for (const modelId of [...new Set(modelCandidates)]) {
+			parentByRuntimeId.clear();
+			fileIdByRuntimeId.clear();
+			nameByRuntimeId.clear();
+			const queue: Array<{ parent: number; childrenOf: number[] }> = [
+				{ parent: 0, childrenOf: [0] },
+			];
+			const visitedParents = new Set<number>();
+			const MAX_NODES = 20000;
+			let seenNodes = 0;
+			while (queue.length > 0 && seenNodes < MAX_NODES) {
+				const cur = queue.shift();
+				if (!cur) break;
+				for (const pid of cur.childrenOf) {
+					if (visitedParents.has(pid)) continue;
+					visitedParents.add(pid);
+					let children: Array<{ id: number; fileId: string; name: string }> = [];
+					try {
+						children = await viewer.getHierarchyChildren(modelId, [pid], undefined, false);
+					} catch {
+						continue;
+					}
+					for (const child of children ?? []) {
+						if (typeof child?.id !== "number" || Number.isNaN(child.id)) continue;
+						if (!parentByRuntimeId.has(child.id)) {
+							parentByRuntimeId.set(child.id, pid === 0 ? null : pid);
+							if (typeof child.name === "string" && child.name.trim()) {
+								nameByRuntimeId.set(child.id, child.name.trim());
+							}
+							if (typeof child.fileId === "string" && child.fileId.trim()) {
+								fileIdByRuntimeId.set(child.id, child.fileId.trim());
+							}
+							seenNodes += 1;
+							queue.push({ parent: child.id, childrenOf: [child.id] });
 						}
-						if (typeof child.fileId === "string" && child.fileId.trim()) {
-							fileIdByRuntimeId.set(child.id, child.fileId.trim());
-						}
-						seenNodes += 1;
-						queue.push({ parent: child.id, childrenOf: [child.id] });
 					}
 				}
 			}
+			if (seenNodes > 0) {
+				populated = true;
+				break;
+			}
 		}
+		hierarchyCacheModelId = populated ? cacheKey : "";
 	}
 
 	/**
