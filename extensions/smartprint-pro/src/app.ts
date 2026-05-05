@@ -7,6 +7,14 @@ import { renderQrPanel } from "./views/qr";
 import { renderBatchQrPanel } from "./views/batch-qr";
 import { renderVersionUploadPanel } from "./views/version-upload";
 import { renderWbs } from "./views/wbs";
+import { FEATURE_BY_COMMAND, FEATURE_LABEL, type SmartPrintFeatureCode } from "./licensing/features";
+import {
+	clearAuthLicenseState,
+	loginAndLoadLicences,
+	requireFeature,
+	restoreAuthLicenseState,
+} from "./services/api-context";
+import { renderPortalLogin } from "./views/auth";
 
 function getAppMode(): "project" | "3d" {
 	const m = new URLSearchParams(window.location.search).get("mode");
@@ -18,6 +26,18 @@ async function render3dPanel(
 	api: WorkspaceApi,
 	panel: "qr" | "wbs",
 ): Promise<void> {
+	const feature = FEATURE_BY_COMMAND[panel];
+	if (feature) {
+		try {
+			requireFeature(feature);
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : `Feature not licensed: ${feature}`;
+			container.className = "p-4";
+			container.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
+			return;
+		}
+	}
 	container.className =
 		"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
 	container.innerHTML = `
@@ -79,6 +99,16 @@ async function render3dPanel(
 	});
 }
 
+function renderNoLicense(container: HTMLElement, feature: SmartPrintFeatureCode): void {
+	container.className = "p-4";
+	container.innerHTML = `
+    <h2 class="text-lg font-semibold">smartprintPRO</h2>
+    <p class="mt-2 text-sm text-red-600">
+      This account is not licensed for ${escapeHtml(FEATURE_LABEL[feature])}.
+    </p>
+  `;
+}
+
 export async function initApp(): Promise<void> {
 	const container = document.getElementById("app");
 	if (!container) return;
@@ -89,6 +119,23 @@ export async function initApp(): Promise<void> {
 	try {
 		api = await connectToTrimble(window.parent, async (command) => {
 			if (!api) return;
+			if (command === "smartprint_signout") {
+				clearAuthLicenseState();
+				await renderPortalLogin(container, async (email, password) => {
+					await loginAndLoadLicences(email, password);
+					await initApp();
+				});
+				return;
+			}
+			const requestedFeature = command ? FEATURE_BY_COMMAND[command] : undefined;
+			if (requestedFeature) {
+				try {
+					requireFeature(requestedFeature);
+				} catch {
+					renderNoLicense(container, requestedFeature);
+					return;
+				}
+			}
 			if (mode === "project") {
 				if (
 					command &&
@@ -128,6 +175,14 @@ export async function initApp(): Promise<void> {
 			const panel: "qr" | "wbs" = command === "qr" ? "qr" : "wbs";
 			await render3dPanel(container, api, panel);
 		});
+		let state = await restoreAuthLicenseState();
+		if (!state) {
+			await renderPortalLogin(container, async (email, password) => {
+				state = await loginAndLoadLicences(email, password);
+				await initApp();
+			});
+			return;
+		}
 
 		if (mode === "3d") {
 			await api.ui.setMenu({
@@ -137,27 +192,43 @@ export async function initApp(): Promise<void> {
 				subMenus: [
 					{ title: "QR Targets", command: "qr" },
 					{ title: "WBS", command: "wbs" },
+					{ title: "Sign out", command: "smartprint_signout" },
 				],
 			});
-			await render3dPanel(container, api, "qr");
+			const firstPanel = state.features.has("QR_TARGETS") ? "qr" : "wbs";
+			await render3dPanel(container, api, firstPanel);
 			return;
 		}
 
 		container.className = "p-4";
+		const subMenus: Array<{ title: string; command: string }> = [];
+		if (state.features.has("PROCESS_VIEW")) {
+			subMenus.push({ title: "Processes", command: "processes" });
+		}
+		if (state.features.has("BATCH_QR")) {
+			subMenus.push({ title: "Batch QR", command: "batch_qr_project" });
+		}
+		if (state.features.has("VERSION_UPLOAD")) {
+			subMenus.push({
+				title: "File Version Upload",
+				command: "version_upload_project",
+			});
+		}
+		subMenus.push({ title: "Info", command: "info" });
+		subMenus.push({ title: "Sign out", command: "smartprint_signout" });
 		await api.ui.setMenu({
 			title: "smartprintPRO",
 			icon: SMARTPRINT_LOGO,
-			command: "processes",
-			subMenus: [
-				{ title: "Processes", command: "processes" },
-				{ title: "Batch QR", command: "batch_qr_project" },
-				{ title: "File Version Upload", command: "version_upload_project" },
-				{ title: "Info", command: "info" },
-			],
+			command: state.features.has("PROCESS_VIEW") ? "processes" : "info",
+			subMenus,
 		});
 
 		container.innerHTML = "";
-		await renderProcesses(container, api);
+		if (state.features.has("PROCESS_VIEW")) {
+			await renderProcesses(container, api);
+			return;
+		}
+		renderInfo(container);
 	} catch (err) {
 		container.className = "p-4";
 		const message = err instanceof Error ? err.message : "Failed to connect";

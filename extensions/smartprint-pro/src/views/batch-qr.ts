@@ -3,6 +3,8 @@ import {
 	type WorkspaceApi,
 } from "@imasd/shared/trimble";
 import { buildQrNavigationUrl } from "../services/qr";
+import { requireFeature } from "../services/api-context";
+import { smartPrintApiFetch } from "../services/smartprint-api";
 
 type BatchState = {
 	pdfFolderId: string;
@@ -46,12 +48,11 @@ type FolderModalState = {
 	loading: boolean;
 };
 
-const DEFAULT_BACKEND_BASE = "https://stamp.imasd.dev";
-
 export async function renderBatchQrPanel(
 	container: HTMLElement,
 	api: WorkspaceApi,
 ): Promise<void> {
+	requireFeature("BATCH_QR");
 	container.innerHTML = `
     <div class="h-full min-h-0 w-full flex flex-col gap-3 text-gray-900">
       <div class="border-b border-gray-200 pb-2">
@@ -353,13 +354,6 @@ export async function renderBatchQrPanel(
 		}
 	};
 
-	const backendBase =
-		(
-			import.meta as ImportMeta & {
-				env?: { VITE_BATCH_QR_API_BASE?: string };
-			}
-		).env?.VITE_BATCH_QR_API_BASE?.trim() || DEFAULT_BACKEND_BASE;
-
 	const toTrimbleOrigin = (raw?: string): string | undefined => {
 		if (!raw?.trim()) return undefined;
 		try {
@@ -424,12 +418,11 @@ export async function renderBatchQrPanel(
 		path: string,
 		init?: RequestInit,
 	): Promise<Response> => {
-		const url = `${backendBase.replace(/\/+$/, "")}${path}`;
 		try {
-			return await fetch(url, init);
+			return await smartPrintApiFetch(path, init);
 		} catch (error) {
 			if (error instanceof TypeError) {
-				throw new Error(`Backend API unreachable (network/CORS) at ${url}.`);
+				throw new Error(`Backend API unreachable (network/CORS).`);
 			}
 			throw error instanceof Error ? error : new Error("Unknown backend fetch error.");
 		}
@@ -468,7 +461,7 @@ export async function renderBatchQrPanel(
 			const text = await res.text();
 			if (res.status === 404) {
 				throw new Error(
-					`Backend endpoint not found (404): ${backendBase}/v1/integrations/trimble/batch-qr/jobs`,
+					"Backend endpoint not found (404): /v1/integrations/trimble/batch-qr/jobs",
 				);
 			}
 			throw new Error(`Backend start failed: ${res.status} ${text}`);
