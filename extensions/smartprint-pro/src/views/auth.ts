@@ -1,9 +1,14 @@
 import { escapeHtml } from "@imasd/shared/utils";
+import {
+	getPortalRuntimeConfig,
+	savePortalRuntimeConfig,
+} from "../services/portal-auth";
 
 export async function renderPortalLogin(
 	container: HTMLElement,
 	onSubmit: (email: string, password: string) => Promise<void>,
 ): Promise<void> {
+	const cfg = getPortalRuntimeConfig();
 	container.className = "p-4";
 	container.innerHTML = `
     <div class="mx-auto max-w-md rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
@@ -28,6 +33,33 @@ export async function renderPortalLogin(
             required
           />
         </label>
+        <details class="rounded border border-gray-200 bg-gray-50 p-2">
+          <summary class="cursor-pointer text-xs font-medium text-gray-700">
+            Portal connection settings
+          </summary>
+          <div class="mt-2 space-y-2">
+            <label class="block text-xs font-medium text-gray-700">
+              Portal Base URL
+              <input
+                type="text"
+                name="portalBaseUrl"
+                class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+                placeholder="https://portal.example.com"
+                value="${escapeHtml(cfg.baseUrl ?? "")}"
+              />
+            </label>
+            <label class="block text-xs font-medium text-gray-700">
+              Portal Client ID
+              <input
+                type="text"
+                name="portalClientId"
+                class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+                placeholder="client-id"
+                value="${escapeHtml(cfg.clientId ?? "")}"
+              />
+            </label>
+          </div>
+        </details>
         <p class="text-xs text-red-600 min-h-4" data-auth-error></p>
         <button
           type="submit"
@@ -47,6 +79,13 @@ export async function renderPortalLogin(
 			const email = (form.elements.namedItem("email") as HTMLInputElement)?.value ?? "";
 			const password =
 				(form.elements.namedItem("password") as HTMLInputElement)?.value ?? "";
+			const portalBaseUrl =
+				(form.elements.namedItem("portalBaseUrl") as HTMLInputElement)?.value ?? "";
+			const portalClientId =
+				(form.elements.namedItem("portalClientId") as HTMLInputElement)?.value ?? "";
+			if (portalBaseUrl.trim() && portalClientId.trim()) {
+				savePortalRuntimeConfig(portalBaseUrl, portalClientId);
+			}
 			error.textContent = "";
 			try {
 				await onSubmit(email.trim(), password);

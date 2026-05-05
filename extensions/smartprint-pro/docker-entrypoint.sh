@@ -33,6 +33,15 @@ const psetDefId = trim(
 const psetPropertyName = trim(
 	process.env.VITE_PSET_PROPERTY_NAME || process.env.PSET_PROPERTY_NAME || "",
 );
+const portalBaseUrl = trim(
+	process.env.VITE_PORTAL_BASE_URL || process.env.PORTAL_BASE_URL || "",
+);
+const portalClientId = trim(
+	process.env.VITE_PORTAL_CLIENT_ID || process.env.PORTAL_CLIENT_ID || "",
+);
+const smartprintApiBaseUrl = trim(
+	process.env.VITE_SMARTPRINT_API_BASE_URL || process.env.SMARTPRINT_API_BASE_URL || "",
+);
 const runtimeEnv = {
 	EXTENSION_URL: ext,
 	TRIMBLE_CONNECT_ORIGIN: connectOrigin,
@@ -44,6 +53,9 @@ const runtimeEnv = {
 	PSET_DEFINITION_NAME: psetDefinitionName,
 	PSET_DEF_ID: psetDefId,
 	PSET_PROPERTY_NAME: psetPropertyName,
+	PORTAL_BASE_URL: portalBaseUrl,
+	PORTAL_CLIENT_ID: portalClientId,
+	SMARTPRINT_API_BASE_URL: smartprintApiBaseUrl,
 };
 const body = [
 	"window.__SMARTPRINT_PRO__ = window.__SMARTPRINT_PRO__ || {};",
