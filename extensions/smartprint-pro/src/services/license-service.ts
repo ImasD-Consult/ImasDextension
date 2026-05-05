@@ -5,26 +5,43 @@ export type LicenceFeature = {
 };
 
 type LicenceApiShape = {
+	licenseTypeId?: string;
 	features?: Array<{ featureKey?: string; key?: string; code?: string }>;
 	licenseType?: {
+		id?: string;
 		features?: Array<{ featureKey?: string; key?: string; code?: string }>;
 	};
 };
 
-function extractFeatureCodes(payload: unknown): Set<string> {
+export type LicenceEntitlements = {
+	features: Set<string>;
+	featureToLicenseTypeId: Map<string, string>;
+};
+
+function extractEntitlements(payload: unknown): LicenceEntitlements {
 	const out = new Set<string>();
-	if (!Array.isArray(payload)) return out;
+	const featureToLicenseTypeId = new Map<string, string>();
+	if (!Array.isArray(payload)) return { features: out, featureToLicenseTypeId };
 	for (const item of payload as LicenceApiShape[]) {
+		const licenseTypeId =
+			item.licenseType?.id?.trim() ??
+			item.licenseTypeId?.trim() ??
+			"";
 		const sources = [item.features, item.licenseType?.features];
 		for (const source of sources) {
 			if (!Array.isArray(source)) continue;
 			for (const feature of source) {
 				const key = feature.featureKey ?? feature.key ?? feature.code ?? "";
-				if (key.trim()) out.add(key.trim().toUpperCase());
+				const normalizedKey = key.trim().toUpperCase();
+				if (!normalizedKey) continue;
+				out.add(normalizedKey);
+				if (licenseTypeId && !featureToLicenseTypeId.has(normalizedKey)) {
+					featureToLicenseTypeId.set(normalizedKey, licenseTypeId);
+				}
 			}
 		}
 	}
-	return out;
+	return { features: out, featureToLicenseTypeId };
 }
 
 function url(baseUrl: string, userId: string): string {
@@ -36,7 +53,7 @@ export async function fetchUserLicenceFeatures(
 	baseUrl: string,
 	userId: string,
 	clientId: string,
-): Promise<Set<string>> {
+): Promise<LicenceEntitlements> {
 	const response = await fetch(url(baseUrl, userId), {
 		method: "GET",
 		credentials: "include",
@@ -50,7 +67,7 @@ export async function fetchUserLicenceFeatures(
 		throw new Error(`Licence fetch failed (${response.status}): ${body}`);
 	}
 	const payload = (await response.json()) as unknown;
-	return extractFeatureCodes(payload);
+	return extractEntitlements(payload);
 }
 
 export function hasFeature(
