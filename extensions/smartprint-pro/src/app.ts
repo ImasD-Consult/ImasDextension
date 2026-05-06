@@ -10,6 +10,7 @@ import { renderWbs } from "./views/wbs";
 import { FEATURE_BY_COMMAND, FEATURE_LABEL, type SmartPrintFeatureCode } from "./licensing/features";
 import {
 	ensureFeatureAccess,
+	getAuthLicenseState,
 	loginAndLoadLicences,
 	logoutAndEndSessions,
 	restoreAuthLicenseState,
@@ -109,13 +110,6 @@ function renderNoLicense(container: HTMLElement, feature: SmartPrintFeatureCode)
   `;
 }
 
-async function showLogin(container: HTMLElement): Promise<void> {
-	await renderPortalLogin(container, async (email, password) => {
-		await loginAndLoadLicences(email, password);
-		await initApp();
-	});
-}
-
 export async function initApp(): Promise<void> {
 	const container = document.getElementById("app");
 	if (!container) return;
@@ -128,19 +122,17 @@ export async function initApp(): Promise<void> {
 			if (!api) return;
 			if (command === "smartprint_signout") {
 				await logoutAndEndSessions();
-				await showLogin(container);
+				await renderPortalLogin(container, async (email, password) => {
+					await loginAndLoadLicences(email, password);
+					await initApp();
+				});
 				return;
 			}
 			const requestedFeature = command ? FEATURE_BY_COMMAND[command] : undefined;
 			if (requestedFeature) {
 				try {
 					await ensureFeatureAccess(requestedFeature);
-				} catch (error) {
-					const message = error instanceof Error ? error.message : "";
-					if (message.includes("sign in")) {
-						await showLogin(container);
-						return;
-					}
+				} catch {
 					renderNoLicense(container, requestedFeature);
 					return;
 				}
@@ -172,13 +164,8 @@ export async function initApp(): Promise<void> {
 					try {
 						await ensureFeatureAccess("PROCESS_VIEW");
 						await renderProcesses(container, api);
-					} catch (error) {
-						const message = error instanceof Error ? error.message : "";
-						if (message.includes("sign in")) {
-							await showLogin(container);
-						} else {
-							renderNoLicense(container, "PROCESS_VIEW");
-						}
+					} catch {
+						renderNoLicense(container, "PROCESS_VIEW");
 					}
 				}
 				return;
@@ -194,6 +181,16 @@ export async function initApp(): Promise<void> {
 			const panel: "qr" | "wbs" = command === "qr" ? "qr" : "wbs";
 			await render3dPanel(container, api, panel);
 		});
+		let state = await restoreAuthLicenseState();
+		if (!state) {
+			await renderPortalLogin(container, async (email, password) => {
+				state = await loginAndLoadLicences(email, password);
+				await initApp();
+			});
+			return;
+		}
+		state = getAuthLicenseState() ?? state;
+
 		if (mode === "3d") {
 			await api.ui.setMenu({
 				title: "smartprintPRO",
@@ -205,11 +202,6 @@ export async function initApp(): Promise<void> {
 					{ title: "Sign out", command: "smartprint_signout" },
 				],
 			});
-			const state = await restoreAuthLicenseState();
-			if (!state) {
-				await showLogin(container);
-				return;
-			}
 			await render3dPanel(container, api, "qr");
 			return;
 		}
@@ -229,18 +221,8 @@ export async function initApp(): Promise<void> {
 			subMenus,
 		});
 
-		const state = await restoreAuthLicenseState();
-		if (!state) {
-			await showLogin(container);
-			return;
-		}
 		container.innerHTML = "";
-		try {
-			await ensureFeatureAccess("PROCESS_VIEW");
-			await renderProcesses(container, api);
-		} catch {
-			renderInfo(container);
-		}
+		await renderProcesses(container, api);
 	} catch (err) {
 		container.className = "p-4";
 		const message = err instanceof Error ? err.message : "Failed to connect";

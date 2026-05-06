@@ -27,22 +27,14 @@ function readRuntimeEnv(): RuntimeEnv {
 	return w.__SMARTPRINT_PRO__ ?? {};
 }
 
-function readEnv(name: "PORTAL_BASE_URL" | "PORTAL_CLIENT_ID"): string | undefined {
+function readEnv(name: "PORTAL_BASE_URL" | "PORTAL_CLIENT_ID"): string {
 	const vite = (
 		import.meta as ImportMeta & { env?: Record<string, string | undefined> }
 	).env?.[`VITE_${name}`];
 	if (vite?.trim()) return vite.trim();
 	const rt = readRuntimeEnv()[name];
 	if (rt?.trim()) return rt.trim();
-	return undefined;
-}
-
-function requireEnv(name: "PORTAL_BASE_URL" | "PORTAL_CLIENT_ID"): string {
-	const value = readEnv(name);
-	if (!value) {
-		throw new Error(`Missing ${name}. Configure VITE_${name} or runtime ${name}.`);
-	}
-	return value;
+	throw new Error(`Missing ${name}. Configure VITE_${name} or runtime ${name}.`);
 }
 
 function withBase(baseUrl: string, path: string): string {
@@ -75,8 +67,8 @@ export async function loginPortal(
 	email: string,
 	password: string,
 ): Promise<PortalAuthContext> {
-	const baseUrl = requireEnv("PORTAL_BASE_URL");
-	const clientId = requireEnv("PORTAL_CLIENT_ID");
+	const baseUrl = readEnv("PORTAL_BASE_URL");
+	const clientId = readEnv("PORTAL_CLIENT_ID");
 	const response = await fetch(withBase(baseUrl, "/api/auth/sign-in/email"), {
 		method: "POST",
 		credentials: "include",
@@ -112,7 +104,6 @@ export async function validatePortalSession(
 ): Promise<PortalSessionState | null> {
 	const resolvedBase = baseUrl ?? readEnv("PORTAL_BASE_URL");
 	const resolvedClientId = clientId ?? readEnv("PORTAL_CLIENT_ID");
-	if (!resolvedBase || !resolvedClientId) return null;
 	const response = await fetch(withBase(resolvedBase, "/api/auth/get-session"), {
 		method: "GET",
 		credentials: "include",
@@ -139,7 +130,6 @@ export async function validatePortalSession(
 export async function restorePortalAuth(): Promise<PortalAuthContext | null> {
 	const baseUrl = readEnv("PORTAL_BASE_URL");
 	const clientId = readEnv("PORTAL_CLIENT_ID");
-	if (!baseUrl || !clientId) return null;
 	const refreshed = await validatePortalSession(baseUrl, clientId);
 	if (!refreshed) {
 		clearPortalSession();
