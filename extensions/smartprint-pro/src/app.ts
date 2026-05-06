@@ -9,10 +9,9 @@ import { renderVersionUploadPanel } from "./views/version-upload";
 import { renderWbs } from "./views/wbs";
 import { FEATURE_BY_COMMAND, FEATURE_LABEL, type SmartPrintFeatureCode } from "./licensing/features";
 import {
-	ensureFeatureAccess,
-	getAuthLicenseState,
+	clearAuthLicenseState,
 	loginAndLoadLicences,
-	logoutAndEndSessions,
+	requireFeature,
 	restoreAuthLicenseState,
 } from "./services/api-context";
 import { renderPortalLogin } from "./views/auth";
@@ -30,7 +29,7 @@ async function render3dPanel(
 	const feature = FEATURE_BY_COMMAND[panel];
 	if (feature) {
 		try {
-			await ensureFeatureAccess(feature);
+			requireFeature(feature);
 		} catch (error) {
 			const message =
 				error instanceof Error ? error.message : `Feature not licensed: ${feature}`;
@@ -121,7 +120,7 @@ export async function initApp(): Promise<void> {
 		api = await connectToTrimble(window.parent, async (command) => {
 			if (!api) return;
 			if (command === "smartprint_signout") {
-				await logoutAndEndSessions();
+				clearAuthLicenseState();
 				await renderPortalLogin(container, async (email, password) => {
 					await loginAndLoadLicences(email, password);
 					await initApp();
@@ -131,7 +130,7 @@ export async function initApp(): Promise<void> {
 			const requestedFeature = command ? FEATURE_BY_COMMAND[command] : undefined;
 			if (requestedFeature) {
 				try {
-					await ensureFeatureAccess(requestedFeature);
+					requireFeature(requestedFeature);
 				} catch {
 					renderNoLicense(container, requestedFeature);
 					return;
@@ -161,12 +160,7 @@ export async function initApp(): Promise<void> {
 						"h-full min-h-0 w-full flex flex-col overflow-hidden p-2 box-border";
 					await renderVersionUploadPanel(container, api);
 				} else {
-					try {
-						await ensureFeatureAccess("PROCESS_VIEW");
-						await renderProcesses(container, api);
-					} catch {
-						renderNoLicense(container, "PROCESS_VIEW");
-					}
+					await renderProcesses(container, api);
 				}
 				return;
 			}
@@ -189,7 +183,6 @@ export async function initApp(): Promise<void> {
 			});
 			return;
 		}
-		state = getAuthLicenseState() ?? state;
 
 		if (mode === "3d") {
 			await api.ui.setMenu({
@@ -202,27 +195,40 @@ export async function initApp(): Promise<void> {
 					{ title: "Sign out", command: "smartprint_signout" },
 				],
 			});
-			await render3dPanel(container, api, "qr");
+			const firstPanel = state.features.has("QR_TARGETS") ? "qr" : "wbs";
+			await render3dPanel(container, api, firstPanel);
 			return;
 		}
 
 		container.className = "p-4";
-		const subMenus: Array<{ title: string; command: string }> = [
-			{ title: "Processes", command: "processes" },
-			{ title: "Batch QR", command: "batch_qr_project" },
-			{ title: "File Version Upload", command: "version_upload_project" },
-			{ title: "Info", command: "info" },
-			{ title: "Sign out", command: "smartprint_signout" },
-		];
+		const subMenus: Array<{ title: string; command: string }> = [];
+		if (state.features.has("PROCESS_VIEW")) {
+			subMenus.push({ title: "Processes", command: "processes" });
+		}
+		if (state.features.has("BATCH_QR")) {
+			subMenus.push({ title: "Batch QR", command: "batch_qr_project" });
+		}
+		if (state.features.has("VERSION_UPLOAD")) {
+			subMenus.push({
+				title: "File Version Upload",
+				command: "version_upload_project",
+			});
+		}
+		subMenus.push({ title: "Info", command: "info" });
+		subMenus.push({ title: "Sign out", command: "smartprint_signout" });
 		await api.ui.setMenu({
 			title: "smartprintPRO",
 			icon: SMARTPRINT_LOGO,
-			command: "processes",
+			command: state.features.has("PROCESS_VIEW") ? "processes" : "info",
 			subMenus,
 		});
 
 		container.innerHTML = "";
-		await renderProcesses(container, api);
+		if (state.features.has("PROCESS_VIEW")) {
+			await renderProcesses(container, api);
+			return;
+		}
+		renderInfo(container);
 	} catch (err) {
 		container.className = "p-4";
 		const message = err instanceof Error ? err.message : "Failed to connect";

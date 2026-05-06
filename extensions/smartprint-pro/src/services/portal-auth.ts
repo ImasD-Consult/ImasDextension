@@ -130,18 +130,19 @@ export async function validatePortalSession(
 export async function restorePortalAuth(): Promise<PortalAuthContext | null> {
 	const baseUrl = readEnv("PORTAL_BASE_URL");
 	const clientId = readEnv("PORTAL_CLIENT_ID");
+	const existing = loadPortalSession();
+	if (!existing) return null;
 	const refreshed = await validatePortalSession(baseUrl, clientId);
 	if (!refreshed) {
 		clearPortalSession();
 		return null;
 	}
-	const existing = loadPortalSession();
 	return {
 		baseUrl,
 		clientId,
 		session: {
 			...refreshed,
-			token: existing?.token || refreshed.token,
+			token: existing.token || refreshed.token,
 		},
 	};
 }
