@@ -3,8 +3,6 @@ import {
 	type TrimbleFolderItem,
 	type WorkspaceApi,
 } from "@imasd/shared/trimble";
-import { getPortalAuthHeader, requireFeature } from "../services/api-context";
-import { smartPrintApiFetch } from "../services/smartprint-api";
 
 type IndexedFile = {
 	id: string;
@@ -43,6 +41,7 @@ type VersionRow = {
 
 const MAX_FOLDERS_TO_SCAN = 3500;
 const MAX_CANDIDATES_TO_SHOW = 30;
+const DEFAULT_BACKEND_BASE = "https://stamp.imasd.dev";
 
 /** Persists across extension menu tabs in the same browser tab; cleared when the tab closes. */
 const VERSION_UPLOAD_INDEX_STORAGE_KEY = "smartprintPro.v1.versionUploadIndex";
@@ -218,7 +217,13 @@ async function uploadAsVersionName(
 	metadataSaved: boolean;
 	versions: VersionRow[];
 }> {
-	const url = "/v1/integrations/trimble/version-upload";
+	const backendBase =
+		(
+			import.meta as ImportMeta & {
+				env?: { VITE_BATCH_QR_API_BASE?: string };
+			}
+		).env?.VITE_BATCH_QR_API_BASE?.trim() || DEFAULT_BACKEND_BASE;
+	const url = `${backendBase.replace(/\/+$/, "")}/v1/integrations/trimble/version-upload`;
 
 	const buildFormData = (): FormData => {
 		const fd = new FormData();
@@ -230,10 +235,6 @@ async function uploadAsVersionName(
 		fd.append("original_name", localFile.name);
 		fd.append("connect_origin", getRuntimeTrimbleConnectOrigin() ?? "");
 		fd.append("probe_file_id", probeFileId);
-		const portalAuthorization = getPortalAuthHeader();
-		if (portalAuthorization) {
-			fd.append("portal_authorization", portalAuthorization);
-		}
 		return fd;
 	};
 
@@ -241,9 +242,10 @@ async function uploadAsVersionName(
 	let lastNetworkError: unknown;
 	for (let attempt = 0; attempt < 2; attempt += 1) {
 		try {
-			res = await smartPrintApiFetch(url, {
+			res = await fetch(url, {
 				method: "POST",
 				body: buildFormData(),
+				mode: "cors",
 				cache: "no-store",
 			});
 			break;
@@ -305,7 +307,6 @@ export async function renderVersionUploadPanel(
 	container: HTMLElement,
 	api: WorkspaceApi,
 ): Promise<void> {
-	requireFeature("VERSION_UPLOAD");
 	container.innerHTML = `
     <div class="h-full min-h-0 w-full flex flex-col gap-3 text-gray-900">
       <div class="border-b border-gray-200 pb-2">

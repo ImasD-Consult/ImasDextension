@@ -15,7 +15,6 @@ import {
 	writeWbsPropertySetValues,
 	type WbsPsetModelAssignmentRow,
 } from "../services/pset";
-import { requireFeature } from "../services/api-context";
 
 type WbsTableData = {
 	headers: string[];
@@ -24,12 +23,6 @@ type WbsTableData = {
 
 const WBS_STORAGE_KEY = "smartprintpro:wbs:uploaded-file";
 const WBS_ASSIGNMENTS_STORAGE_KEY = "smartprintpro:wbs:assignments";
-type StoredWbsFileV1 = {
-	version: 1;
-	name: string;
-	mimeType: string;
-	base64: string;
-};
 
 type IfcPart = {
 	id: string;
@@ -267,59 +260,9 @@ function parseWorkbookToTableData(fileBuffer: ArrayBuffer): WbsTableData {
 	return { headers, rows };
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-	const bytes = new Uint8Array(buffer);
-	let binary = "";
-	for (let i = 0; i < bytes.length; i += 1) {
-		binary += String.fromCharCode(bytes[i]);
-	}
-	return btoa(binary);
-}
-
-function base64ToArrayBuffer(base64: string): ArrayBuffer {
-	const binary = atob(base64);
-	const bytes = new Uint8Array(binary.length);
-	for (let i = 0; i < binary.length; i += 1) {
-		bytes[i] = binary.charCodeAt(i);
-	}
-	return bytes.buffer;
-}
-
-function saveFileToLocalStorage(fileName: string, mimeType: string, data: ArrayBuffer): void {
+function clearLocalWbsCache(): void {
 	try {
-		const payload: StoredWbsFileV1 = {
-			version: 1,
-			name: fileName,
-			mimeType,
-			base64: arrayBufferToBase64(data),
-		};
-		localStorage.setItem(WBS_STORAGE_KEY, JSON.stringify(payload));
-	} catch {
-		/* ignore cache save errors */
-	}
-}
-
-function loadFileFromLocalStorage(): StoredWbsFileV1 | null {
-	try {
-		const raw = localStorage.getItem(WBS_STORAGE_KEY);
-		if (!raw) return null;
-		const parsed = JSON.parse(raw) as Partial<StoredWbsFileV1>;
-		if (
-			parsed?.version !== 1 ||
-			typeof parsed.name !== "string" ||
-			typeof parsed.mimeType !== "string" ||
-			typeof parsed.base64 !== "string"
-		) {
-			return null;
-		}
-		return parsed as StoredWbsFileV1;
-	} catch {
-		return null;
-	}
-}
-
-function clearAssignmentCacheOnly(): void {
-	try {
+		localStorage.removeItem(WBS_STORAGE_KEY);
 		localStorage.removeItem(WBS_ASSIGNMENTS_STORAGE_KEY);
 	} catch {
 		/* ignore cache cleanup errors */
@@ -698,8 +641,7 @@ export async function renderWbs(
 	api: WorkspaceApi,
 	options?: RenderWbsOptions,
 ): Promise<void> {
-	requireFeature("WBS");
-	clearAssignmentCacheOnly();
+	clearLocalWbsCache();
 	const viewerOnly = options?.useViewerModelOnly === true;
 	const dockLayout = viewerOnly && options?.horizontalDockLayout === true;
 
@@ -708,7 +650,7 @@ export async function renderWbs(
     <div class="flex flex-col h-full min-h-0 gap-2 text-gray-900" data-wbs-root>
       <div class="flex flex-wrap items-end gap-2 border-b border-gray-200 pb-2 shrink-0">
         <div class="flex flex-col min-w-0">
-          <h2 class="text-base font-semibold leading-tight">WBS (v 6.45)</h2>
+          <h2 class="text-base font-semibold leading-tight">WBS (v 6.44)</h2>
           <p class="text-xs text-gray-500">Excel (A–D) · IFC objects · Pset_IMASD_WBS</p>
         </div>
         <div class="flex flex-wrap items-center gap-2 flex-1 min-w-0 justify-end">
@@ -804,7 +746,7 @@ export async function renderWbs(
     <div class="rounded-lg border border-gray-200 p-3">
       <div class="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 class="text-lg font-semibold">WBS (v 6.45)</h2>
+          <h2 class="text-lg font-semibold">WBS (v 6.44)</h2>
           <p class="mt-1 text-sm text-gray-500">Upload Excel, preview columns A–D, assign rows to IFC parts${
 						viewerOnly ? " (uses the model open in 3D)" : ""
 					}</p>
@@ -3305,11 +3247,6 @@ export async function renderWbs(
 		try {
 			const fileBuffer = await selectedFile.arrayBuffer();
 			tableData = parseWorkbookToTableData(fileBuffer);
-			saveFileToLocalStorage(
-				selectedFile.name,
-				selectedFile.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-				fileBuffer,
-			);
 			selectedWbsRowIndex = null;
 			wbsFilterValue = "";
 			descriptionFilterValue = "";
@@ -3326,21 +3263,6 @@ export async function renderWbs(
 			tableContainerEl.innerHTML = `<p class="text-sm text-red-600">${escapeHtml(message)}</p>`;
 		}
 	});
-
-	const cachedWbs = loadFileFromLocalStorage();
-	if (cachedWbs) {
-		try {
-			const cachedBuffer = base64ToArrayBuffer(cachedWbs.base64);
-			tableData = parseWorkbookToTableData(cachedBuffer);
-			selectedWbsRowIndex = null;
-			wbsFilterValue = "";
-			descriptionFilterValue = "";
-			refreshWbsTable();
-			setStatus(`Loaded cached WBS file ${cachedWbs.name} (${tableData.rows.length} rows).`);
-		} catch {
-			setStatus("Could not load cached WBS file. Please upload again.", "error");
-		}
-	}
 
 	void refreshPsetDebugInfo();
 	void autoLoadKnownLinks(true).then(() => hydrateWbsAssignmentsFromPsetApi(true));
