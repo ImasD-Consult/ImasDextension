@@ -21,56 +21,10 @@ type RuntimeEnv = {
 	PORTAL_CLIENT_ID?: string;
 };
 
-const PORTAL_BASE_URL_STORAGE_KEY = "smartprintPro.portalBaseUrl";
-const PORTAL_CLIENT_ID_STORAGE_KEY = "smartprintPro.portalClientId";
-
 function readRuntimeEnv(): RuntimeEnv {
 	if (typeof window === "undefined") return {};
 	const w = window as Window & { __SMARTPRINT_PRO__?: RuntimeEnv };
 	return w.__SMARTPRINT_PRO__ ?? {};
-}
-
-function readStoredPortalConfig(
-	name: "PORTAL_BASE_URL" | "PORTAL_CLIENT_ID",
-): string | undefined {
-	if (typeof window === "undefined") return undefined;
-	try {
-		const key =
-			name === "PORTAL_BASE_URL"
-				? PORTAL_BASE_URL_STORAGE_KEY
-				: PORTAL_CLIENT_ID_STORAGE_KEY;
-		const value = localStorage.getItem(key);
-		return value?.trim() || undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-export function savePortalRuntimeConfig(
-	baseUrl: string,
-	clientId: string,
-): void {
-	if (typeof window === "undefined") return;
-	try {
-		if (baseUrl.trim()) {
-			localStorage.setItem(PORTAL_BASE_URL_STORAGE_KEY, baseUrl.trim());
-		}
-		if (clientId.trim()) {
-			localStorage.setItem(PORTAL_CLIENT_ID_STORAGE_KEY, clientId.trim());
-		}
-	} catch {
-		// ignore storage errors
-	}
-}
-
-export function getPortalRuntimeConfig(): {
-	baseUrl?: string;
-	clientId?: string;
-} {
-	return {
-		baseUrl: readEnv("PORTAL_BASE_URL"),
-		clientId: readEnv("PORTAL_CLIENT_ID"),
-	};
 }
 
 function readEnv(name: "PORTAL_BASE_URL" | "PORTAL_CLIENT_ID"): string | undefined {
@@ -80,8 +34,6 @@ function readEnv(name: "PORTAL_BASE_URL" | "PORTAL_CLIENT_ID"): string | undefin
 	if (vite?.trim()) return vite.trim();
 	const rt = readRuntimeEnv()[name];
 	if (rt?.trim()) return rt.trim();
-	const stored = readStoredPortalConfig(name);
-	if (stored?.trim()) return stored.trim();
 	return undefined;
 }
 

@@ -12,9 +12,6 @@ interface SmartprintProRuntimeEnv {
 	readonly PSET_DEFINITION_NAME?: string;
 	readonly PSET_DEF_ID?: string;
 	readonly PSET_PROPERTY_NAME?: string;
-	readonly PORTAL_BASE_URL?: string;
-	readonly PORTAL_CLIENT_ID?: string;
-	readonly SMARTPRINT_API_BASE_URL?: string;
 }
 
 declare global {
